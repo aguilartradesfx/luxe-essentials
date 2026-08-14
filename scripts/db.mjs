@@ -1,7 +1,10 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import pg from 'pg';
-import 'dotenv/config';
+import { config } from 'dotenv';
+
+config({ path: '.env.local' });
+config();
 
 const DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -30,6 +33,7 @@ async function migrate() {
       applied_at timestamptz not null default now()
     )
   `);
+  await client.query('alter table public._migrations enable row level security');
 
   const { rows } = await client.query('select name from public._migrations');
   const aplicadas = new Set(rows.map((r) => r.name));
