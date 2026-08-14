@@ -20,6 +20,13 @@ describe('Proceso', () => {
     expect(screen.getByText('01')).toBeInTheDocument();
     expect(screen.getByText('07')).toBeInTheDocument();
   });
+
+  it('numera los pasos en sky, no en teal (2.67:1, reprueba AA incluso como texto grande)', () => {
+    render(<Proceso />);
+    const numero = screen.getByText('01');
+    expect(numero).toHaveClass('text-sky');
+    expect(numero.className).not.toMatch(/text-teal\b/);
+  });
 });
 
 describe('Personalizacion', () => {
@@ -36,5 +43,18 @@ describe('Footer', () => {
     render(<Footer />);
     const pie = screen.getByRole('contentinfo');
     expect(pie).toHaveTextContent(String(new Date().getFullYear()));
+  });
+
+  it('lista redes sociales junto al resto de datos de contacto (spec §5.8)', () => {
+    render(<Footer />);
+    expect(screen.getByRole('contentinfo')).toHaveTextContent(copy.footer.redes);
+  });
+
+  it('marca la dirección como pendiente sin borrar el país (fuera de alcance)', () => {
+    render(<Footer />);
+    const pie = screen.getByRole('contentinfo');
+    expect(pie).toHaveTextContent(copy.footer.direccion);
+    expect(copy.footer.direccion).toContain('Guatemala');
+    expect(copy.footer.direccion).toContain('Pendiente de confirmar');
   });
 });

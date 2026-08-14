@@ -46,4 +46,15 @@ describe('AuroraBackground', () => {
     const { container } = render(<AuroraBackground />);
     expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
   });
+
+  it('atenúa el alfa de las manchas para no erosionar el contraste AA del texto sky (§4.2)', () => {
+    const { container } = render(<AuroraBackground />);
+    const manchas = container.firstElementChild!.children;
+    expect(manchas[0]).toHaveClass('bg-teal/25');
+    expect(manchas[1]).toHaveClass('bg-sky/12');
+    // Los valores originales (teal/40, sky/25) medían por debajo de AA para
+    // el texto sky que se dibuja sobre el aurora sin una GlassCard debajo.
+    expect(manchas[0].className).not.toMatch(/bg-teal\/40\b/);
+    expect(manchas[1].className).not.toMatch(/bg-sky\/25\b/);
+  });
 });
