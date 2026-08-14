@@ -6,6 +6,7 @@ import { Cifras } from '@/components/sections/Cifras';
 import { Lineas } from '@/components/sections/Lineas';
 import { Proceso } from '@/components/sections/Proceso';
 import { Personalizacion } from '@/components/sections/Personalizacion';
+import { Cotizacion } from '@/components/sections/Cotizacion';
 import { Footer } from '@/components/sections/Footer';
 
 export default function Home() {
@@ -20,6 +21,7 @@ export default function Home() {
         <Lineas />
         <Proceso />
         <Personalizacion />
+        <Cotizacion />
       </main>
       <Footer />
     </>

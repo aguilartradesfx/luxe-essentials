@@ -125,6 +125,7 @@ export const copy = {
     exitoTitulo: 'Recibimos tu solicitud',
     exitoDetalle: 'Te contactamos para afinar cantidades y tiempos de entrega.',
     errorGeneral: 'No pudimos enviar tu solicitud. Intenta de nuevo en un momento.',
+    errorValidacion: 'Revisa los campos marcados.',
   },
 
   footer: {
