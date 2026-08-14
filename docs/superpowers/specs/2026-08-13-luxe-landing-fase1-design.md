@@ -360,7 +360,7 @@ commitea; `.gitignore` ya lo cubre y esto se verifica antes del primer push.
 ### 7.1 Origen
 
 La carpeta `IMÁGENES/` contiene 14 archivos JPEG con nombres autogenerados
-(`Generated Image August 11, 2026 - 4_04PM.jpg` y similares), 124 MB en total. Once están a
+(`Generated Image August 11, 2026 - 4_04PM.jpg` y similares), 61 MB en total. Once están a
 5436×3072 y tres a 1359×768. Todas corresponden a páginas identificables del deck, lo que
 permitió mapearlas sin ambigüedad.
 
@@ -431,7 +431,7 @@ El `alt` es obligatorio en todas las entradas, incluidas las pendientes.
 El script es idempotente y toma el mapeo de `IMÁGENES/` a `id` de una tabla explícita en su
 código, para que renombrar o reprocesar no dependa del orden del directorio.
 
-**Los originales no se versionan.** `IMÁGENES/` se añade a `.gitignore`: son 124 MB que no
+**Los originales no se versionan.** `IMÁGENES/` se añade a `.gitignore`: son 61 MB que no
 aportan nada al repositorio y encarecen cada clonación. Permanecen en el disco del usuario
 como respaldo.
 
@@ -525,7 +525,7 @@ Fotografía pendiente (detalle en §7.3), listada aquí como pedido para producc
    al usuario.
 4. Ninguna credencial de servidor aparece en el bundle del cliente.
 5. Las catorce imágenes disponibles se sirven optimizadas desde `public/images/`, con un peso
-   total en el repositorio por debajo de 8 MB frente a los 124 MB de origen. Las entradas
+   total en el repositorio por debajo de 8 MB frente a los 61 MB de origen. Las entradas
    marcadas `pending: true` muestran marcador de marca y se resuelven colocando el archivo,
    sin cambios de código.
 6. Los contrastes de §4.2 se cumplen en el sitio construido.
