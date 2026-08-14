@@ -2230,6 +2230,18 @@ describe('POST /api/lead', () => {
     );
   });
 
+  it('registra el fallo de la nota sin perder el id del contacto', async () => {
+    upsertContact.mockResolvedValue({ ok: true, contactId: 'c1', notaError: 'GHL 422' });
+    const res = await POST(peticion(cuerpo));
+
+    expect(res.status).toBe(201);
+    // El contacto existe: la fila no debe volver a la cola de reintento,
+    // que filtra por `ghl_contact_id is null`.
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ ghl_contact_id: 'c1', ghl_error: 'nota: GHL 422' }),
+    );
+  });
+
   it('sigue devolviendo 201 y anota el error cuando GHL falla', async () => {
     upsertContact.mockResolvedValue({ ok: false, error: 'GHL 401' });
     const res = await POST(peticion(cuerpo));
@@ -2336,7 +2348,14 @@ export async function POST(request: Request) {
     .from('leads')
     .update(
       resultado.ok
-        ? { ghl_contact_id: resultado.contactId, ghl_synced_at: new Date().toISOString(), ghl_error: null }
+        ? {
+            ghl_contact_id: resultado.contactId,
+            ghl_synced_at: new Date().toISOString(),
+            // Si la nota falló, el contacto sí existe: se deja constancia
+            // pero NO se devuelve la fila a la cola de reintento, que
+            // filtra justamente por `ghl_contact_id is null`.
+            ghl_error: resultado.notaError ? `nota: ${resultado.notaError}` : null,
+          }
         : { ghl_error: resultado.error },
     )
     .eq('id', fila.id);
