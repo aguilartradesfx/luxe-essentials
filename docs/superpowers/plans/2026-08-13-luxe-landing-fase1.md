@@ -2417,6 +2417,42 @@ describe('QuoteForm', () => {
     });
   });
 
+  it('muestra el error por campo que devuelve el servidor', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: false, errores: { email: 'Escribe un correo válido.' } }),
+        { status: 400 },
+      ),
+    );
+    const user = userEvent.setup();
+    render(<QuoteForm />);
+    await llenarMinimo(user);
+    await user.click(screen.getByRole('button', { name: copy.formulario.enviar }));
+
+    const error = await screen.findByText('Escribe un correo válido.');
+    expect(error).toBeInTheDocument();
+    // El campo queda asociado a su mensaje para lectores de pantalla.
+    expect(screen.getByLabelText(copy.formulario.campos.email)).toHaveAttribute(
+      'aria-describedby',
+      error.id,
+    );
+  });
+
+  it('no muestra el error genérico de servidor ante un 400 de validación', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, errores: { email: 'Escribe un correo válido.' } }), {
+        status: 400,
+      }),
+    );
+    const user = userEvent.setup();
+    render(<QuoteForm />);
+    await llenarMinimo(user);
+    await user.click(screen.getByRole('button', { name: copy.formulario.enviar }));
+
+    await screen.findByText('Escribe un correo válido.');
+    expect(screen.queryByText(copy.formulario.errorGeneral)).not.toBeInTheDocument();
+  });
+
   it('muestra el mensaje de error cuando el servidor falla', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ ok: false }), { status: 500 }),
@@ -2460,6 +2496,17 @@ Expected: FAIL — no existe `components/QuoteForm.tsx`.
 
 - [ ] **Step 3: Implementar el formulario**
 
+Primero, añadir a `content/copy.ts`, dentro de `formulario`, junto a `errorGeneral`:
+
+```ts
+    errorValidacion: 'Revisa los campos marcados.',
+```
+
+El spec §5.7 pide cinco estados de UI, y «error de validación» es uno de ellos: distinto de
+«error de servidor» porque la acción del visitante es distinta —corregir un campo, no
+reintentar más tarde—. Los mensajes por campo llegan del esquema del servidor en la respuesta
+400; este texto sólo los encabeza.
+
 `components/QuoteForm.tsx`:
 
 ```tsx
@@ -2469,10 +2516,12 @@ import { useState, type FormEvent } from 'react';
 import { copy } from '@/content/copy';
 import { Button } from '@/components/ui/Button';
 
-type Estado = 'reposo' | 'enviando' | 'exito' | 'error';
+type Estado = 'reposo' | 'enviando' | 'exito' | 'invalido' | 'error';
 
 const CAMPO =
   'mt-2 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-beige placeholder:text-sky/50 focus:border-sky focus:outline-none';
+
+const CAMPO_INVALIDO = 'border-beige';
 
 function utmDeLaUrl(): Record<string, string> | undefined {
   if (typeof window === 'undefined') return undefined;
@@ -2486,11 +2535,13 @@ function utmDeLaUrl(): Record<string, string> | undefined {
 
 export function QuoteForm() {
   const [estado, setEstado] = useState<Estado>('reposo');
+  const [errores, setErrores] = useState<Record<string, string>>({});
   const c = copy.formulario;
 
   async function enviar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setEstado('enviando');
+    setErrores({});
 
     const datos = Object.fromEntries(new FormData(event.currentTarget));
 
@@ -2500,10 +2551,41 @@ export function QuoteForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...datos, utm: utmDeLaUrl() }),
       });
-      setEstado(res.ok ? 'exito' : 'error');
+
+      if (res.ok) {
+        setEstado('exito');
+        return;
+      }
+
+      // 400 trae los mensajes por campo que produjo el esquema del servidor.
+      if (res.status === 400) {
+        const cuerpo = await res.json().catch(() => null);
+        setErrores(cuerpo?.errores ?? {});
+        setEstado('invalido');
+        return;
+      }
+
+      setEstado('error');
     } catch {
       setEstado('error');
     }
+  }
+
+  // El navegador no valida (el formulario lleva `noValidate`): así los
+  // mensajes salen siempre del esquema, en español, y no del idioma del
+  // navegador de cada visitante.
+  const marca = (campo: string) =>
+    errores[campo]
+      ? { 'aria-invalid': true, 'aria-describedby': `err-${campo}`, className: `${CAMPO} ${CAMPO_INVALIDO}` }
+      : { className: CAMPO };
+
+  function ErrorCampo({ campo }: { campo: string }) {
+    if (!errores[campo]) return null;
+    return (
+      <p id={`err-${campo}`} role="alert" className="mt-2 text-sm text-beige">
+        {errores[campo]}
+      </p>
+    );
   }
 
   if (estado === 'exito') {
@@ -2521,27 +2603,31 @@ export function QuoteForm() {
     <form onSubmit={enviar} noValidate className="grid gap-5 sm:grid-cols-2">
       <label className="block">
         <span className="text-sm text-sky">{c.campos.nombre}</span>
-        <input name="nombre" required minLength={2} className={CAMPO} />
+        <input name="nombre" {...marca('nombre')} />
+        <ErrorCampo campo="nombre" />
       </label>
 
       <label className="block">
         <span className="text-sm text-sky">{c.campos.empresa}</span>
-        <input name="empresa" className={CAMPO} />
+        <input name="empresa" {...marca('empresa')} />
+        <ErrorCampo campo="empresa" />
       </label>
 
       <label className="block">
         <span className="text-sm text-sky">{c.campos.email}</span>
-        <input name="email" type="email" required className={CAMPO} />
+        <input name="email" type="email" {...marca('email')} />
+        <ErrorCampo campo="email" />
       </label>
 
       <label className="block">
         <span className="text-sm text-sky">{c.campos.telefono}</span>
-        <input name="telefono" type="tel" className={CAMPO} />
+        <input name="telefono" type="tel" {...marca('telefono')} />
+        <ErrorCampo campo="telefono" />
       </label>
 
       <label className="block">
         <span className="text-sm text-sky">{c.campos.linea}</span>
-        <select name="linea" required defaultValue="" className={CAMPO}>
+        <select name="linea" defaultValue="" {...marca('linea')}>
           <option value="" disabled />
           {c.opcionesLinea.map((o) => (
             <option key={o.valor} value={o.valor} className="bg-navy">
@@ -2549,17 +2635,26 @@ export function QuoteForm() {
             </option>
           ))}
         </select>
+        <ErrorCampo campo="linea" />
       </label>
 
       <label className="block">
         <span className="text-sm text-sky">{c.campos.cantidad}</span>
-        <input name="cantidad" className={CAMPO} />
+        <input name="cantidad" {...marca('cantidad')} />
+        <ErrorCampo campo="cantidad" />
       </label>
 
       <label className="block sm:col-span-2">
         <span className="text-sm text-sky">{c.campos.mensaje}</span>
-        <textarea name="mensaje" rows={4} className={CAMPO} />
+        <textarea name="mensaje" rows={4} {...marca('mensaje')} />
+        <ErrorCampo campo="mensaje" />
       </label>
+
+      {estado === 'invalido' && (
+        <p role="alert" className="text-sm text-beige sm:col-span-2">
+          {c.errorValidacion}
+        </p>
+      )}
 
       {estado === 'error' && (
         <p role="alert" className="text-sm text-beige sm:col-span-2">
