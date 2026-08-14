@@ -50,7 +50,7 @@ describe('leadSchema', () => {
     const r = leadSchema.safeParse({ ...valido, mensaje: 'x'.repeat(2001) });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues[0].message).toBe('El campo no puede exceder 2000 caracteres.');
+      expect(r.error.issues[0].message).toBe('El mensaje es muy largo. Resúmelo un poco.');
     }
   });
 
@@ -62,5 +62,45 @@ describe('leadSchema', () => {
   it('recorta los espacios del correo', () => {
     const r = leadSchema.safeParse({ ...valido, email: '  ana@empresa.com  ' });
     expect(r.success && r.data.email).toBe('ana@empresa.com');
+  });
+
+  it('rechaza un nombre demasiado largo', () => {
+    const r = leadSchema.safeParse({ ...valido, nombre: 'x'.repeat(121) });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toBe('Escribe un nombre más corto.');
+    }
+  });
+
+  it('rechaza un nombre de empresa demasiado largo', () => {
+    const r = leadSchema.safeParse({ ...valido, empresa: 'x'.repeat(121) });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toBe('Escribe un nombre de empresa más corto.');
+    }
+  });
+
+  it('rechaza un teléfono demasiado largo', () => {
+    const r = leadSchema.safeParse({ ...valido, telefono: 'x'.repeat(41) });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toBe('Revisa el teléfono: es demasiado largo.');
+    }
+  });
+
+  it('rechaza una cantidad demasiado larga', () => {
+    const r = leadSchema.safeParse({ ...valido, cantidad: 'x'.repeat(81) });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toBe('Describe la cantidad en menos palabras.');
+    }
+  });
+
+  it('rechaza parámetros utm con valor no-string', () => {
+    const r = leadSchema.safeParse({ ...valido, utm: { utm_source: 123 } });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toBe('Los parámetros UTM deben ser texto.');
+    }
   });
 });
