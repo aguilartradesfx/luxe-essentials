@@ -20,3 +20,4 @@ tsconfig.tsbuildinfo
 # Originales de fotografía (61 MB). Se optimizan a public/images/ con
 # scripts/optimize-images.mjs; los originales quedan sólo en disco local.
 IMÁGENES/
+.vercel
