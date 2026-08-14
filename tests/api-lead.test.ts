@@ -5,6 +5,7 @@ const update = vi.fn();
 
 // Controlables desde cada prueba: por defecto no fallan.
 let erroActualizar: { message: string } | null = null;
+let erroInsertar: { message: string } | null = null;
 let lanzarAlCrearCliente = false;
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -17,7 +18,12 @@ vi.mock('@/lib/supabase/server', () => ({
         insert: (fila: unknown) => {
           insert(fila);
           return {
-            select: () => ({ single: async () => ({ data: { id: 'fila-1' }, error: null }) }),
+            select: () => ({
+              single: async () =>
+                erroInsertar
+                  ? { data: null, error: erroInsertar }
+                  : { data: { id: 'fila-1' }, error: null },
+            }),
           };
         },
         update: (campos: unknown) => {
@@ -53,6 +59,7 @@ beforeEach(() => {
   update.mockClear();
   upsertContact.mockReset();
   erroActualizar = null;
+  erroInsertar = null;
   lanzarAlCrearCliente = false;
   process.env.LUXE_GHL_API_KEY = 'llave';
   process.env.LUXE_GHL_LOCATION_ID = 'ubicacion';
@@ -141,6 +148,27 @@ describe('POST /api/lead', () => {
     const mensajes = consoleErrorSpy.mock.calls.map((args) => args.join(' ')).join('\n');
     expect(mensajes).toContain('fila-1');
     expect(mensajes).toContain('c1');
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('si el insert en Supabase falla, registra el correo, nombre y línea del lead antes de responder 500', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    erroInsertar = { message: 'JWT expired' };
+
+    const res = await POST(peticion(cuerpo));
+
+    // Éste es el único punto donde el lead se pierde sin fila ni id que
+    // reconciliar: si no queda nada en el log, el nombre, correo y línea
+    // del visitante desaparecen sin rastro.
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ ok: false, error: expect.any(String) });
+    expect(upsertContact).not.toHaveBeenCalled();
+
+    const mensajes = consoleErrorSpy.mock.calls.map((args) => args.join(' ')).join('\n');
+    expect(mensajes).toContain(cuerpo.email);
+    expect(mensajes).toContain(cuerpo.nombre);
+    expect(mensajes).toContain(cuerpo.linea);
 
     consoleErrorSpy.mockRestore();
   });

@@ -46,6 +46,22 @@ export async function POST(request: Request) {
       .single();
 
     if (errorInsert || !fila) {
+      // Único punto donde un lead se puede perder de verdad: si Supabase
+      // rechaza el insert (llave de service-role rotada, proyecto en pausa,
+      // corte de red), no hay fila ni id que registrar en ningún otro log.
+      // Sin esto, el nombre, correo y línea del visitante desaparecen sin
+      // rastro. No se registra `mensaje` (puede llevar detalles que el
+      // visitante no esperaría ver en un log de servidor).
+      console.error(
+        '[lead] No se pudo guardar el lead en Supabase — se perdió sin más rastro que este log.',
+        'email:',
+        lead.email,
+        'nombre:',
+        lead.nombre,
+        'linea:',
+        lead.linea,
+        errorInsert,
+      );
       return NextResponse.json(
         { ok: false, error: 'No pudimos guardar tu solicitud.' },
         { status: 500 },
