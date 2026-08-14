@@ -1,6 +1,7 @@
-import type { Metadata } from 'next';
 import { Playfair_Display, Inter } from 'next/font/google';
 import './globals.css';
+
+export { siteMetadata as metadata } from '@/app/metadata';
 
 const playfair = Playfair_Display({
   subsets: ['latin'],
@@ -13,11 +14,6 @@ const inter = Inter({
   variable: '--font-inter',
   display: 'swap',
 });
-
-export const metadata: Metadata = {
-  title: 'Luxe Essentials',
-  description: 'Manufactura textil con planta propia en Guatemala.',
-};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
