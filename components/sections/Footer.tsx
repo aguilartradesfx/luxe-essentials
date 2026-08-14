@@ -17,6 +17,7 @@ export function Footer() {
             <li>{copy.footer.telefono}</li>
             <li>{copy.footer.email}</li>
             <li>{copy.footer.direccion}</li>
+            <li>{copy.footer.horario}</li>
             <li>{copy.footer.redes}</li>
           </ul>
         </div>

@@ -50,11 +50,24 @@ describe('Footer', () => {
     expect(screen.getByRole('contentinfo')).toHaveTextContent(copy.footer.redes);
   });
 
-  it('marca la dirección como pendiente sin borrar el país (fuera de alcance)', () => {
+  it('sitúa la empresa en Costa Rica y muestra el horario', () => {
     render(<Footer />);
     const pie = screen.getByRole('contentinfo');
     expect(pie).toHaveTextContent(copy.footer.direccion);
-    expect(copy.footer.direccion).toContain('Guatemala');
-    expect(copy.footer.direccion).toContain('Pendiente de confirmar');
+    expect(pie).toHaveTextContent(copy.footer.horario);
+    // El cliente confirmó: la empresa es costarricense y no tiene bodega,
+    // porque no maneja inventario. La planta que representan sí está en
+    // Guatemala, pero es de su fabricante, no suya — por eso el pie sólo
+    // indica el país de la empresa.
+    expect(copy.footer.direccion).toBe('Costa Rica');
+  });
+
+  it('no atribuye a Luxe una planta ni una fabricación propias', () => {
+    // El sitio afirmaba «planta propia», «no un intermediario» y «250
+    // operarios en planta». Eran datos del fabricante al que representan.
+    const todo = JSON.stringify(copy);
+    for (const falso of ['planta propia', 'no un intermediario', 'sin subcontratar', '250']) {
+      expect(todo.toLowerCase()).not.toContain(falso.toLowerCase());
+    }
   });
 });

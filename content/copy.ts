@@ -4,50 +4,51 @@ export const copy = {
   nav: {
     ariaLabel: 'Principal',
     enlaces: [
-      { href: '#capacidad', texto: 'Capacidad' },
-      { href: '#lineas', texto: 'Líneas' },
+      { href: '#capacidad', texto: 'Cómo trabajamos' },
+      { href: '#lineas', texto: 'Productos' },
       { href: '#proceso', texto: 'Proceso' },
     ],
     cta: 'Cotizar',
   },
 
   hero: {
-    titulo: 'Fabricamos lo que tu operación viste y usa todos los días.',
+    titulo: 'Uniformes y textiles para tu operación, fabricados a pedido.',
     subtitulo:
-      'Planta propia en Guatemala. Diseño, corte, bordado, auditoría de calidad y empaque bajo un mismo techo, con capacidad para producción industrial.',
+      'Representamos a un fabricante con más de 30 años exportando a Centroamérica, México y Estados Unidos. Producimos contra tu orden y entregamos en unos 30 días, cuando importar por cuenta propia toma entre 60 y 90.',
     ctaPrimario: 'Solicitar cotización',
-    ctaSecundario: 'Conocer nuestras líneas',
+    ctaSecundario: 'Ver qué fabricamos',
     atributos: [
-      'Diseño personalizado',
-      'Calidad garantizada',
-      'Confección industrial',
-      'Imagen que representa',
+      'Entrega en unos 30 días',
+      'Desde 24 piezas',
+      'Tu logo en cada prenda',
+      'Un solo interlocutor',
     ],
   },
 
   capacidad: {
-    titulo: 'Una planta completa, no un intermediario',
+    titulo: 'Sin la complejidad de importar por tu cuenta',
     parrafos: [
-      'Contamos con departamento propio de corte y diseño: podemos imprimir o desarrollar nuestros propios trazos, o trabajar sobre los que tu marca ya tiene.',
-      'La operación integra auditoría de calidad, logística, bodega de accesorios, bordado, bodega de telas y de producto terminado, empaque y un área de carga para contenedores.',
+      'Los fabricantes locales rara vez tienen la capacidad para atender el volumen de un hotel o una cadena de restaurantes. Y quien importa por su cuenta se enfrenta a ciclos de 60 a 90 días entre producción, consolidación y embarque.',
+      'La fábrica que representamos produce buena parte de sus propias telas. Eso importa más de lo que parece: cuando dentro de un año necesites reponer veinte prendas, la tela seguirá existiendo y tu equipo seguirá viéndose igual.',
+      'Tú no gestionas fabricantes, producción, personalización, importación ni logística. Nosotros coordinamos todo el proceso y tratas con una sola empresa, aquí, en tu horario.',
     ],
   },
 
   cifras: [
-    { valor: '250', etiqueta: 'operarios en planta' },
-    { valor: '4', etiqueta: 'contenedores cargando a la vez' },
-    { valor: '8', etiqueta: 'áreas productivas integradas' },
+    { valor: '30 años', etiqueta: 'de experiencia del fabricante que representamos' },
+    { valor: '30 días', etiqueta: 'de entrega, frente a 60–90 importando directo' },
+    { valor: '70 %', etiqueta: 'de la tela se produce en la propia fábrica' },
   ],
 
   lineas: {
-    titulo: 'Dos líneas, una misma planta',
+    titulo: 'Qué fabricamos',
     items: [
       {
         id: 'uniformes',
         nombre: 'Uniformes',
-        marca: 'The Chef’s Store',
+        marca: 'Hotelería · Restaurantes · Salud · Industria',
         descripcion:
-          'Uniformes industriales y corporativos para cocinas, industria, salud, oficina y equipos de campo.',
+          'Uniformes profesionales para cocina, sala, operación y oficina, en las telas y los cortes que cada puesto exige.',
         categorias: [
           'Filipinas ejecutiva, clásica y premium',
           'Gorros de chef y gorras',
@@ -64,19 +65,16 @@ export const copy = {
       },
       {
         id: 'hogar',
-        nombre: 'Textiles de hogar',
-        marca: 'Bodega del Edredón',
+        nombre: 'Textiles institucionales',
+        marca: 'Ropa de cama · Baño',
         descripcion:
-          'Ropa de cama y textiles para el hogar, para distribución y para proyectos de hotelería.',
+          'Ropa de cama y textiles para habitación y baño, pensados para la reposición continua que exige una operación hotelera.',
         categorias: [
-          'Almohadas',
-          'Sets de sábanas de 200 a 600 hilos',
-          'Fundas e insertos de duvet',
-          'Cubrecamas y edredones',
-          'Toallas y accesorios de baño',
-          'Línea infantil',
-          'Maternidad y bebé',
-          'Protectores y accesorios',
+          'Sábanas y fundas',
+          'Duvets y cubrecamas',
+          'Almohadas y protectores',
+          'Toallas y textiles de baño',
+          'Manteles y textiles de restaurante',
         ],
       },
     ],
@@ -84,22 +82,22 @@ export const copy = {
   },
 
   proceso: {
-    titulo: 'De la tela al contenedor',
+    titulo: 'De tu necesidad a la entrega',
     pasos: [
-      { nombre: 'Diseño y patronaje', detalle: 'Trazos propios o los de tu marca.' },
-      { nombre: 'Corte', detalle: 'Departamento propio, sin subcontratar.' },
-      { nombre: 'Confección', detalle: 'Producción industrial en línea.' },
-      { nombre: 'Bordado y personalización', detalle: 'Tu logo aplicado en planta.' },
-      { nombre: 'Auditoría de calidad', detalle: 'Revisión antes de empaque.' },
-      { nombre: 'Empaque', detalle: 'Listo para distribución.' },
-      { nombre: 'Carga y logística', detalle: 'Hasta cuatro contenedores a la vez.' },
+      { nombre: 'Entendemos la necesidad', detalle: 'Qué prenda, para qué puesto y en qué volumen.' },
+      { nombre: 'Recomendamos y cotizamos', detalle: 'Tela, corte y acabados según el uso real.' },
+      { nombre: 'Muestra', detalle: 'Mandas tu arte o lo preparamos: foto de la muestra en 24 horas.' },
+      { nombre: 'Orden de producción', detalle: 'Arranca con el 50 % de la orden de compra.' },
+      { nombre: 'Fabricación', detalle: 'Producción a pedido en la planta que representamos.' },
+      { nombre: 'Importación y logística', detalle: 'Coordinamos el embarque; tú no gestionas nada.' },
+      { nombre: 'Entrega', detalle: 'En Costa Rica, en unos 30 días.' },
     ],
   },
 
   personalizacion: {
-    titulo: 'Tu marca, aplicada en planta',
+    titulo: 'Tu logo en cada prenda',
     descripcion:
-      'Bordado, serigrafía, DTF y sublimación, además de colores, tallas y trazos a la medida de tu equipo.',
+      'Bordado, serigrafía, DTF y sublimación. Desde 24 unidades con un costo adicional, y sin costo a partir de 48 cuando ya tienes el arte digital. Te enviamos foto de la muestra 24 horas después de aprobarlo.',
     tecnicas: ['Bordado', 'Serigrafía', 'DTF', 'Sublimación'],
   },
 
@@ -118,7 +116,7 @@ export const copy = {
     lineaPlaceholder: 'Selecciona una línea',
     opcionesLinea: [
       { valor: 'uniformes', texto: 'Uniformes' },
-      { valor: 'hogar', texto: 'Textiles de hogar' },
+      { valor: 'hogar', texto: 'Textiles institucionales' },
       { valor: 'ambas', texto: 'Ambas' },
     ],
     enviar: 'Enviar solicitud',
@@ -130,17 +128,14 @@ export const copy = {
   },
 
   footer: {
-    // Datos pendientes de confirmar con el cliente (spec §10).
+    // Teléfono, correo y redes siguen sin confirmar: el cliente dejó esas tres
+    // preguntas en blanco. La dirección sí está resuelta: no tienen bodega
+    // porque no manejan inventario, así que sólo se indica el país.
     contactoTitulo: 'Contacto',
     telefono: 'Pendiente de confirmar',
     email: 'Pendiente de confirmar',
-    // La palabra "Guatemala" se deja tal cual: es el país mencionado en el
-    // resto del sitio (hero, metadata, OG image) y ese dato está fuera de
-    // alcance aquí (hay evidencia sin resolver de que podría ser Costa Rica,
-    // y la pregunta está con el cliente). Lo único que se marca como
-    // pendiente es la DIRECCIÓN completa, con el mismo "Pendiente de
-    // confirmar" que ya usan teléfono y correo.
-    direccion: 'Guatemala — Pendiente de confirmar',
+    direccion: 'Costa Rica',
+    horario: 'Lunes a viernes, 8:00 a 17:00',
     redes: 'Pendiente de confirmar',
     derechos: 'Luxe Essentials. Todos los derechos reservados.',
   },
