@@ -1,7 +1,15 @@
+import { AuroraBackground } from '@/components/background/AuroraBackground';
+import { Header } from '@/components/sections/Header';
+import { Hero } from '@/components/sections/Hero';
+
 export default function Home() {
   return (
-    <main>
-      <h1 className="font-[family-name:var(--font-display)] text-4xl">Luxe Essentials</h1>
-    </main>
+    <>
+      <AuroraBackground />
+      <Header />
+      <main>
+        <Hero />
+      </main>
+    </>
   );
 }
