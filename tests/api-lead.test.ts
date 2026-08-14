@@ -3,19 +3,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const insert = vi.fn();
 const update = vi.fn();
 
+// Controlables desde cada prueba: por defecto no fallan.
+let erroActualizar: { message: string } | null = null;
+let lanzarAlCrearCliente = false;
+
 vi.mock('@/lib/supabase/server', () => ({
-  supabaseAdmin: () => ({
-    from: () => ({
-      insert: (fila: unknown) => {
-        insert(fila);
-        return { select: () => ({ single: async () => ({ data: { id: 'fila-1' }, error: null }) }) };
-      },
-      update: (campos: unknown) => {
-        update(campos);
-        return { eq: async () => ({ error: null }) };
-      },
-    }),
-  }),
+  supabaseAdmin: () => {
+    if (lanzarAlCrearCliente) {
+      throw new Error('Faltan las credenciales de Supabase en el servidor.');
+    }
+    return {
+      from: () => ({
+        insert: (fila: unknown) => {
+          insert(fila);
+          return {
+            select: () => ({ single: async () => ({ data: { id: 'fila-1' }, error: null }) }),
+          };
+        },
+        update: (campos: unknown) => {
+          update(campos);
+          return { eq: async () => ({ error: erroActualizar }) };
+        },
+      }),
+    };
+  },
 }));
 
 const upsertContact = vi.fn();
@@ -41,6 +52,8 @@ beforeEach(() => {
   insert.mockClear();
   update.mockClear();
   upsertContact.mockReset();
+  erroActualizar = null;
+  lanzarAlCrearCliente = false;
   process.env.LUXE_GHL_API_KEY = 'llave';
   process.env.LUXE_GHL_LOCATION_ID = 'ubicacion';
 });
@@ -91,5 +104,57 @@ describe('POST /api/lead', () => {
 
     expect(res.status).toBe(201);
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ ghl_error: 'GHL 401' }));
+  });
+
+  it('cuerpo ilegible responde 400 con `errores` (mismo shape que la validación)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const peticionMalFormada = new Request('http://localhost/api/lead', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{esto no es json',
+    });
+
+    const res = await POST(peticionMalFormada);
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ ok: false, errores: {} });
+    expect(insert).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('si Supabase no puede registrar un contacto ya creado en GHL, sigue devolviendo 201 y lo deja anotado en el log', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    erroActualizar = { message: 'timeout de red' };
+    upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+
+    const res = await POST(peticion(cuerpo));
+
+    // El lead ya está a salvo en Supabase y el contacto ya existe en GHL:
+    // el visitante no debe ver un error por un fallo de registro interno.
+    expect(res.status).toBe(201);
+
+    // Pero el fallo debe quedar anotado con el id de la fila y el id del
+    // contacto de GHL: es el estado que un humano tiene que reconciliar a
+    // mano (la fila quedó con `ghl_contact_id is null`, así que la cola de
+    // reintento la recogería y crearía un contacto duplicado en el CRM).
+    const mensajes = consoleErrorSpy.mock.calls.map((args) => args.join(' ')).join('\n');
+    expect(mensajes).toContain('fila-1');
+    expect(mensajes).toContain('c1');
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('devuelve 500 en el shape del contrato si supabaseAdmin() lanza (p.ej. credenciales faltantes)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    lanzarAlCrearCliente = true;
+
+    const res = await POST(peticion(cuerpo));
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ ok: false, error: expect.any(String) });
+    expect(upsertContact).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
   });
 });
