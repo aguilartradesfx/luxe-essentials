@@ -4,6 +4,9 @@ import { Hero } from '@/components/sections/Hero';
 import { Capacidad } from '@/components/sections/Capacidad';
 import { Cifras } from '@/components/sections/Cifras';
 import { Lineas } from '@/components/sections/Lineas';
+import { Proceso } from '@/components/sections/Proceso';
+import { Personalizacion } from '@/components/sections/Personalizacion';
+import { Footer } from '@/components/sections/Footer';
 
 export default function Home() {
   return (
@@ -15,7 +18,10 @@ export default function Home() {
         <Capacidad />
         <Cifras />
         <Lineas />
+        <Proceso />
+        <Personalizacion />
       </main>
+      <Footer />
     </>
   );
 }
