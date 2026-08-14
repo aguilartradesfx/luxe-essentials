@@ -39,7 +39,13 @@ export function Lineas() {
             <GlassCard variant="plate" className="mb-7 overflow-hidden p-6">
               <Figure id={IMAGEN_LINEA[linea.id]} sizes="(min-width: 768px) 50vw, 100vw" />
             </GlassCard>
-            <p className="text-xs uppercase tracking-[0.2em] text-sky/80">{linea.marca}</p>
+            {/* text-sky, no text-sky/80: es un kicker de marca (xs, mayúsculas,
+                tracking ancho) — la combinación más difícil de leer, no la más
+                fácil — y sin razón de diseño para ser más tenue que el cuerpo de
+                texto de abajo. A 80% de opacidad, dentro de esta GlassCard
+                "dark" y sobre el peor solape de las manchas del aurora, medía
+                3.68:1 (reprueba AA). En texto completo mide 4.74:1 (ver reporte). */}
+            <p className="text-xs uppercase tracking-[0.2em] text-sky">{linea.marca}</p>
             <h3 className="mt-2 font-[family-name:var(--font-display)] text-2xl text-beige">
               {linea.nombre}
             </h3>

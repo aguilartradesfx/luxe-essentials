@@ -46,6 +46,15 @@ describe('Lineas', () => {
     expect(container.querySelector('#lineas')).not.toBeNull();
   });
 
+  it('la etiqueta de marca usa sky completo, no sky/80 (finding 4: nada visible debe reprobar AA)', () => {
+    render(<Lineas />);
+    for (const linea of copy.lineas.items) {
+      const etiqueta = screen.getByText(linea.marca);
+      expect(etiqueta).toHaveClass('text-sky');
+      expect(etiqueta.className).not.toMatch(/text-sky\/80/);
+    }
+  });
+
   it('la foto de la línea completa de uniformes usa la placa clara, igual que el hero (§8.2)', () => {
     render(<Lineas />);
     const img = screen.getByAltText(getMedia('cocina-linea-completa').alt);

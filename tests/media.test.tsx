@@ -42,4 +42,17 @@ describe('Figure', () => {
     render(<Figure id="hogar-cama-vestida" />);
     expect(screen.getByText(copy.medios.pendiente)).toBeInTheDocument();
   });
+
+  it('el marcador usa sky completo sobre una placa navy sólida, no sky/80 sobre el degradado (finding 4)', () => {
+    render(<Figure id="hogar-cama-vestida" />);
+    const etiqueta = screen.getByText(copy.medios.pendiente);
+    expect(etiqueta).toHaveClass('text-sky');
+    expect(etiqueta.className).not.toMatch(/text-sky\/80/);
+    // El centro del degradado from-navy via-teal to-navy es teal puro: ni
+    // sky ni beige a color completo alcanzan AA ahí. La placa navy detrás
+    // del texto es lo que de verdad cierra el contraste, no sólo subir la
+    // opacidad del texto.
+    const placa = etiqueta.closest('.bg-navy');
+    expect(placa).not.toBeNull();
+  });
 });
