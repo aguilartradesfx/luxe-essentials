@@ -5,7 +5,17 @@ export type MediaEntry = {
   ratio: MediaRatio;
   alt: string;
   brief: string;
-  pending?: true;
+  // Required, not optional: MEDIA below is `as const satisfies readonly
+  // MediaEntry[]`, which keeps each entry's own narrow literal type instead
+  // of widening to MediaEntry. If `pending` were optional, an entry that
+  // omits it would have no `pending` key at all in its inferred type — and
+  // TypeScript refuses to read `.pending` on a union where some members
+  // lack the property outright (breaks e.g. `MEDIA.filter((e) =>
+  // !e.pending)`). Making it required forces every entry, present and
+  // future, to state `pending: true` or `pending: false` explicitly, so a
+  // missing value is a compile error here instead of a `tsc`/`next build`
+  // failure that only makes sense after reading this comment.
+  pending: boolean;
 };
 
 export const MEDIA = [
@@ -14,98 +24,98 @@ export const MEDIA = [
     ratio: '16:9',
     alt: 'Hombre y mujer con camisa y pantalón corporativo, junto a camisas en gris, rojo, azul marino y blanco',
     brief: 'Camisas y pantalones corporativos con modelos',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'planta-bordado',
     ratio: '16:9',
     alt: 'Operarias trabajando en máquinas bordadoras industriales de cabezales múltiples',
     brief: 'Área de bordado en operación',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'cocina-linea-completa',
     ratio: '16:9',
     alt: 'Filipinas negra y blanca, delantal, gorro de chef, gorra, polo y pantalones de cocina',
     brief: 'Línea completa de uniformes de cocina',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'cocina-filipinas',
     ratio: '16:9',
     alt: 'Filipinas de chef en negro, blanco, con vivo rosado, roja y de denim',
     brief: 'Variantes de filipina',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'cocina-gorros-pantalones',
     ratio: '16:9',
     alt: 'Gorra negra, gorros de chef y pantalón de cocina con estampado pied-de-poule',
     brief: 'Gorros, gorras y pantalones de chef',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'camisas-columbia',
     ratio: '16:9',
     alt: 'Camisa tipo Columbia en caqui, con variantes en azul marino, negro, gris, verde olivo y vinotinto',
     brief: 'Camisas tipo Columbia',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'camisas-industriales-reflectivo',
     ratio: '16:9',
     alt: 'Camisas industriales con cinta reflectiva amarilla, en negro, azul marino, arena, gris y blanco',
     brief: 'Camisas industriales con reflectivo',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'playeras-pantalones-industriales',
     ratio: '16:9',
     alt: 'Playera manga larga azul marino y pantalón cargo negro, ambos con cinta reflectiva',
     brief: 'Playeras y pantalones industriales',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'pantalones-denim-reflectivo',
     ratio: '16:9',
     alt: 'Pantalones de denim azul con cinta reflectiva amarilla en las piernas',
     brief: 'Pantalones de denim con reflectivo',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'polos-tejido-plano',
     ratio: '16:9',
     alt: 'Polo azul marino de frente y espalda, con muestrario de colores en interlock, warp piqué y piqué',
     brief: 'Polos de tejido plano y muestrario',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'deportivas',
     ratio: '16:9',
     alt: 'Hoodie celeste, sudadera de cuarto de zipper, hoodie amarillo, vestido deportivo y blusa sin mangas',
     brief: 'Prendas deportivas',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'chalecos-corporativos',
     ratio: '16:9',
     alt: 'Chaleco ejecutivo y chaleco enguatado en azul marino, de frente y espalda',
     brief: 'Chalecos corporativos',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'chaquetas-ejecutivas',
     ratio: '16:9',
     alt: 'Chaquetas ejecutivas con cierre frontal en blanco, azul marino y negro',
     brief: 'Chaquetas ejecutivas',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'set-medicos',
     ratio: '16:9',
     alt: 'Sets de médico de manga corta con pantalón, en negro, blanco y azul marino',
     brief: 'Sets de médicos',
-    pending: undefined,
+    pending: false,
   },
   {
     id: 'hogar-cama-vestida',
