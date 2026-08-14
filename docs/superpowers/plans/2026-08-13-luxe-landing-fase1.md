@@ -1776,7 +1776,7 @@ import('pg').then(async ({default: pg}) => {
 "
 ```
 
-Expected: las 13 columnas del spec.
+Expected: las 14 columnas del spec.
 
 - [ ] **Step 5: Commit**
 
@@ -1910,7 +1910,12 @@ git commit -m "feat: validación del formulario de cotización"
 No se puede asumir si la llave es v1 o v2: cambian el host, las cabeceras y la forma del cuerpo. `scripts/ghl-discover.mjs`:
 
 ```js
-import 'dotenv/config';
+import { config } from 'dotenv';
+
+// `import 'dotenv/config'` sólo lee `.env`. Las credenciales de este
+// proyecto viven en `.env.local`, así que hay que pedirlo explícitamente.
+config({ path: '.env.local' });
+config();
 
 const apiKey = process.env.LUXE_GHL_API_KEY;
 const locationId = process.env.LUXE_GHL_LOCATION_ID;
