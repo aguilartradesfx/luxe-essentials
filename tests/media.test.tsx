@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { MEDIA, getMedia } from '@/content/media';
 import { Figure } from '@/components/ui/Figure';
+import { copy } from '@/content/copy';
 
 describe('manifest de medios', () => {
   it('da texto alternativo a toda entrada, incluidas las pendientes', () => {
@@ -35,5 +36,10 @@ describe('Figure', () => {
     render(<Figure id="hogar-cama-vestida" />);
     expect(screen.getByRole('img', { name: getMedia('hogar-cama-vestida').alt })).toBeInTheDocument();
     expect(screen.getByText(/Pendiente/i)).toBeInTheDocument();
+  });
+
+  it('el texto del marcador sale de content/copy.ts, no está escrito en el componente', () => {
+    render(<Figure id="hogar-cama-vestida" />);
+    expect(screen.getByText(copy.medios.pendiente)).toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useState, useRef, useEffect, type FormEvent } from 'react';
 import { copy } from '@/content/copy';
 import { Button } from '@/components/ui/Button';
 
@@ -32,6 +32,29 @@ export function QuoteForm() {
   const [estado, setEstado] = useState<Estado>('reposo');
   const [errores, setErrores] = useState<Record<string, string>>({});
   const c = copy.formulario;
+
+  const formRef = useRef<HTMLFormElement>(null);
+  const exitoRef = useRef<HTMLDivElement>(null);
+
+  // El foco se pierde en los dos desenlaces del envío: en un 400 nada lo
+  // mueve al primer campo que el servidor rechazó, y en el éxito el
+  // formulario entero se desmonta y lo reemplaza un `role="status"` recién
+  // insertado, así que el foco cae a <body> y los lectores de pantalla
+  // anuncian de forma inconsistente.
+  useEffect(() => {
+    if (estado === 'invalido') {
+      const primerCampo = Object.keys(errores)[0];
+      if (primerCampo) {
+        formRef.current?.querySelector<HTMLElement>(`[name="${primerCampo}"]`)?.focus();
+      }
+    }
+  }, [estado, errores]);
+
+  useEffect(() => {
+    if (estado === 'exito') {
+      exitoRef.current?.focus();
+    }
+  }, [estado]);
 
   async function enviar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -92,7 +115,7 @@ export function QuoteForm() {
 
   if (estado === 'exito') {
     return (
-      <div role="status" className="py-10 text-center">
+      <div ref={exitoRef} tabIndex={-1} role="status" className="py-10 text-center">
         <p className="font-[family-name:var(--font-display)] text-2xl text-beige">
           {c.exitoTitulo}
         </p>
@@ -102,7 +125,7 @@ export function QuoteForm() {
   }
 
   return (
-    <form onSubmit={enviar} noValidate className="grid gap-5 sm:grid-cols-2">
+    <form ref={formRef} onSubmit={enviar} noValidate className="grid gap-5 sm:grid-cols-2">
       {/*
         El párrafo de error va FUERA del <label>, no dentro: `getByLabelText`
         (y el cálculo de nombre accesible en general) toma como texto de la
@@ -148,7 +171,9 @@ export function QuoteForm() {
         <label>
           <span className="text-sm text-sky">{c.campos.linea}</span>
           <select name="linea" defaultValue="" {...marca('linea')}>
-            <option value="" disabled />
+            <option value="" disabled>
+              {c.lineaPlaceholder}
+            </option>
             {c.opcionesLinea.map((o) => (
               <option key={o.valor} value={o.valor} className="bg-navy">
                 {o.texto}

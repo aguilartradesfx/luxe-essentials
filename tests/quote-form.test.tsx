@@ -22,6 +22,15 @@ describe('QuoteForm', () => {
     }
   });
 
+  it('el select de línea trae un placeholder con texto, no una opción vacía sin etiqueta', () => {
+    render(<QuoteForm />);
+    const select = screen.getByLabelText(copy.formulario.campos.linea) as HTMLSelectElement;
+    const placeholder = select.querySelector('option[value=""]') as HTMLOptionElement | null;
+    expect(placeholder).not.toBeNull();
+    expect(placeholder!.textContent).toBe(copy.formulario.lineaPlaceholder);
+    expect(placeholder!.disabled).toBe(true);
+  });
+
   it('muestra la confirmación tras un envío exitoso', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 201 }),
@@ -33,6 +42,37 @@ describe('QuoteForm', () => {
 
     await waitFor(() => {
       expect(screen.getByText(copy.formulario.exitoTitulo)).toBeInTheDocument();
+    });
+  });
+
+  it('mueve el foco al mensaje de éxito (el formulario se desmonta, así que si nada lo mueve cae a <body>)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 201 }),
+    );
+    const user = userEvent.setup();
+    render(<QuoteForm />);
+    await llenarMinimo(user);
+    await user.click(screen.getByRole('button', { name: copy.formulario.enviar }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveFocus();
+    });
+  });
+
+  it('mueve el foco al primer campo que el servidor rechazó tras un 400', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: false, errores: { email: 'Escribe un correo válido.' } }),
+        { status: 400 },
+      ),
+    );
+    const user = userEvent.setup();
+    render(<QuoteForm />);
+    await llenarMinimo(user);
+    await user.click(screen.getByRole('button', { name: copy.formulario.enviar }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(copy.formulario.campos.email)).toHaveFocus();
     });
   });
 

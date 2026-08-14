@@ -115,6 +115,7 @@ export const copy = {
       cantidad: 'Cantidad aproximada',
       mensaje: 'Cuéntanos más',
     },
+    lineaPlaceholder: 'Selecciona una línea',
     opcionesLinea: [
       { valor: 'uniformes', texto: 'Uniformes' },
       { valor: 'hogar', texto: 'Textiles de hogar' },
@@ -133,7 +134,20 @@ export const copy = {
     contactoTitulo: 'Contacto',
     telefono: 'Pendiente de confirmar',
     email: 'Pendiente de confirmar',
-    direccion: 'Guatemala',
+    // La palabra "Guatemala" se deja tal cual: es el país mencionado en el
+    // resto del sitio (hero, metadata, OG image) y ese dato está fuera de
+    // alcance aquí (hay evidencia sin resolver de que podría ser Costa Rica,
+    // y la pregunta está con el cliente). Lo único que se marca como
+    // pendiente es la DIRECCIÓN completa, con el mismo "Pendiente de
+    // confirmar" que ya usan teléfono y correo.
+    direccion: 'Guatemala — Pendiente de confirmar',
+    redes: 'Pendiente de confirmar',
     derechos: 'Luxe Essentials. Todos los derechos reservados.',
+  },
+
+  medios: {
+    // Único texto visible en la página que antes vivía fuera de este
+    // archivo (estaba escrito directamente en components/ui/Figure.tsx).
+    pendiente: 'Pendiente de fotografía',
   },
 } as const;

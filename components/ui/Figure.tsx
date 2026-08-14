@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import { copy } from '@/content/copy';
 import { getMedia, RATIO_CSS, type MediaId } from '@/content/media';
 
 type FigureProps = {
@@ -21,7 +22,7 @@ export function Figure({ id, priority = false, className = '', sizes = '100vw' }
         className={`relative grid place-items-center overflow-hidden rounded-2xl border border-[var(--glass-border)] bg-gradient-to-br from-navy via-teal to-navy ${className}`}
       >
         <div className="px-6 text-center">
-          <p className="text-xs uppercase tracking-[0.2em] text-sky/80">Pendiente de fotografía</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-sky/80">{copy.medios.pendiente}</p>
           <p className="mt-2 font-[family-name:var(--font-display)] text-lg text-beige">{entry.brief}</p>
         </div>
       </div>
