@@ -201,7 +201,10 @@ Cuando lleguen las tomas de planta, cada paso adopta su imagen sin cambio estruc
 ### 5.6 Personalización
 
 Técnicas confirmadas en el deck: bordado, serigrafía, DTF y sublimación. Más colores, tallas
-y trazos a la medida. Imagen: `personalizacion-bordado` (4:3).
+y trazos a la medida.
+
+Sin imagen propia: la única toma de bordado disponible se usa en §5.2, y repetirla aquí
+debilitaría ambas apariciones. La sección se resuelve como bloque tipográfico sobre vidrio.
 
 ### 5.7 Formulario de cotización
 
