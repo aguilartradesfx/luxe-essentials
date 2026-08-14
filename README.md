@@ -26,7 +26,9 @@ npm run dev
 
 - **Texto del sitio:** `content/copy.ts`. No hay texto visible en los componentes.
 - **Imágenes:** `content/media.ts` declara cada una. Para añadir una pendiente, colocar el
-  archivo en `public/images/<id>.webp` y quitar `pending: true` de su entrada.
+  archivo en `public/images/<id>.webp` y cambiar `pending: true` a `pending: false` en su
+  entrada. `pending` es un campo obligatorio de `MediaEntry` (no opcional): omitirlo es un
+  error de compilación (TS2741), a propósito.
 - **Fotografía pendiente:** toda la línea de hogar y seis de los siete pasos de proceso.
 
 ## Leads
