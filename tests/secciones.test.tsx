@@ -4,6 +4,7 @@ import { Capacidad } from '@/components/sections/Capacidad';
 import { Cifras } from '@/components/sections/Cifras';
 import { Lineas } from '@/components/sections/Lineas';
 import { copy } from '@/content/copy';
+import { getMedia } from '@/content/media';
 
 describe('Capacidad', () => {
   it('muestra todos sus párrafos', () => {
@@ -43,5 +44,17 @@ describe('Lineas', () => {
   it('expone el ancla de navegación', () => {
     const { container } = render(<Lineas />);
     expect(container.querySelector('#lineas')).not.toBeNull();
+  });
+
+  it('la foto de la línea completa de uniformes usa la placa clara, igual que el hero (§8.2)', () => {
+    render(<Lineas />);
+    const img = screen.getByAltText(getMedia('cocina-linea-completa').alt);
+    // La placa es el propio GlassCard variant="plate": lleva `isolate` y
+    // `[&_img]:mix-blend-multiply` para fundir el fondo blanco de estudio
+    // en vez de que se lea como un recorte pegado sobre el navy.
+    const placa = img.closest('.isolate');
+    expect(placa).not.toBeNull();
+    expect(placa).toHaveClass('bg-[var(--plate-fill)]');
+    expect(placa!.className).toMatch(/mix-blend-multiply/);
   });
 });

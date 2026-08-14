@@ -32,11 +32,13 @@ export function Lineas() {
       <div className="mt-12 grid gap-8 md:grid-cols-2">
         {copy.lineas.items.map((linea) => (
           <GlassCard key={linea.id} as="article" aria-label={linea.nombre} className="p-8">
-            <Figure
-              id={IMAGEN_LINEA[linea.id]}
-              className="mb-7"
-              sizes="(min-width: 768px) 50vw, 100vw"
-            />
+            {/* Mismo tratamiento que el hero (Hero.tsx): placa clara +
+                mix-blend-multiply, para que el fondo blanco de estudio de la
+                foto se funda con la placa en vez de leerse como un recorte
+                pegado sobre el navy (§8.2). */}
+            <GlassCard variant="plate" className="mb-7 overflow-hidden p-6">
+              <Figure id={IMAGEN_LINEA[linea.id]} sizes="(min-width: 768px) 50vw, 100vw" />
+            </GlassCard>
             <p className="text-xs uppercase tracking-[0.2em] text-sky/80">{linea.marca}</p>
             <h3 className="mt-2 font-[family-name:var(--font-display)] text-2xl text-beige">
               {linea.nombre}
