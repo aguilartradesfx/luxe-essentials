@@ -19,7 +19,7 @@ export function Hero() {
             </Button>
           </div>
         </div>
-        <GlassCard variant="plate" className="overflow-hidden p-3">
+        <GlassCard variant="plate" className="overflow-hidden p-6">
           <Figure
             id="corporativo-camisas-pantalones"
             priority

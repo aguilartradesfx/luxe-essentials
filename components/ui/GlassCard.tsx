@@ -5,7 +5,10 @@ const BASE =
 
 const VARIANTS = {
   dark: 'bg-[var(--glass-fill)] text-beige',
-  plate: 'bg-[var(--plate-fill)] text-navy',
+  // `isolate` crea un nuevo contexto de apilamiento: sin él,
+  // `mix-blend-multiply` fundiría la foto con el navy de la página en vez
+  // de detenerse en la placa, y el resultado se vería sucio/oscuro.
+  plate: 'bg-[var(--plate-fill)] text-navy isolate [&_img]:mix-blend-multiply',
 } as const;
 
 type GlassCardProps = {
