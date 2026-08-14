@@ -6,9 +6,16 @@ import { Button } from '@/components/ui/Button';
 
 type Estado = 'reposo' | 'enviando' | 'exito' | 'invalido' | 'error';
 
-const CAMPO =
-  'mt-2 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-beige placeholder:text-sky/50 focus:border-sky focus:outline-none';
+// Sin utilidad de border-color: cada estado aplica exactamente una (abajo).
+// Dos utilidades de border-color con la misma especificidad compiten por el
+// orden en que Tailwind las EMITE en la hoja generada, no por el orden en
+// el string de className — concatenarlas aquí fue el bug que dejaba el
+// borde de campo inválido sin efecto. Verificado compilando la hoja real:
+// ver la nota en el reporte de la tarea.
+const CAMPO_BASE =
+  'mt-2 w-full rounded-xl border bg-white/5 px-4 py-3 text-beige placeholder:text-sky/50 focus:border-sky focus:outline-none';
 
+const CAMPO_VALIDO = 'border-white/15';
 const CAMPO_INVALIDO = 'border-beige';
 
 function utmDeLaUrl(): Record<string, string> | undefined {
@@ -28,6 +35,9 @@ export function QuoteForm() {
 
   async function enviar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // No depender solo de que el botón llegue deshabilitado a tiempo: si dos
+    // envíos se disparan antes de que React repinte, esto corta el segundo.
+    if (estado === 'enviando') return;
     setEstado('enviando');
     setErrores({});
 
@@ -64,8 +74,12 @@ export function QuoteForm() {
   // navegador de cada visitante.
   const marca = (campo: string) =>
     errores[campo]
-      ? { 'aria-invalid': true, 'aria-describedby': `err-${campo}`, className: `${CAMPO} ${CAMPO_INVALIDO}` }
-      : { className: CAMPO };
+      ? {
+          'aria-invalid': true,
+          'aria-describedby': `err-${campo}`,
+          className: `${CAMPO_BASE} ${CAMPO_INVALIDO}`,
+        }
+      : { className: `${CAMPO_BASE} ${CAMPO_VALIDO}` };
 
   function ErrorCampo({ campo }: { campo: string }) {
     if (!errores[campo]) return null;
