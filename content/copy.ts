@@ -2,6 +2,7 @@ export const copy = {
   marca: 'Luxe Essentials',
 
   nav: {
+    ariaLabel: 'Principal',
     enlaces: [
       { href: '#capacidad', texto: 'Capacidad' },
       { href: '#lineas', texto: 'Líneas' },

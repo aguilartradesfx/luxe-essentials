@@ -19,11 +19,13 @@ export function Hero() {
             </Button>
           </div>
         </div>
-        <Figure
-          id="corporativo-camisas-pantalones"
-          priority
-          sizes="(min-width: 768px) 50vw, 100vw"
-        />
+        <GlassCard variant="plate" className="overflow-hidden p-3">
+          <Figure
+            id="corporativo-camisas-pantalones"
+            priority
+            sizes="(min-width: 768px) 50vw, 100vw"
+          />
+        </GlassCard>
       </div>
 
       <ul className="mt-16 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
