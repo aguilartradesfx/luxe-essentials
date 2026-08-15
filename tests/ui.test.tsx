@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
-import { AuroraBackground } from '@/components/background/AuroraBackground';
 
 describe('GlassCard', () => {
   it('rinde su contenido', () => {
@@ -10,23 +9,41 @@ describe('GlassCard', () => {
     expect(screen.getByText('contenido')).toBeInTheDocument();
   });
 
-  it('usa el relleno oscuro por defecto', () => {
+  it('por defecto es papel sobre lienzo, sin blur', () => {
     const { container } = render(<GlassCard>x</GlassCard>);
-    expect(container.firstElementChild).toHaveClass('bg-[var(--glass-fill)]');
+    const el = container.firstElementChild!;
+    expect(el).toHaveClass('bg-[var(--carta-fill)]');
+    // El blur sólo tiene sentido sobre fotografía: sobre un fondo plano
+    // no refracta nada y sólo ensucia.
+    expect(el.className).not.toMatch(/backdrop-blur/);
   });
 
-  it('usa la placa clara en la variante plate', () => {
-    const { container } = render(<GlassCard variant="plate">x</GlassCard>);
-    expect(container.firstElementChild).toHaveClass('bg-[var(--plate-fill)]');
+  it('la variante panel sí lleva vidrio, para usarse sobre foto', () => {
+    const { container } = render(<GlassCard variant="panel">x</GlassCard>);
+    const el = container.firstElementChild!;
+    expect(el).toHaveClass('bg-[var(--panel-fill)]');
+    expect(el.className).toMatch(/backdrop-blur/);
+  });
+
+  it('propaga props extra al elemento', () => {
+    render(
+      <GlassCard as="article" aria-label="Ficha">
+        x
+      </GlassCard>,
+    );
+    expect(screen.getByRole('article', { name: 'Ficha' })).toBeInTheDocument();
   });
 });
 
 describe('Button', () => {
-  it('el primario va beige con texto navy, nunca teal de fondo', () => {
+  it('el primario va navy con texto beige, nunca teal de fondo', () => {
     const { container } = render(<Button>Cotizar</Button>);
     const el = container.firstElementChild!;
-    expect(el).toHaveClass('bg-beige');
-    expect(el).toHaveClass('text-navy');
+    // Sobre lienzo claro la pareja de alto contraste se invierte respecto
+    // al diseño oscuro anterior: navy de relleno, beige de texto (~8.3:1).
+    expect(el).toHaveClass('bg-navy');
+    expect(el).toHaveClass('text-beige');
+    // El teal como relleno de un botón daría ~3.9:1 con texto claro.
     expect(el.className).not.toMatch(/bg-teal/);
   });
 
@@ -38,23 +55,5 @@ describe('Button', () => {
   it('rinde un botón cuando no recibe href', () => {
     render(<Button>Enviar</Button>);
     expect(screen.getByRole('button', { name: 'Enviar' })).toBeInTheDocument();
-  });
-});
-
-describe('AuroraBackground', () => {
-  it('queda fuera del árbol de accesibilidad', () => {
-    const { container } = render(<AuroraBackground />);
-    expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
-  });
-
-  it('atenúa el alfa de las manchas para no erosionar el contraste AA del texto sky (§4.2)', () => {
-    const { container } = render(<AuroraBackground />);
-    const manchas = container.firstElementChild!.children;
-    expect(manchas[0]).toHaveClass('bg-teal/25');
-    expect(manchas[1]).toHaveClass('bg-sky/12');
-    // Los valores originales (teal/40, sky/25) medían por debajo de AA para
-    // el texto sky que se dibuja sobre el aurora sin una GlassCard debajo.
-    expect(manchas[0].className).not.toMatch(/bg-teal\/40\b/);
-    expect(manchas[1].className).not.toMatch(/bg-sky\/25\b/);
   });
 });

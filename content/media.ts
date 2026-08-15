@@ -1,4 +1,4 @@
-export type MediaRatio = '16:9' | '4:3' | '3:4' | '1:1';
+export type MediaRatio = '21:9' | '16:9' | '4:3' | '3:4' | '1:1';
 
 export type MediaEntry = {
   id: string;
@@ -19,6 +19,48 @@ export type MediaEntry = {
 };
 
 export const MEDIA = [
+  {
+    id: 'hero-tela',
+    ratio: '21:9',
+    alt: 'Camisa corporativa azul marino y filipina de chef negra con vivo verde, en primer plano',
+    brief: 'Portada: detalle de tela de uniforme',
+    pending: false,
+  },
+  {
+    id: 'seccion-telas',
+    ratio: '4:3',
+    alt: 'Rollos de tela azul marino, blanca, beige y cruda ordenados en una estantería iluminada',
+    brief: 'Continuidad de materiales',
+    pending: false,
+  },
+  {
+    id: 'seccion-uniformes',
+    ratio: '3:4',
+    alt: 'Filipina de chef negra, camisa corporativa azul marino y delantal colgados en perchas de madera',
+    brief: 'Línea de uniformes',
+    pending: false,
+  },
+  {
+    id: 'seccion-hogar',
+    ratio: '3:4',
+    alt: 'Cama de hotel vestida con ropa de cama blanca de algodón y cojines azul marino',
+    brief: 'Línea de textiles institucionales',
+    pending: false,
+  },
+  {
+    id: 'seccion-bordado',
+    ratio: '4:3',
+    alt: 'Máquina bordadora industrial aplicando un bordado sobre tela azul marino',
+    brief: 'Personalización con bordado',
+    pending: false,
+  },
+  {
+    id: 'seccion-muestras',
+    ratio: '16:9',
+    alt: 'Muestras de tela en azul marino, blanco, beige y verde sobre una mesa, junto a una cinta métrica',
+    brief: 'Elección de tela y aprobación de muestra',
+    pending: false,
+  },
   {
     id: 'corporativo-camisas-pantalones',
     ratio: '16:9',
@@ -118,10 +160,10 @@ export const MEDIA = [
     pending: false,
   },
   {
-    id: 'hogar-cama-vestida',
-    ratio: '3:4',
-    alt: 'Cama vestida con set de sábanas y cubrecama de la línea de hogar',
-    brief: 'Cama vestida con sábanas y cubrecama',
+    id: 'equipo-luxe',
+    ratio: '4:3',
+    alt: 'Equipo de Luxe Essentials atendiendo a un cliente',
+    brief: 'Equipo de Luxe Essentials (el cliente aún debe enviarla)',
     pending: true,
   },
 ] as const satisfies readonly MediaEntry[];
@@ -137,6 +179,7 @@ export function getMedia(id: MediaId): MediaEntry {
 }
 
 export const RATIO_CSS: Record<MediaRatio, string> = {
+  '21:9': '21 / 9',
   '16:9': '16 / 9',
   '4:3': '4 / 3',
   '3:4': '3 / 4',

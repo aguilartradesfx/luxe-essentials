@@ -1,14 +1,17 @@
 import type { ElementType, ReactNode } from 'react';
 
-const BASE =
-  'rounded-2xl border border-[var(--glass-border)] shadow-[var(--glass-shadow)] backdrop-blur-xl';
+const BASE = 'rounded-2xl';
 
 const VARIANTS = {
-  dark: 'bg-[var(--glass-fill)] text-beige',
-  // `isolate` crea un nuevo contexto de apilamiento: sin él,
-  // `mix-blend-multiply` fundiría la foto con el navy de la página en vez
-  // de detenerse en la placa, y el resultado se vería sucio/oscuro.
-  plate: 'bg-[var(--plate-fill)] text-navy isolate [&_img]:mix-blend-multiply',
+  // Vidrio de verdad: sólo sobre fotografía, que es lo único que da algo
+  // que refractar. Sobre un fondo plano se vería como un rectángulo sucio.
+  panel:
+    'bg-[var(--panel-fill)] border border-[var(--panel-border)] backdrop-blur-xl text-navy shadow-[var(--carta-sombra)]',
+  // Papel sobre lienzo: sin blur. Es lo que usa el resto del sitio.
+  carta:
+    'bg-[var(--carta-fill)] border border-[var(--carta-border)] text-navy shadow-[var(--carta-sombra)]',
+  // Sin relleno: para bloques que sólo necesitan el radio y el borde.
+  desnuda: 'border border-[var(--carta-border)] text-navy',
 } as const;
 
 type GlassCardProps = {
@@ -22,7 +25,7 @@ type GlassCardProps = {
 
 export function GlassCard({
   children,
-  variant = 'dark',
+  variant = 'carta',
   as: Tag = 'div',
   className = '',
   ...rest

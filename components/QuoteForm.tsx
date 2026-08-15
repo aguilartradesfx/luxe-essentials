@@ -13,10 +13,10 @@ type Estado = 'reposo' | 'enviando' | 'exito' | 'invalido' | 'error';
 // borde de campo inválido sin efecto. Verificado compilando la hoja real:
 // ver la nota en el reporte de la tarea.
 const CAMPO_BASE =
-  'mt-2 w-full rounded-xl border bg-white/5 px-4 py-3 text-beige placeholder:text-sky/50 focus:border-sky focus:outline-none';
+  'mt-3 w-full rounded-xl border bg-white px-4 py-3 text-navy focus:border-teal focus:outline-none';
 
-const CAMPO_VALIDO = 'border-white/15';
-const CAMPO_INVALIDO = 'border-beige';
+const CAMPO_VALIDO = 'border-navy/20';
+const CAMPO_INVALIDO = 'border-navy';
 
 function utmDeLaUrl(): Record<string, string> | undefined {
   if (typeof window === 'undefined') return undefined;
@@ -107,7 +107,7 @@ export function QuoteForm() {
   function ErrorCampo({ campo }: { campo: string }) {
     if (!errores[campo]) return null;
     return (
-      <p id={`err-${campo}`} role="alert" className="mt-2 text-sm text-beige">
+      <p id={`err-${campo}`} role="alert" className="mt-2 text-sm text-navy">
         {errores[campo]}
       </p>
     );
@@ -116,10 +116,10 @@ export function QuoteForm() {
   if (estado === 'exito') {
     return (
       <div ref={exitoRef} tabIndex={-1} role="status" className="py-10 text-center">
-        <p className="font-[family-name:var(--font-display)] text-2xl text-beige">
+        <p className="font-[family-name:var(--font-display)] text-2xl text-navy">
           {c.exitoTitulo}
         </p>
-        <p className="mt-3 text-sky">{c.exitoDetalle}</p>
+        <p className="mt-3 text-navy/75">{c.exitoDetalle}</p>
       </div>
     );
   }
@@ -137,7 +137,7 @@ export function QuoteForm() {
       */}
       <div className="block">
         <label>
-          <span className="text-sm text-sky">{c.campos.nombre}</span>
+          <span className="text-sm text-navy/80">{c.campos.nombre}</span>
           <input name="nombre" {...marca('nombre')} />
         </label>
         <ErrorCampo campo="nombre" />
@@ -145,7 +145,7 @@ export function QuoteForm() {
 
       <div className="block">
         <label>
-          <span className="text-sm text-sky">{c.campos.empresa}</span>
+          <span className="text-sm text-navy/80">{c.campos.empresa}</span>
           <input name="empresa" {...marca('empresa')} />
         </label>
         <ErrorCampo campo="empresa" />
@@ -153,7 +153,7 @@ export function QuoteForm() {
 
       <div className="block">
         <label>
-          <span className="text-sm text-sky">{c.campos.email}</span>
+          <span className="text-sm text-navy/80">{c.campos.email}</span>
           <input name="email" type="email" {...marca('email')} />
         </label>
         <ErrorCampo campo="email" />
@@ -161,7 +161,7 @@ export function QuoteForm() {
 
       <div className="block">
         <label>
-          <span className="text-sm text-sky">{c.campos.telefono}</span>
+          <span className="text-sm text-navy/80">{c.campos.telefono}</span>
           <input name="telefono" type="tel" {...marca('telefono')} />
         </label>
         <ErrorCampo campo="telefono" />
@@ -169,7 +169,7 @@ export function QuoteForm() {
 
       <div className="block">
         <label>
-          <span className="text-sm text-sky">{c.campos.linea}</span>
+          <span className="text-sm text-navy/80">{c.campos.linea}</span>
           <select name="linea" defaultValue="" {...marca('linea')}>
             <option value="" disabled>
               {c.lineaPlaceholder}
@@ -186,7 +186,7 @@ export function QuoteForm() {
 
       <div className="block">
         <label>
-          <span className="text-sm text-sky">{c.campos.cantidad}</span>
+          <span className="text-sm text-navy/80">{c.campos.cantidad}</span>
           <input name="cantidad" {...marca('cantidad')} />
         </label>
         <ErrorCampo campo="cantidad" />
@@ -194,20 +194,20 @@ export function QuoteForm() {
 
       <div className="block sm:col-span-2">
         <label>
-          <span className="text-sm text-sky">{c.campos.mensaje}</span>
+          <span className="text-sm text-navy/80">{c.campos.mensaje}</span>
           <textarea name="mensaje" rows={4} {...marca('mensaje')} />
         </label>
         <ErrorCampo campo="mensaje" />
       </div>
 
       {estado === 'invalido' && (
-        <p role="alert" className="text-sm text-beige sm:col-span-2">
+        <p role="alert" className="text-sm text-navy sm:col-span-2">
           {c.errorValidacion}
         </p>
       )}
 
       {estado === 'error' && (
-        <p role="alert" className="text-sm text-beige sm:col-span-2">
+        <p role="alert" className="text-sm text-navy sm:col-span-2">
           {c.errorGeneral}
         </p>
       )}

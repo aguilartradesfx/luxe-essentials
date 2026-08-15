@@ -12,10 +12,21 @@
 }
 
 :root {
-  --glass-fill: rgba(255, 255, 255, 0.08);
-  --plate-fill: rgba(245, 239, 235, 0.92);
-  --glass-border: rgba(255, 255, 255, 0.15);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  /* Base clara. El sitio es de ropa: manda la foto, el fondo se aparta.
+     Los mismos cinco colores de la paleta, invertidos respecto al diseño
+     anterior — navy pasa de fondo a tipografía. */
+  --lienzo: #FBF9F8;
+  --lienzo-alt: var(--color-beige);
+
+  /* Vidrio sobre fotografía: es el único sitio donde el efecto tiene algo
+     que refractar. Sobre un fondo plano no se usa. */
+  --panel-fill: rgba(251, 249, 248, 0.82);
+  --panel-border: rgba(47, 65, 86, 0.10);
+
+  /* Tarjeta sobre lienzo: sin blur, sólo papel. */
+  --carta-fill: #FFFFFF;
+  --carta-border: rgba(47, 65, 86, 0.12);
+  --carta-sombra: 0 1px 2px rgba(47, 65, 86, 0.04), 0 8px 24px rgba(47, 65, 86, 0.06);
 }
 
 html {
@@ -23,14 +34,14 @@ html {
 }
 
 body {
-  background-color: var(--color-bg-deep);
-  color: var(--color-beige);
+  background-color: var(--lienzo);
+  color: var(--color-navy);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-sky);
+  outline: 2px solid var(--color-teal);
   outline-offset: 3px;
 }
 
@@ -41,17 +52,4 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-}
-
-@keyframes aurora-a {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50%      { transform: translate3d(6rem, 4rem, 0) scale(1.15); }
-}
-@keyframes aurora-b {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1.1); }
-  50%      { transform: translate3d(-5rem, 3rem, 0) scale(1); }
-}
-@keyframes aurora-c {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50%      { transform: translate3d(4rem, -4rem, 0) scale(1.2); }
 }

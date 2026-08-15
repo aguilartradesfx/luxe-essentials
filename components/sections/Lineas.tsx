@@ -18,41 +18,33 @@ const GALERIA: MediaId[] = [
 ];
 
 const IMAGEN_LINEA = {
-  uniformes: 'cocina-linea-completa',
-  hogar: 'hogar-cama-vestida',
+  uniformes: 'seccion-uniformes',
+  hogar: 'seccion-hogar',
 } as const satisfies Record<string, MediaId>;
 
 export function Lineas() {
   return (
-    <section id="lineas" className="mx-auto max-w-6xl px-6 py-20">
-      <h2 className="font-[family-name:var(--font-display)] text-3xl text-beige md:text-4xl">
+    <section id="lineas" className="mx-auto max-w-6xl px-6 py-24">
+      <h2 className="font-[family-name:var(--font-display)] text-3xl leading-tight text-navy md:text-4xl">
         {copy.lineas.titulo}
       </h2>
 
-      <div className="mt-12 grid gap-8 md:grid-cols-2">
+      <div className="mt-14 grid gap-10 md:grid-cols-2">
         {copy.lineas.items.map((linea) => (
-          <GlassCard key={linea.id} as="article" aria-label={linea.nombre} className="p-8">
-            {/* Mismo tratamiento que el hero (Hero.tsx): placa clara +
-                mix-blend-multiply, para que el fondo blanco de estudio de la
-                foto se funda con la placa en vez de leerse como un recorte
-                pegado sobre el navy (§8.2). */}
-            <GlassCard variant="plate" className="mb-7 overflow-hidden p-6">
-              <Figure id={IMAGEN_LINEA[linea.id]} sizes="(min-width: 768px) 50vw, 100vw" />
-            </GlassCard>
-            {/* text-sky, no text-sky/80: es un kicker de marca (xs, mayúsculas,
-                tracking ancho) — la combinación más difícil de leer, no la más
-                fácil — y sin razón de diseño para ser más tenue que el cuerpo de
-                texto de abajo. A 80% de opacidad, dentro de esta GlassCard
-                "dark" y sobre el peor solape de las manchas del aurora, medía
-                3.68:1 (reprueba AA). En texto completo mide 4.74:1 (ver reporte). */}
-            <p className="text-xs uppercase tracking-[0.2em] text-sky">{linea.marca}</p>
-            <h3 className="mt-2 font-[family-name:var(--font-display)] text-2xl text-beige">
+          <article key={linea.id} aria-label={linea.nombre}>
+            <Figure
+              id={IMAGEN_LINEA[linea.id]}
+              className="mb-8"
+              sizes="(min-width: 768px) 50vw, 100vw"
+            />
+            <p className="text-xs uppercase tracking-[0.2em] text-navy/80">{linea.marca}</p>
+            <h3 className="mt-3 font-[family-name:var(--font-display)] text-2xl text-navy">
               {linea.nombre}
             </h3>
-            <p className="mt-3 text-sky">{linea.descripcion}</p>
-            <ul className="mt-6 space-y-2">
+            <p className="mt-3 leading-relaxed text-navy/75">{linea.descripcion}</p>
+            <ul className="mt-7 space-y-2">
               {linea.categorias.map((cat) => (
-                <li key={cat} className="flex gap-3 text-sm text-beige/90">
+                <li key={cat} className="flex gap-3 text-sm text-navy/80">
                   <span aria-hidden="true" className="text-teal">
                     —
                   </span>
@@ -60,18 +52,20 @@ export function Lineas() {
                 </li>
               ))}
             </ul>
-          </GlassCard>
+          </article>
         ))}
       </div>
 
-      <h3 className="mt-20 font-[family-name:var(--font-display)] text-2xl text-beige">
+      <h3 className="mt-24 font-[family-name:var(--font-display)] text-2xl text-navy">
         {copy.lineas.galeriaTitulo}
       </h3>
+      {/* Sobre lienzo claro las tomas de estudio con fondo blanco encajan
+          solas: ya no hacen falta placas ni modos de fusión. */}
       <ul className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {GALERIA.map((id) => (
-          <GlassCard key={id} as="li" variant="plate" className="overflow-hidden p-3">
+          <GlassCard key={id} as="li" className="overflow-hidden p-3">
             <Figure id={id} sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw" />
-            <p className="px-2 pb-1 pt-3 text-sm font-medium text-navy">{getMedia(id).brief}</p>
+            <p className="px-2 pb-1 pt-3 text-sm font-medium text-navy/80">{getMedia(id).brief}</p>
           </GlassCard>
         ))}
       </ul>

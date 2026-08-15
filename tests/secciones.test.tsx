@@ -46,24 +46,23 @@ describe('Lineas', () => {
     expect(container.querySelector('#lineas')).not.toBeNull();
   });
 
-  it('la etiqueta de marca usa sky completo, no sky/80 (finding 4: nada visible debe reprobar AA)', () => {
+  it('la etiqueta sobre cada línea va en navy, no en teal', () => {
     render(<Lineas />);
     for (const linea of copy.lineas.items) {
       const etiqueta = screen.getByText(linea.marca);
-      expect(etiqueta).toHaveClass('text-sky');
-      expect(etiqueta.className).not.toMatch(/text-sky\/80/);
+      // Mismo motivo que el marcador: teal sobre lienzo son 4.29:1 y esto
+      // es text-xs.
+      expect(etiqueta).toHaveClass('text-navy/80');
+      expect(etiqueta.className).not.toMatch(/text-teal/);
     }
   });
 
-  it('la foto de la línea completa de uniformes usa la placa clara, igual que el hero (§8.2)', () => {
+  it('cada línea muestra su propia fotografía', () => {
     render(<Lineas />);
-    const img = screen.getByAltText(getMedia('cocina-linea-completa').alt);
-    // La placa es el propio GlassCard variant="plate": lleva `isolate` y
-    // `[&_img]:mix-blend-multiply` para fundir el fondo blanco de estudio
-    // en vez de que se lea como un recorte pegado sobre el navy.
-    const placa = img.closest('.isolate');
-    expect(placa).not.toBeNull();
-    expect(placa).toHaveClass('bg-[var(--plate-fill)]');
-    expect(placa!.className).toMatch(/mix-blend-multiply/);
+    // Sobre lienzo claro las tomas de estudio ya no necesitan placa ni
+    // modo de fusión: su fondo blanco encaja con el fondo de la página.
+    for (const id of ['seccion-uniformes', 'seccion-hogar'] as const) {
+      expect(screen.getByAltText(getMedia(id).alt)).toBeInTheDocument();
+    }
   });
 });

@@ -21,11 +21,13 @@ describe('Proceso', () => {
     expect(screen.getByText('07')).toBeInTheDocument();
   });
 
-  it('numera los pasos en sky, no en teal (2.67:1, reprueba AA incluso como texto grande)', () => {
+  it('numera los pasos en teal, pero a tamaño de texto grande', () => {
     render(<Proceso />);
     const numero = screen.getByText('01');
-    expect(numero).toHaveClass('text-sky');
-    expect(numero.className).not.toMatch(/text-teal\b/);
+    // Teal sobre beige da 3.95:1: reprueba el 4.5:1 de texto normal y sólo
+    // pasa el umbral de texto grande (3:1), que empieza en 24px.
+    expect(numero).toHaveClass('text-teal');
+    expect(numero).toHaveClass('text-2xl');
   });
 });
 

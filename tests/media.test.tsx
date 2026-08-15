@@ -33,26 +33,23 @@ describe('Figure', () => {
   });
 
   it('rinde un marcador con el brief cuando la entrada está pendiente', () => {
-    render(<Figure id="hogar-cama-vestida" />);
-    expect(screen.getByRole('img', { name: getMedia('hogar-cama-vestida').alt })).toBeInTheDocument();
+    render(<Figure id="equipo-luxe" />);
+    expect(screen.getByRole('img', { name: getMedia('equipo-luxe').alt })).toBeInTheDocument();
     expect(screen.getByText(/Pendiente/i)).toBeInTheDocument();
   });
 
   it('el texto del marcador sale de content/copy.ts, no está escrito en el componente', () => {
-    render(<Figure id="hogar-cama-vestida" />);
+    render(<Figure id="equipo-luxe" />);
     expect(screen.getByText(copy.medios.pendiente)).toBeInTheDocument();
   });
 
-  it('el marcador usa sky completo sobre una placa navy sólida, no sky/80 sobre el degradado (finding 4)', () => {
-    render(<Figure id="hogar-cama-vestida" />);
+  it('el marcador pendiente va en navy sobre blanco, sin teal', () => {
+    const { container } = render(<Figure id="equipo-luxe" />);
     const etiqueta = screen.getByText(copy.medios.pendiente);
-    expect(etiqueta).toHaveClass('text-sky');
-    expect(etiqueta.className).not.toMatch(/text-sky\/80/);
-    // El centro del degradado from-navy via-teal to-navy es teal puro: ni
-    // sky ni beige a color completo alcanzan AA ahí. La placa navy detrás
-    // del texto es lo que de verdad cierra el contraste, no sólo subir la
-    // opacidad del texto.
-    const placa = etiqueta.closest('.bg-navy');
-    expect(placa).not.toBeNull();
+    // Teal sobre beige mide 3.95:1 y este rótulo es text-xs: no llega al
+    // 4.5:1 de AA. Navy/80 sobre blanco da 5.59:1.
+    expect(etiqueta).toHaveClass('text-navy/80');
+    expect(etiqueta.className).not.toMatch(/text-teal/);
+    expect(container.querySelector('.bg-white')).not.toBeNull();
   });
 });

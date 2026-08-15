@@ -21,3 +21,6 @@ tsconfig.tsbuildinfo
 # scripts/optimize-images.mjs; los originales quedan sólo en disco local.
 IMÁGENES/
 .vercel
+
+# Imágenes generadas (fuentes PNG grandes). Se optimizan a public/images/.
+IMAGENES-GENERADAS/

@@ -1,11 +1,15 @@
 import sharp from 'sharp';
-import { readdirSync, mkdirSync, statSync } from 'node:fs';
+import { readdirSync, mkdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SRC_DIR = join(process.cwd(), 'IMÁGENES');
+const GEN_DIR = join(process.cwd(), 'IMAGENES-GENERADAS');
 const OUT_DIR = join(process.cwd(), 'public', 'images');
 const MAX_WIDTH = 2400;
+// El hero va a sangre en pantallas anchas: necesita más resolución que una
+// foto de catálogo, y por eso lleva su propio límite.
+const MAX_WIDTH_HERO = 3200;
 const QUALITY = 80;
 
 export const SOURCES = [
@@ -23,6 +27,18 @@ export const SOURCES = [
   { file: 'Generated Image August 11, 2026 - 6_07PM.jpg', id: 'cocina-filipinas' },
   { file: 'Generated Image August 13, 2026 - 2_06PM.jpg', id: 'cocina-gorros-pantalones' },
   { file: 'Generated Image August 13, 2026 - 2_08PM.jpg', id: 'corporativo-camisas-pantalones' },
+];
+
+// Imágenes generadas con Nano Banana Pro a partir de las fotos reales de
+// producto. Viven en su propia carpeta para no mezclarse con los originales
+// del cliente, y como aquéllos, no se versionan: sólo su salida optimizada.
+export const GENERADAS = [
+  { file: 'hero-tela.png', id: 'hero-tela', hero: true },
+  { file: 'seccion-telas.png', id: 'seccion-telas' },
+  { file: 'seccion-uniformes.png', id: 'seccion-uniformes' },
+  { file: 'seccion-hogar.png', id: 'seccion-hogar' },
+  { file: 'seccion-bordado.png', id: 'seccion-bordado' },
+  { file: 'seccion-muestras.png', id: 'seccion-muestras' },
 ];
 
 const kb = (bytes) => `${(bytes / 1024).toFixed(0)} KB`;
@@ -48,6 +64,26 @@ async function main() {
     await sharp(src)
       .rotate()
       .resize({ width: MAX_WIDTH, withoutEnlargement: true })
+      .webp({ quality: QUALITY })
+      .toFile(out);
+
+    const a = statSync(src).size;
+    const d = statSync(out).size;
+    antes += a;
+    despues += d;
+    console.log(`${id.padEnd(36)} ${kb(a).padStart(10)} → ${kb(d).padStart(9)}`);
+  }
+
+  for (const { file, id, hero } of GENERADAS) {
+    const src = join(GEN_DIR, file);
+    if (!existsSync(src)) {
+      console.log(`${id.padEnd(36)} (sin origen, se omite)`);
+      continue;
+    }
+    const out = join(OUT_DIR, `${id}.webp`);
+    await sharp(src)
+      .rotate()
+      .resize({ width: hero ? MAX_WIDTH_HERO : MAX_WIDTH, withoutEnlargement: true })
       .webp({ quality: QUALITY })
       .toFile(out);
 

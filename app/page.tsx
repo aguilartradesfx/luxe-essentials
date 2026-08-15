@@ -1,4 +1,3 @@
-import { AuroraBackground } from '@/components/background/AuroraBackground';
 import { Header } from '@/components/sections/Header';
 import { Hero } from '@/components/sections/Hero';
 import { Capacidad } from '@/components/sections/Capacidad';
@@ -12,7 +11,6 @@ import { Footer } from '@/components/sections/Footer';
 export default function Home() {
   return (
     <>
-      <AuroraBackground />
       <Header />
       <main>
         <Hero />

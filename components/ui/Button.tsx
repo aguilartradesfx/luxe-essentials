@@ -4,10 +4,12 @@ import type { ReactNode } from 'react';
 const BASE =
   'inline-flex items-center justify-center rounded-full px-7 py-3 text-sm font-medium tracking-wide transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
 
-// El primario es beige sobre navy (~8.3:1). Beige sobre teal da 3.9:1 y reprobaría AA.
+// Sobre lienzo claro la pareja de alto contraste se invierte respecto al
+// diseño anterior: relleno navy con texto beige (~8.3:1). El teal sigue
+// reservado a bordes y acentos — como texto no llega a AA.
 const VARIANTS = {
-  primary: 'bg-beige text-navy hover:bg-white',
-  secondary: 'border border-sky/40 bg-white/5 text-beige backdrop-blur-md hover:bg-white/10',
+  primary: 'bg-navy text-beige hover:bg-[#243343]',
+  secondary: 'border border-navy/25 text-navy hover:bg-navy/5',
 } as const;
 
 type ButtonProps = {
