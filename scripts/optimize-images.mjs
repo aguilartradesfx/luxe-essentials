@@ -39,6 +39,13 @@ export const GENERADAS = [
   { file: 'seccion-hogar.png', id: 'seccion-hogar' },
   { file: 'seccion-bordado.png', id: 'seccion-bordado' },
   { file: 'seccion-muestras.png', id: 'seccion-muestras' },
+  // Regeneradas a partir de las capturas del deck del fabricante: se les
+  // quitó el marco verde de la presentación y el texto que se había colado.
+  { file: 'planta-bodega.png', id: 'planta-bodega' },
+  { file: 'planta-confeccion.png', id: 'planta-confeccion' },
+  { file: 'planta-corte.png', id: 'planta-corte' },
+  { file: 'planta-diseno.png', id: 'planta-diseno' },
+  { file: 'planta-bordado.png', id: 'planta-bordado' },
 ];
 
 const kb = (bytes) => `${(bytes / 1024).toFixed(0)} KB`;

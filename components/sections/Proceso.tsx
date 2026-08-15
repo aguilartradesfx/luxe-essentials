@@ -9,7 +9,7 @@ export function Proceso() {
           <h2 className="font-[family-name:var(--font-display)] text-3xl leading-tight text-navy md:text-4xl">
             {copy.proceso.titulo}
           </h2>
-          <Figure id="seccion-muestras" sizes="(min-width: 768px) 50vw, 100vw" />
+          <Figure id="planta-confeccion" sizes="(min-width: 768px) 50vw, 100vw" />
         </div>
 
         <ol className="mt-16 grid gap-x-10 gap-y-12 sm:grid-cols-2 lg:grid-cols-4">

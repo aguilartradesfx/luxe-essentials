@@ -6,6 +6,7 @@ export const copy = {
     enlaces: [
       { href: '#capacidad', texto: 'Cómo trabajamos' },
       { href: '#lineas', texto: 'Productos' },
+      { href: '#planta', texto: 'La planta' },
       { href: '#proceso', texto: 'Proceso' },
     ],
     cta: 'Cotizar',
@@ -81,6 +82,50 @@ export const copy = {
     galeriaTitulo: 'Algunas de nuestras prendas',
   },
 
+  planta: {
+    titulo: 'La planta detrás de cada pedido',
+    // Atribución deliberada: la capacidad descrita aquí es del fabricante al
+    // que Luxe representa, no de Luxe. El sitio ya arrastró una vez el error
+    // contrario y no vuelve a cometerlo.
+    intro:
+      'Nosotros no fabricamos: representamos a un fabricante con más de 30 años exportando a Centroamérica, México y Estados Unidos. Esto es lo que hay detrás de tu orden de compra.',
+    areas: [
+      {
+        nombre: 'Diseño y patronaje',
+        detalle:
+          'Departamento propio de trazo. Pueden desarrollar el patrón desde cero o trabajar sobre el que tu marca ya tiene.',
+      },
+      {
+        nombre: 'Corte',
+        detalle:
+          'Mesas de corte industriales donde la tela se tiende en capas y se corta por trazo, no pieza a pieza.',
+      },
+      {
+        nombre: 'Confección',
+        detalle:
+          'Doscientos cincuenta operarios en línea, con capacidad instalada para ocho contenedores de prenda.',
+      },
+      {
+        nombre: 'Auditoría, empaque y carga',
+        detalle:
+          'Revisión antes de empacar, y área de carga propia para consolidar el embarque hacia Costa Rica.',
+      },
+    ],
+    materialesTitulo: 'Las telas con las que se trabaja',
+    materialesDetalle:
+      'Cerca del setenta por ciento de la tela se produce en la propia planta. Por eso una reposición dentro de un año encuentra la misma tela, y no una parecida.',
+    materiales: [
+      'Algodón',
+      'Poliéster',
+      'Gabardina',
+      'Popelina',
+      'Sarga',
+      'Microfibra',
+      'Oxford',
+      'Denim',
+    ],
+  },
+
   proceso: {
     titulo: 'De tu necesidad a la entrega',
     pasos: [
@@ -97,7 +142,7 @@ export const copy = {
   personalizacion: {
     titulo: 'Tu logo en cada prenda',
     descripcion:
-      'Bordado, serigrafía, DTF y sublimación. Desde 24 unidades con un costo adicional, y sin costo a partir de 48 cuando ya tienes el arte digital. Te enviamos foto de la muestra 24 horas después de aprobarlo.',
+      'Bordado, serigrafía, DTF y sublimación, aplicados en planta sobre la misma tela con la que se confecciona la prenda: el acabado no se despega ni destiñe a la tercera lavada industrial. Desde 24 unidades con un costo adicional, y sin costo a partir de 48 cuando ya tienes el arte digital. Te enviamos foto de la muestra 24 horas después de aprobarlo.',
     tecnicas: ['Bordado', 'Serigrafía', 'DTF', 'Sublimación'],
   },
 

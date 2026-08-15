@@ -6,7 +6,7 @@ export function Personalizacion() {
     <section className="mx-auto max-w-6xl px-6 py-24">
       <div className="grid items-center gap-14 md:grid-cols-2">
         <div className="md:order-2">
-          <Figure id="seccion-bordado" sizes="(min-width: 768px) 50vw, 100vw" />
+          <Figure id="planta-bordado" sizes="(min-width: 768px) 50vw, 100vw" />
         </div>
         <div className="md:order-1">
           <h2 className="font-[family-name:var(--font-display)] text-3xl leading-tight text-navy md:text-4xl">

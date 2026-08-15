@@ -20,6 +20,41 @@ export type MediaEntry = {
 
 export const MEDIA = [
   {
+    id: 'planta-bodega',
+    ratio: '4:3',
+    alt: 'Bodega de telas con estanterías altas llenas de rollos en azul marino, beige y blanco, y un montacargas en el pasillo',
+    brief: 'Bodega de telas de la planta',
+    pending: false,
+  },
+  {
+    id: 'planta-confeccion',
+    ratio: '16:9',
+    alt: 'Vista elevada de un piso de confección con largas hileras de máquinas de coser y operarios trabajando',
+    brief: 'Piso de confección',
+    pending: false,
+  },
+  {
+    id: 'planta-corte',
+    ratio: '16:9',
+    alt: 'Mesas de corte largas con tela azul marino extendida en capas y operarios trabajando a lo largo',
+    brief: 'Área de corte',
+    pending: false,
+  },
+  {
+    id: 'planta-diseno',
+    ratio: '4:3',
+    alt: 'Estudio de patronaje: dos personas sobre una mesa de luz con patrones, y pantallas con trazos técnicos al fondo',
+    brief: 'Diseño y patronaje',
+    pending: false,
+  },
+  {
+    id: 'planta-bordado',
+    ratio: '4:3',
+    alt: 'Hilera de máquinas bordadoras industriales de cabezales múltiples bordando sobre tela azul marino',
+    brief: 'Bordado industrial',
+    pending: false,
+  },
+  {
     id: 'hero-tela',
     ratio: '21:9',
     alt: 'Camisa corporativa azul marino y filipina de chef negra con vivo verde, en primer plano',
