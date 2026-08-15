@@ -38,3 +38,15 @@ describe('Planta', () => {
     }
   });
 });
+
+describe('Figure con proporción forzada', () => {
+  it('iguala la altura de las dos imágenes de la sección', async () => {
+    const { container } = render(<Planta />);
+    const marcos = [...container.querySelectorAll('div[style*="aspect-ratio"]')];
+    // Las dos fotos son 4:3 y 16:9 en el manifest: sin igualarlas, en la
+    // misma fila una queda visiblemente más alta que la otra.
+    const proporciones = new Set(marcos.map((m) => (m as HTMLElement).style.aspectRatio));
+    expect(marcos).toHaveLength(2);
+    expect(proporciones.size).toBe(1);
+  });
+});

@@ -1,4 +1,4 @@
-export type MediaRatio = '21:9' | '16:9' | '4:3' | '3:4' | '1:1';
+export type MediaRatio = '21:9' | '16:9' | '3:2' | '4:3' | '3:4' | '1:1';
 
 export type MediaEntry = {
   id: string;
@@ -216,6 +216,7 @@ export function getMedia(id: MediaId): MediaEntry {
 export const RATIO_CSS: Record<MediaRatio, string> = {
   '21:9': '21 / 9',
   '16:9': '16 / 9',
+  '3:2': '3 / 2',
   '4:3': '4 / 3',
   '3:4': '3 / 4',
   '1:1': '1 / 1',

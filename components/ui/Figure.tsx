@@ -1,17 +1,27 @@
 import Image from 'next/image';
 import { copy } from '@/content/copy';
-import { getMedia, RATIO_CSS, type MediaId } from '@/content/media';
+import { getMedia, RATIO_CSS, type MediaId, type MediaRatio } from '@/content/media';
 
 type FigureProps = {
   id: MediaId;
+  /** Pisa la proporción del manifest. Sirve para igualar una fila cuyas
+   *  imágenes tienen proporciones nativas distintas; el recorte lo resuelve
+   *  `object-cover`. */
+  ratio?: MediaRatio;
   priority?: boolean;
   className?: string;
   sizes?: string;
 };
 
-export function Figure({ id, priority = false, className = '', sizes = '100vw' }: FigureProps) {
+export function Figure({
+  id,
+  ratio,
+  priority = false,
+  className = '',
+  sizes = '100vw',
+}: FigureProps) {
   const entry = getMedia(id);
-  const style = { aspectRatio: RATIO_CSS[entry.ratio] };
+  const style = { aspectRatio: RATIO_CSS[ratio ?? entry.ratio] };
 
   if (entry.pending) {
     return (

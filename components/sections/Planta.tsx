@@ -12,8 +12,8 @@ export function Planta() {
       </div>
 
       <div className="mt-14 grid gap-10 md:grid-cols-2">
-        <Figure id="planta-diseno" sizes="(min-width: 768px) 50vw, 100vw" />
-        <Figure id="planta-corte" sizes="(min-width: 768px) 50vw, 100vw" />
+        <Figure id="planta-diseno" ratio="3:2" sizes="(min-width: 768px) 50vw, 100vw" />
+        <Figure id="planta-corte" ratio="3:2" sizes="(min-width: 768px) 50vw, 100vw" />
       </div>
 
       <dl className="mt-16 grid gap-x-12 gap-y-10 sm:grid-cols-2">
