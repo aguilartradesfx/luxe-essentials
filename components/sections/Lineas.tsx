@@ -28,6 +28,7 @@ export function Lineas() {
       <h2 className="font-[family-name:var(--font-display)] text-3xl leading-tight text-navy md:text-4xl">
         {copy.lineas.titulo}
       </h2>
+      <p className="mt-5 max-w-3xl leading-relaxed text-navy/80">{copy.lineas.sectores}</p>
 
       <div className="mt-14 grid gap-10 md:grid-cols-2">
         {copy.lineas.items.map((linea) => (

@@ -29,7 +29,7 @@ export const copy = {
   capacidad: {
     titulo: 'Sin la complejidad de importar por tu cuenta',
     parrafos: [
-      'Los fabricantes locales rara vez tienen la capacidad para atender el volumen de un hotel o una cadena de restaurantes. Y quien importa por su cuenta se enfrenta a ciclos de 60 a 90 días entre producción, consolidación y embarque.',
+      'Los fabricantes locales rara vez tienen la capacidad para atender el volumen de una operación con decenas o cientos de personas uniformadas. Y quien importa por su cuenta se enfrenta a ciclos de 60 a 90 días entre producción, consolidación y embarque.',
       'La fábrica que representamos produce buena parte de sus propias telas. Eso importa más de lo que parece: cuando dentro de un año necesites reponer veinte prendas, la tela seguirá existiendo y tu equipo seguirá viéndose igual.',
       'Tú no gestionas fabricantes, producción, personalización, importación ni logística. Nosotros coordinamos todo el proceso y tratas con una sola empresa, aquí, en tu horario.',
     ],
@@ -47,7 +47,7 @@ export const copy = {
       {
         id: 'uniformes',
         nombre: 'Uniformes',
-        marca: 'Hotelería · Restaurantes · Salud · Industria',
+        marca: 'Hotelería · Salud · Industria · Educación · Retail',
         descripcion:
           'Uniformes profesionales para cocina, sala, operación y oficina, en las telas y los cortes que cada puesto exige.',
         categorias: [
@@ -69,7 +69,7 @@ export const copy = {
         nombre: 'Textiles institucionales',
         marca: 'Ropa de cama · Baño',
         descripcion:
-          'Ropa de cama y textiles para habitación y baño, pensados para la reposición continua que exige una operación hotelera.',
+          'Ropa de cama y textiles para habitación y baño, pensados para la reposición continua que exige una operación de hospedaje, salud o cuidado.',
         categorias: [
           'Sábanas y fundas',
           'Duvets y cubrecamas',
@@ -79,6 +79,8 @@ export const copy = {
         ],
       },
     ],
+    sectores:
+      'Hoteles, restaurantes, bares y clubes, hospitales y clínicas, industria, empresas de servicios, retail, instituciones educativas, catering y eventos.',
     galeriaTitulo: 'Algunas de nuestras prendas',
   },
 
