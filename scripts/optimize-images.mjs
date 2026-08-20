@@ -46,6 +46,12 @@ export const GENERADAS = [
   { file: 'planta-corte.png', id: 'planta-corte' },
   { file: 'planta-diseno.png', id: 'planta-diseno' },
   { file: 'planta-bordado.png', id: 'planta-bordado' },
+  // Regeneradas del catálogo de textiles del proveedor: se les quitó la
+  // marca, los precios en quetzales y los códigos de producto.
+  { file: 'textil-habitacion.png', id: 'textil-habitacion' },
+  { file: 'textil-sabanas.png', id: 'textil-sabanas' },
+  { file: 'textil-bano.png', id: 'textil-bano' },
+  { file: 'textil-almohadas.png', id: 'textil-almohadas' },
 ];
 
 const kb = (bytes) => `${(bytes / 1024).toFixed(0)} KB`;

@@ -3,6 +3,7 @@ import { Hero } from '@/components/sections/Hero';
 import { Capacidad } from '@/components/sections/Capacidad';
 import { Cifras } from '@/components/sections/Cifras';
 import { Lineas } from '@/components/sections/Lineas';
+import { Textiles } from '@/components/sections/Textiles';
 import { Planta } from '@/components/sections/Planta';
 import { Proceso } from '@/components/sections/Proceso';
 import { Personalizacion } from '@/components/sections/Personalizacion';
@@ -18,6 +19,7 @@ export default function Home() {
         <Capacidad />
         <Cifras />
         <Lineas />
+        <Textiles />
         <Planta />
         <Proceso />
         <Personalizacion />

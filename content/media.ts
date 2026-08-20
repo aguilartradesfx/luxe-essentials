@@ -20,6 +20,34 @@ export type MediaEntry = {
 
 export const MEDIA = [
   {
+    id: 'textil-habitacion',
+    ratio: '16:9',
+    alt: 'Habitación de hotel con la cama vestida de blanco, almohadas mullidas y pie de cama beige',
+    brief: 'Habitación vestida',
+    pending: false,
+  },
+  {
+    id: 'textil-sabanas',
+    ratio: '4:3',
+    alt: 'Juego de sábanas de algodón blanco dobladas y apiladas, con una esquina extendida que deja ver el tejido',
+    brief: 'Sábanas de algodón',
+    pending: false,
+  },
+  {
+    id: 'textil-bano',
+    ratio: '4:3',
+    alt: 'Toallas de algodón blanco apiladas y enrolladas sobre un mueble claro, con una bata al fondo',
+    brief: 'Toallas y baño',
+    pending: false,
+  },
+  {
+    id: 'textil-almohadas',
+    ratio: '4:3',
+    alt: 'Dos almohadas blancas apiladas junto a un duvet doblado sobre una cama vestida de blanco',
+    brief: 'Almohadas y duvets',
+    pending: false,
+  },
+  {
     id: 'planta-bodega',
     ratio: '4:3',
     alt: 'Bodega de telas con estanterías altas llenas de rollos en azul marino, beige y blanco, y un montacargas en el pasillo',

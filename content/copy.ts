@@ -6,6 +6,7 @@ export const copy = {
     enlaces: [
       { href: '#capacidad', texto: 'Cómo trabajamos' },
       { href: '#lineas', texto: 'Productos' },
+      { href: '#textiles', texto: 'Textiles' },
       { href: '#planta', texto: 'La planta' },
       { href: '#proceso', texto: 'Proceso' },
     ],
@@ -126,6 +127,53 @@ export const copy = {
       'Oxford',
       'Denim',
     ],
+  },
+
+  textiles: {
+    titulo: 'Textiles para habitación y baño',
+    // Especificaciones tomadas del catálogo del proveedor. Se conservan
+    // conteos de hilo, composiciones y medidas, que es lo que un comprador
+    // institucional compara. Se dejan fuera precios, códigos de producto y
+    // la marca del proveedor: son de su lista de distribuidor, en otra
+    // moneda y otro mercado.
+    intro:
+      'La ropa de cama de una operación se mide en reposiciones, no en compras. Por eso importan el conteo de hilos, la composición y que la misma referencia siga existiendo el año que viene.',
+    familias: [
+      {
+        nombre: 'Sábanas',
+        detalle:
+          'Juegos de 200, 300, 400 y 600 hilos en 100 % algodón. Cada juego incluye cobertor, sábana lisa y sobrefundas. También en mezcla 50/50 y microfibra para alta rotación.',
+      },
+      {
+        nombre: 'Almohadas',
+        detalle:
+          'Funda de algodón de 200 hilos con relleno de fibra Down Alternative, alternativa a la pluma de ganso. Línea hipoalergénica en microfibra para operaciones con huéspedes sensibles.',
+      },
+      {
+        nombre: 'Duvets y cubrecamas',
+        detalle:
+          'Fundas de duvet de 200 y 300 hilos, insertos ligeros de fibra Down Alternative, y cubrecamas con tecnología Quilting o Pinsonic reversible.',
+      },
+      {
+        nombre: 'Pillow top',
+        detalle:
+          'Acolchado de 2.5 pulgadas de algodón con relleno hipoalergénico. Recupera el confort de un colchón sin reemplazarlo.',
+      },
+      {
+        nombre: 'Protectores',
+        detalle:
+          'De almohada y de colchón, en versión permeable e impermeable con cierre. Es lo que alarga la vida de todo lo demás.',
+      },
+      {
+        nombre: 'Toallas y baño',
+        detalle:
+          'Toalla de baño, de manos y facial en 100 % algodón, batas y alfombras de baño.',
+      },
+    ],
+    medidasTitulo: 'Medidas disponibles',
+    medidasDetalle:
+      'Todas las líneas de cama se fabrican en las cinco medidas, así que una misma referencia cubre habitaciones distintas sin cambiar de proveedor.',
+    medidas: ['King', 'Queen', 'Matrimonial', 'Semi matrimonial', 'Imperial'],
   },
 
   proceso: {
