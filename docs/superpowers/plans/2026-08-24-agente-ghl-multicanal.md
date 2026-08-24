@@ -438,7 +438,7 @@ export function esCorreo(tipo: string | undefined | null): boolean {
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-canal.test.ts`
-Expected: PASS, 21 pruebas.
+Expected: PASS, 20 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -1236,7 +1236,14 @@ export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
   const { data: real } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
   if (real) return { ...real, datos: { ...DATOS_VACIOS, ...(real.datos ?? {}) } } as Fila;
 
-  return { ...nueva, conversation_id: null, canal: null, ultimo_mensaje_id: null, notificado_at: null } as Fila;
+  return {
+    ...nueva,
+    conversation_id: null,
+    canal: null,
+    ultimo_mensaje_id: null,
+    procesando_hasta: null,
+    notificado_at: null,
+  } as Fila;
 }
 
 // Guarda 3. UPDATE condicional: si la fila ya tiene registrado este mismo
@@ -2743,14 +2750,14 @@ describe('durabilidad', () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
     dispararWorkflow.mockResolvedValue('GHL workflow 500: boom');
     await procesar('c1', deps);
-    const cambios = guardar.mock.calls.at(-1)[1];
+    const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect('notificado_at' in cambios).toBe(false);
   });
 
   it('estampa el aviso cuando el workflow sí salió', async () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
     await procesar('c1', deps);
-    const cambios = guardar.mock.calls.at(-1)[1];
+    const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(typeof cambios.notificado_at).toBe('string');
   });
 
