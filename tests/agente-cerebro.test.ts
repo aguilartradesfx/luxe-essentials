@@ -120,6 +120,62 @@ describe('generar', () => {
     expect(r.error).toContain('refusal');
   });
 
+  // El mensaje del SyntaxError de JSON.parse arrastra la entrada, y ahí va
+  // texto derivado de lo que escribió el cliente. Ese error va al log.
+  it('no filtra la salida del modelo en el mensaje de error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'Ana Pérez, ana@hotelx.com, +506 8888 8888' }],
+        }),
+    });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).not.toContain('ana@hotelx.com');
+    expect(r.error).not.toContain('Ana Pérez');
+  });
+
+  it('rechaza una respuesta más larga de lo que cabe en un mensaje', async () => {
+    const fetchImpl = claude({ respuesta: 'a'.repeat(1501), datos: DATOS_VACIOS });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  it('falla limpio cuando la red se cae, sin lanzar', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  // La API exige que el primer turno sea del usuario.
+  it('descarta los turnos assistant iniciales', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar(
+      {
+        ...entrada,
+        mensajes: [
+          { id: 'o1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'outbound' as const, texto: 'anterior', adjuntos: [] },
+          { id: 'i1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'inbound' as const, texto: 'hola', adjuntos: [] },
+        ],
+      },
+      { ...deps, fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages[0].role).toBe('user');
+  });
+
+  it('inserta un turno mínimo cuando no queda ningún mensaje', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar({ ...entrada, mensajes: [] }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].role).toBe('user');
+  });
+
   it('falla limpio cuando la API responde 429', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' });
     const r = await generar(entrada, { ...deps, fetchImpl });

@@ -73,6 +73,12 @@ function construirMensajes(e: EntradaCerebro) {
   }));
 
   // La API exige que el primer turno sea del usuario.
+  //
+  // Los turnos consecutivos del MISMO rol sí se aceptan: la API los combina.
+  // Verificado contra la API real el 2026-08-24 con tres turnos `user` seguidos
+  // y con user/assistant/user/user, ambos 200 y extrayendo bien los datos. No
+  // hace falta fusionarlos, y es un caso normal en WhatsApp, donde la gente
+  // manda tres mensajes cortos en vez de uno largo.
   while (turnos.length > 0 && turnos[0].role === 'assistant') turnos.shift();
   if (turnos.length === 0) {
     turnos.push({ role: 'user', content: [{ type: 'text', text: '(sin texto)' }] });
@@ -145,10 +151,12 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `Anthropic ${res.status}: ${texto.slice(0, 200)}` };
 
-    const datos = JSON.parse(texto) as {
-      stop_reason?: string;
-      content?: { type?: string; text?: string }[];
-    };
+    let datos: { stop_reason?: string; content?: { type?: string; text?: string }[] };
+    try {
+      datos = JSON.parse(texto);
+    } catch {
+      return { ok: false, error: 'Anthropic devolvió una respuesta que no es JSON.' };
+    }
 
     // Un refusal llega con HTTP 200 y content vacío. Hay que mirarlo ANTES de
     // tocar content[0], o el fallo aparece como un TypeError sin relación.
@@ -159,7 +167,19 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const bruto = datos.content?.find((b) => b.type === 'text')?.text;
     if (!bruto) return { ok: false, error: 'Anthropic no devolvió ningún bloque de texto.' };
 
-    const parseado = salidaSchema.safeParse(JSON.parse(bruto));
+    // El mensaje del SyntaxError de JSON.parse incluye un fragmento de la
+    // entrada —para cadenas cortas, la entrada entera—, y `bruto` es texto que
+    // el modelo generó a partir de lo que escribió el cliente. Ese error acaba
+    // en el log del servidor, así que se sustituye por uno fijo: el repo no
+    // registra contenido de clientes en ninguna parte.
+    let crudo: unknown;
+    try {
+      crudo = JSON.parse(bruto);
+    } catch {
+      return { ok: false, error: 'Anthropic no devolvió JSON válido.' };
+    }
+
+    const parseado = salidaSchema.safeParse(crudo);
     if (!parseado.success) {
       return { ok: false, error: `La salida no cumple el esquema: ${parseado.error.issues[0]?.message}` };
     }
