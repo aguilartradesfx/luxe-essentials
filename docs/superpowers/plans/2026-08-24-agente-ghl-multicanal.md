@@ -117,12 +117,17 @@ describe('config del agente', () => {
     expect(config.tagDeProducto(null)).toBeNull();
   });
 
-  // El prompt se cachea en la API de Anthropic, y el mínimo de caché en
-  // Opus 5 son 512 tokens. Por debajo de eso el bloque no cachea y cada
-  // respuesta se cobra completa, en silencio. ~4 chars por token es la
-  // regla gruesa: 2500 chars ronda los 600 tokens, con margen.
+  // El prompt se cachea en la API de Anthropic, y el mínimo de caché en Opus 5
+  // son 512 TOKENS. Por debajo de eso el bloque no cachea y cada respuesta se
+  // cobra completa, en silencio.
+  //
+  // El umbral en caracteres es un proxy calibrado con una medición real contra
+  // /v1/messages/count_tokens: 2153 caracteres de este prompt = 948 tokens, o
+  // sea ~2.3 chars/token (el español tokeniza peor que el inglés; la regla de
+  // ~4 chars/token es de inglés y aquí sobreestima por casi el doble).
+  // 512 tokens ≈ 1160 caracteres, así que 1500 deja margen cómodo.
   it('el prompt es lo bastante largo para que la caché lo acepte', () => {
-    expect(config.PROMPT_SISTEMA.length).toBeGreaterThan(2500);
+    expect(config.PROMPT_SISTEMA.length).toBeGreaterThan(1500);
   });
 
   it('el prompt le prohíbe inventar precios y plazos', () => {
@@ -243,10 +248,18 @@ create index if not exists agente_conversaciones_estado_idx
   on public.agente_conversaciones (estado);
 ```
 
-- [ ] **Step 8: Aplicar la migración**
+- [ ] **Step 8: Aplicar la migración — DIFERIDO**
 
-Run: `npm run db:migrate`
-Expected: la migración `0002_agente.sql` se aplica sin error. Si el script reporta que ya estaba aplicada, revisar que la tabla exista antes de continuar.
+**No ejecutar `npm run db:migrate` todavía.** El 2026-08-24 se comprobó que el proyecto de
+Supabase `ayjcduotuvvjdwgyuvih` no resuelve en DNS y el pooler responde `Tenant or user not
+found`. Es un problema de infraestructura ajeno a este plan, y afecta también a la Fase 1 en
+producción.
+
+El archivo `.sql` se commitea igual: es código versionado, y aplicarlo es un paso de
+despliegue, no de implementación. Queda registrado en "Antes de desplegar".
+
+Verificación posible ahora, sin base de datos: que el SQL sea sintácticamente válido y que
+el archivo esté donde `scripts/db.mjs` lo busca (`supabase/migrations/`).
 
 - [ ] **Step 9: Commit**
 
@@ -2702,7 +2715,11 @@ consolas. Hay que confirmarlos con el dueño del proyecto.
 2. **Cargar las variables nuevas en Vercel** (`LUXE_AGENTE_WEBHOOK_SECRET`,
    `LUXE_ANTHROPIC_API_KEY`, `LUXE_OPENAI_API_KEY`) y **eliminar allí** cualquier
    `GHL_PRIVATE_INTEGRATION`, `ANTHROPIC_API_KEY` u `OPENAI_API_KEY` sin prefijo.
-3. **Aplicar la migración en producción:** `npm run db:migrate`.
+3. **Restaurar Supabase y aplicar la migración.** El proyecto `ayjcduotuvvjdwgyuvih` no
+   respondía el 2026-08-24 — ni DNS ni pooler — y las variables de producción en Vercel
+   apuntan a él. Hasta que se resuelva, la Fase 1 tampoco puede guardar leads. Una vez
+   restaurado (o migrado a un proyecto nuevo, actualizando las variables en Vercel y en
+   `.env.local`): `npm run db:migrate`.
 4. **Primera prueba en real:** escribir desde un WhatsApp propio antes de dejar el workflow
    activo para todos. Comprobar en la tabla que `turnos` sube a 1 y que `enviados` trae el id.
 5. **Comprobar que el bucle no existe:** tras esa primera respuesta, verificar que no llega
