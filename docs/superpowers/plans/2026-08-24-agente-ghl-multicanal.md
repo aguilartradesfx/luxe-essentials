@@ -55,7 +55,7 @@ Cada archivo de `lib/agente/` tiene su propio archivo de pruebas en `tests/agent
 
 **Interfaces:**
 - Consumes: nada.
-- Produces: `PRODUCTOS` (tupla), `type Producto`, y `config` (objeto con `WORKFLOW_AVISO: string`, `TOPE_TURNOS: number`, `TAGS_BASE: string[]`, `tagDeProducto(p): string | null`, `PROMPT_SISTEMA: string`, `BASE_GHL: string`, `VERSION_CONVERSACIONES: string`, `VERSION_CONTACTOS: string`).
+- Produces: `PRODUCTOS` (tupla), `type Producto`, y `config` (objeto con `WORKFLOW_AVISO: string`, `CAMPO_PERSONA: string`, `TOPE_TURNOS: number`, `TAGS_BASE: string[]`, `tagDeProducto(p): string | null`, `PROMPT_SISTEMA: string`, `BASE_GHL: string`, `VERSION_CONVERSACIONES: string`, `VERSION_CONTACTOS: string`).
 
 - [ ] **Step 1: Arreglar el entorno**
 
@@ -104,6 +104,10 @@ describe('config del agente', () => {
 
   it('topa las respuestas automáticas en 4', () => {
     expect(config.TOPE_TURNOS).toBe(4);
+  });
+
+  it('expone la clave del campo personalizado de la persona de contacto', () => {
+    expect(config.CAMPO_PERSONA).toBe('persona_contacto');
   });
 
   it('mapea cada producto a su tag, y null cuando no hay producto', () => {
@@ -186,6 +190,10 @@ export const config = {
   VERSION_CONTACTOS: '2021-07-28',
 
   WORKFLOW_AVISO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
+  // Campo personalizado de la carpeta "Luxe · Base Comercial 2026". En la base
+  // importada First Name lleva el nombre comercial del negocio, así que el
+  // nombre de la persona que escribe necesita su propio campo.
+  CAMPO_PERSONA: 'persona_contacto',
   TOPE_TURNOS: 4,
   TAGS_BASE: ['agente-ia'],
 
@@ -200,7 +208,7 @@ export const config = {
 - [ ] **Step 6: Ejecutar la prueba y verificar que pasa**
 
 Run: `npx vitest run tests/agente-config.test.ts`
-Expected: PASS, 5 pruebas.
+Expected: PASS, 6 pruebas.
 
 - [ ] **Step 7: Escribir la migración**
 
@@ -1888,7 +1896,7 @@ export async function actualizarContacto(
   // El nombre de la persona va a un campo propio: en la base importada
   // firstName lleva el nombre comercial del negocio, no el de nadie.
   if (datos.nombre) {
-    cuerpo.customFields = [{ key: 'persona_contacto', field_value: datos.nombre }];
+    cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: datos.nombre }];
   }
 
   if (Object.keys(cuerpo).length === 0) return undefined;
