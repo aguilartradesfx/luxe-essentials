@@ -37,12 +37,21 @@ export async function enviarMensaje(
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `GHL envío ${res.status}: ${texto.slice(0, 200)}` };
 
-    // Si GHL no devuelve id, el mensaje igual salió. Tratarlo como fallo haría
-    // que se reenviara y el cliente lo recibiría dos veces. El precio de no
-    // tener el id es que la guarda del humano lo verá como saliente ajeno y el
-    // agente callará de más: el fallo seguro.
     const datos = JSON.parse(texto) as { messageId?: string; id?: string };
-    return { ok: true, messageId: datos.messageId ?? datos.id ?? null };
+    const messageId = datos.messageId ?? datos.id ?? null;
+
+    // Sin id no podemos registrar el mensaje en `enviados`, así que en el
+    // siguiente turno la guarda 2 verá nuestro propio saliente como ajeno y
+    // callará el contacto de forma permanente. Es el único caso en que esa
+    // guarda se equivoca, y sin esta línea no dejaría ningún rastro.
+    if (!messageId) {
+      console.error(
+        '[agente] GHL no devolvió messageId; la guarda del humano podría callar al agente.',
+        'contacto:', p.contactId,
+      );
+    }
+
+    return { ok: true, messageId };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

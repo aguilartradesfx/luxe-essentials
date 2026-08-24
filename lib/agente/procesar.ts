@@ -1,5 +1,5 @@
 import { config } from '@/lib/agente/config';
-import { canalDeEnvio, esCorreo } from '@/lib/agente/canal';
+import { canalDeEnvio, esCorreo, type CanalEnvio } from '@/lib/agente/canal';
 import { hidratar, ultimoReal, huboRespuestaHumana } from '@/lib/agente/conversacion';
 import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
@@ -11,7 +11,7 @@ import { leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Datos, 
 // SIGUIENTE el que sale por 'inactivo'.
 export type Desenlace =
   | 'respondido' | 'sin-entrante' | 'humano-presente' | 'duplicado'
-  | 'inactivo' | 'canal-no-soportado' | 'error';
+  | 'inactivo' | 'error';
 
 export type DepsProcesar = {
   db: Db;
@@ -78,8 +78,9 @@ export async function procesar(
   const ultimo = ultimoReal(conversacion);
   if (!ultimo || ultimo.direccion !== 'inbound') return { desenlace: 'sin-entrante' };
 
-  const canal = canalDeEnvio(ultimo.tipo);
-  if (!canal) return { desenlace: 'canal-no-soportado', detalle: ultimo.tipo };
+  // No hace falta comprobar null: `aMensajeReal` sólo construye mensajes cuyo
+  // tipo pasó la allowlist, y los cinco de la allowlist tienen canal de envío.
+  const canal = canalDeEnvio(ultimo.tipo) as CanalEnvio;
 
   // Guarda 3, antes del trabajo caro: si se tomara después, dos webhooks
   // simultáneos pagarían dos llamadas a Claude para acabar descartando una.
@@ -90,6 +91,7 @@ export async function procesar(
   const generado = await generar(
     {
       mensajes: conversacion.mensajes,
+      mios: fila.enviados,
       transcripciones: medios.transcripciones,
       bloques: medios.bloques,
       datosPrevios: fila.datos,

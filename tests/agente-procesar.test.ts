@@ -44,7 +44,7 @@ const deps = {
 
 const FILA_NUEVA = {
   contact_id: 'c1', conversation_id: null, canal: null, estado: 'activo',
-  turnos: 0, datos: DATOS_VACIOS, ultimo_mensaje_id: null,
+  turnos: 0, datos: DATOS_VACIOS, ultimo_mensaje_id: null, procesando_hasta: null,
   enviados: [] as string[], notificado_at: null,
 };
 
@@ -307,10 +307,10 @@ describe('fallos', () => {
     expect(guardar).not.toHaveBeenCalledWith('c1', expect.objectContaining({ turnos: 1 }), expect.anything());
   });
 
-  it('no responde a un canal que no sabe contestar', async () => {
+  it('un canal que la allowlist no acepta ni llega a la orquestación', async () => {
     hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_SMS' })]));
     const r = await procesar('c1', deps);
-    expect(['canal-no-soportado', 'sin-entrante']).toContain(r.desenlace);
+    expect(r.desenlace).toBe('sin-entrante');
     expect(enviarMensaje).not.toHaveBeenCalled();
   });
 });

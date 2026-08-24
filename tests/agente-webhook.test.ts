@@ -51,6 +51,11 @@ describe('POST /api/ghl/webhook', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rechaza una cabecera con cadena vacía', async () => {
+    const res = await POST(peticion({ contactId: 'c1' }, ''));
+    expect(res.status).toBe(401);
+  });
+
   it('rechaza si el secreto no está configurado en el servidor', async () => {
     delete process.env.LUXE_AGENTE_WEBHOOK_SECRET;
     const res = await POST(peticion({ contactId: 'c1' }));

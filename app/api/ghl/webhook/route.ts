@@ -5,6 +5,14 @@ import { procesar } from '@/lib/agente/procesar';
 
 export const runtime = 'nodejs';
 
+// `after()` se traduce en Vercel a `waitUntil`, que NO es tiempo gratis: sigue
+// acotado por el presupuesto de ejecución de la función, 10 s por defecto. El
+// pipeline completo (hidratar, transcribir, generar, enviar, guardar) tarda
+// entre 5 y 20 s, así que sin esto una parte de los turnos moriría a mitad —y el
+// corte peor, entre enviar y guardar, deja al agente confundiendo su propio
+// mensaje con el de un asesor y callado para siempre.
+export const maxDuration = 60;
+
 function secretoValido(recibido: string | null): boolean {
   const esperado = process.env.LUXE_AGENTE_WEBHOOK_SECRET;
   if (!esperado || !recibido) return false;
@@ -43,7 +51,7 @@ export async function POST(request: Request) {
 
   const contactId = contactoDe(cuerpo);
   if (!contactId) {
-    console.error('[agente] Webhook sin contactId; no hay nada que procesar.');
+    console.warn('[agente] Webhook sin contactId; no hay nada que procesar.');
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
@@ -59,8 +67,18 @@ export async function POST(request: Request) {
         anthropicKey: process.env.LUXE_ANTHROPIC_API_KEY ?? '',
         openaiKey: process.env.LUXE_OPENAI_API_KEY ?? '',
       });
+      // Todos los desenlaces se registran, no sólo el error. Los otros cuatro son
+      // decisiones deliberadas de no responder, y sin dejarlas por escrito la
+      // pregunta "¿por qué no le contestó a este cliente?" no tiene respuesta.
       if (resultado.desenlace === 'error') {
         console.error('[agente] Turno abandonado.', 'contacto:', contactId, resultado.detalle);
+      } else {
+        console.info(
+          '[agente] Turno resuelto.',
+          'contacto:', contactId,
+          'desenlace:', resultado.desenlace,
+          resultado.detalle ?? '',
+        );
       }
     } catch (err) {
       // Nada de lo que ocurra aquí puede propagarse: la respuesta HTTP ya salió.

@@ -35,6 +35,9 @@ export function canalDeEnvio(tipo: string | undefined | null): CanalEnvio | null
   return esMensajeReal(tipo) ? ENVIO[tipo] : null;
 }
 
+// Se deriva del diccionario en vez de repetir la lista: un tipo de correo nuevo
+// que se añadiera arriba y se olvidara aquí produciría una conversación de
+// cuatro turnos por correo en lugar de la respuesta única que el diseño quiere.
 export function esCorreo(tipo: string | undefined | null): boolean {
-  return tipo === 'TYPE_EMAIL' || tipo === 'TYPE_CUSTOM_EMAIL';
+  return canalDeEnvio(tipo) === 'Email';
 }

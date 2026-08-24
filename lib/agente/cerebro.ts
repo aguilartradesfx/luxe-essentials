@@ -54,6 +54,7 @@ export type Salida = z.infer<typeof salidaSchema>;
 
 export type EntradaCerebro = {
   mensajes: MensajeReal[];
+  mios: string[];
   transcripciones: string[];
   bloques: BloqueImagen[];
   datosPrevios: Datos;
@@ -67,9 +68,21 @@ type Resultado = { ok: true; salida: Salida } | { ok: false; error: string };
 type Bloque = BloqueImagen | { type: 'text'; text: string };
 
 function construirMensajes(e: EntradaCerebro) {
+  const mios = new Set(e.mios);
   const turnos = e.mensajes.map((m) => ({
     role: m.direccion === 'inbound' ? ('user' as const) : ('assistant' as const),
-    content: [{ type: 'text' as const, text: m.texto || '(sin texto)' }] as Bloque[],
+    content: [
+      {
+        type: 'text' as const,
+        // Un saliente que no mandamos nosotros lo escribió un asesor. Sin
+        // marcarlo, el modelo lo lee como propio y puede reafirmar precios o
+        // plazos que un humano dio hace meses — justo lo que el prompt prohíbe.
+        text:
+          m.direccion === 'outbound' && !mios.has(m.id)
+            ? `[mensaje escrito por un asesor humano] ${m.texto || '(sin texto)'}`
+            : m.texto || '(sin texto)',
+      },
+    ] as Bloque[],
   }));
 
   // La API exige que el primer turno sea del usuario.
@@ -123,7 +136,11 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
 
   const cuerpo = {
     model: 'claude-opus-5',
-    max_tokens: 1024,
+    // Tope duro sobre thinking MÁS texto de respuesta. Con `effort: 'low'` el
+    // thinking es breve, pero 1024 dejaba un margen que una respuesta larga se
+    // come: al truncar, `content` trae JSON parcial, el parseo falla y el
+    // mensaje del cliente queda consumido sin respuesta.
+    max_tokens: 4096,
     // El thinking NO se manda: en Opus 5 está adaptativo por defecto, y
     // apagarlo hace que la salida estructurada salga a veces como texto plano,
     // con el turno terminando en éxito aparente y sin JSON.
@@ -162,6 +179,13 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     // tocar content[0], o el fallo aparece como un TypeError sin relación.
     if (datos.stop_reason === 'refusal') {
       return { ok: false, error: 'Anthropic devolvió stop_reason: refusal' };
+    }
+
+    // El truncamiento no es un error HTTP: llega 200 con JSON a medias. Sin esta
+    // comprobación el fallo aparece como "no devolvió JSON válido", que no
+    // distingue quedarnos cortos de presupuesto de un modelo que se portó mal.
+    if (datos.stop_reason === 'max_tokens') {
+      return { ok: false, error: 'Anthropic truncó la salida por max_tokens.' };
     }
 
     const bruto = datos.content?.find((b) => b.type === 'text')?.text;

@@ -9,6 +9,7 @@ const entrada = {
     { id: 'm1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'inbound' as const,
       texto: 'Hola, necesito uniformes', adjuntos: [] },
   ],
+  mios: [] as string[],
   transcripciones: [],
   bloques: [],
   datosPrevios: DATOS_VACIOS,

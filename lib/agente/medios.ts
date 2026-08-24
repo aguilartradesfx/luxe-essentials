@@ -15,8 +15,10 @@ export type Medios = {
 type Deps = { openaiKey: string; fetchImpl?: typeof fetch };
 
 // Claude rechaza imágenes por encima de ~5 MB con un 400 que tumbaría la
-// respuesta entera. Perder la foto es preferible a perder la conversación.
+// respuesta entera. Whisper rechaza audio por encima de 25 MB. Perder el
+// adjunto es preferible a perder la conversación.
 const MAX_IMAGEN = 5 * 1024 * 1024;
+const MAX_AUDIO = 25 * 1024 * 1024;
 
 const IMAGENES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 const EXT_IMAGEN: Record<string, string> = {
@@ -96,6 +98,16 @@ export async function prepararMedios(urls: string[], deps: Deps): Promise<Medios
       const contentType = res.headers.get('content-type');
       const clase = clasificar(url, contentType);
 
+      // Medir por la cabecera ANTES de traer el cuerpo: descargar 60 MB para
+      // luego descartarlos gasta el presupuesto de ejecución de la función, que
+      // es lo que corta los turnos a mitad.
+      const declarado = Number(res.headers.get('content-length') ?? 0);
+      const tope = clase === 'audio' ? MAX_AUDIO : MAX_IMAGEN;
+      if (declarado > tope) {
+        medios.fallos += 1;
+        continue;
+      }
+
       // Un PDF o un vCard no son un fallo del cliente: simplemente no sabemos
       // tratarlos y el modelo se las arregla con el texto del mensaje.
       if (clase === 'otro') continue;
@@ -110,8 +122,9 @@ export async function prepararMedios(urls: string[], deps: Deps): Promise<Medios
 
       const bytes = await res.arrayBuffer();
 
+      if (bytes.byteLength > tope) { medios.fallos += 1; continue; }
+
       if (clase === 'imagen') {
-        if (bytes.byteLength > MAX_IMAGEN) { medios.fallos += 1; continue; }
         medios.bloques.push({
           type: 'image',
           source: {
