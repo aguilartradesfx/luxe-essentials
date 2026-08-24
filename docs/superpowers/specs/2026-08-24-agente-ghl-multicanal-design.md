@@ -272,8 +272,19 @@ sería que el agente calla de más — un fallo seguro.
 ## 7. Escritura de los datos recolectados
 
 **Campos estándar del contacto** (`PUT /contacts/{id}`): `firstName`, `lastName`, `email`,
-`phone`, `city`. Sólo se escriben los campos que el agente logró recolectar y que vienen
-vacíos en el contacto; nunca se pisa un dato existente.
+`phone`. Sólo se escriben los campos que el agente logró recolectar y que vienen vacíos en
+el contacto; nunca se pisa un dato existente. Para saberlo hay que leer el contacto antes
+de escribirlo, porque el `PUT` de GHL sobrescribe.
+
+**`city` queda excluido a propósito.** La importación de la base comercial 2026 mapea
+`Subzona / ruta` a `City`, así que ese campo no es la ciudad del cliente sino su ruta de
+visita. Escribir ahí la ubicación que alguien mencione por chat rompería la segmentación
+comercial. La ubicación declarada va únicamente a la nota.
+
+**`persona_contacto` (campo personalizado).** En la base importada `First Name` lleva el
+nombre comercial del negocio, no el de una persona. El nombre de quien escribe se guarda en
+el campo personalizado `persona_contacto`, y `firstName` sólo se escribe cuando está vacío
+—es decir, en contactos nuevos que no vienen del ERP.
 
 **Tags:** `agente-ia`, más `interes-uniformes` / `interes-hogar` según el producto declarado.
 

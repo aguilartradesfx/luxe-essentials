@@ -1680,6 +1680,24 @@ describe('actualizarContacto', () => {
       .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '{}' });
   }
 
+  // `city` es la subzona de ruta en la base importada, no la ciudad del cliente.
+  it('nunca escribe city, ni siquiera si está vacío', async () => {
+    const fetchImpl = contactoYPut({});
+    await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana', ubicacion: 'Tamarindo' }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect('city' in body).toBe(false);
+  });
+
+  // En la base importada firstName es el nombre comercial del negocio, así que
+  // el nombre de la persona necesita su propio campo o se pierde.
+  it('guarda el nombre de la persona en persona_contacto', async () => {
+    const fetchImpl = contactoYPut({ firstName: 'Hotel Papagayo' });
+    await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana Pérez' }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(body.customFields).toEqual([{ key: 'persona_contacto', field_value: 'Ana Pérez' }]);
+    expect('firstName' in body).toBe(false);
+  });
+
   it('usa la versión de contactos y sólo manda lo que tiene valor', async () => {
     const fetchImpl = contactoYPut({});
     await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@x.com' }, { ...deps, fetchImpl });
@@ -1861,7 +1879,17 @@ export async function actualizarContacto(
   if (datos.nombre && vacio('firstName')) Object.assign(cuerpo, partirNombre(datos.nombre));
   if (datos.email && vacio('email')) cuerpo.email = datos.email;
   if (datos.telefono && vacio('phone')) cuerpo.phone = datos.telefono;
-  if (datos.ubicacion && vacio('city')) cuerpo.city = datos.ubicacion;
+
+  // `city` NO se escribe nunca. La importación de la base comercial 2026 mapea
+  // "Subzona / ruta" a City, así que ese campo es la ruta de visita del cliente,
+  // no su ciudad. Escribir ahí lo que alguien mencione por chat rompería la
+  // segmentación comercial. La ubicación declarada vive sólo en la nota.
+
+  // El nombre de la persona va a un campo propio: en la base importada
+  // firstName lleva el nombre comercial del negocio, no el de nadie.
+  if (datos.nombre) {
+    cuerpo.customFields = [{ key: 'persona_contacto', field_value: datos.nombre }];
+  }
 
   if (Object.keys(cuerpo).length === 0) return undefined;
 
@@ -1945,7 +1973,7 @@ export async function dispararWorkflow(
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-acciones.test.ts`
-Expected: PASS, 15 pruebas.
+Expected: PASS, 17 pruebas.
 
 - [ ] **Step 5: Commit**
 
