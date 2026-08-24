@@ -438,7 +438,7 @@ export function esCorreo(tipo: string | undefined | null): boolean {
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-canal.test.ts`
-Expected: PASS, 20 pruebas.
+Expected: PASS, 8 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -1032,11 +1032,26 @@ describe('tomarMensaje', () => {
 });
 
 // Doble del cliente para las rutas de lectura y alta.
-function dbLectura(fila: unknown, error: unknown = null, errorAlta: unknown = null) {
+function dbLectura(
+  fila: unknown, error: unknown = null, errorAlta: unknown = null, errorRelectura: unknown = null,
+) {
   const registro: { upsert?: unknown; opciones?: unknown } = {};
+  // leerOCrear puede leer dos veces: la primera para buscar el contacto y la
+  // segunda tras el alta, para no devolver un estado inventado si otra
+  // invocación ganó la creación.
+  let lecturas = 0;
   const db = {
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: fila, error }) }) }),
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => {
+            lecturas += 1;
+            return lecturas === 1
+              ? { data: fila, error }
+              : { data: null, error: errorRelectura };
+          },
+        }),
+      }),
       upsert: async (nueva: unknown, opciones: unknown) => {
         registro.upsert = nueva;
         registro.opciones = opciones;
@@ -1098,6 +1113,13 @@ describe('leerOCrear', () => {
   it('lanza si la lectura falla, en vez de fingir un contacto nuevo', async () => {
     const { db } = dbLectura(null, { message: 'timeout' });
     await expect(leerOCrear('c1', db as never)).rejects.toThrow(/timeout/);
+  });
+
+  // Misma razón que la primera lectura: devolver en silencio la fila fabricada
+  // 'activo'/turnos 0 puede resucitar a un contacto ya marcado 'humano'.
+  it('lanza si la relectura posterior al alta falla', async () => {
+    const { db } = dbLectura(null, null, null, { message: 'timeout en la relectura' });
+    await expect(leerOCrear('c1', db as never)).rejects.toThrow(/relectura/);
   });
 
   it('lanza si el alta falla', async () => {
@@ -1237,7 +1259,17 @@ export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
 
   // Si otra invocación ganó la creación, la fila real puede no ser la nuestra.
   // Se relee para no devolver un estado inventado.
-  const { data: real } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+  const { data: real, error: errorRelectura } = await db
+    .from(TABLA)
+    .select('*')
+    .eq('contact_id', contactId)
+    .maybeSingle();
+  // Misma razón que la primera lectura: un fallo aquí devolvería en silencio la
+  // fila fabricada 'activo'/turnos 0, que es justo lo que puede resucitar a un
+  // contacto ya marcado 'humano'.
+  if (errorRelectura) {
+    throw new Error(`[agente] No se pudo releer el estado de ${contactId}: ${errorRelectura.message}`);
+  }
   if (real) return { ...real, datos: { ...DATOS_VACIOS, ...(real.datos ?? {}) } } as Fila;
 
   return {
@@ -1331,7 +1363,7 @@ export async function guardar(
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-estado.test.ts`
-Expected: PASS, 10 pruebas.
+Expected: PASS, 21 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -1626,7 +1658,7 @@ export async function prepararMedios(urls: string[], deps: Deps): Promise<Medios
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-medios.test.ts`
-Expected: PASS, 8 pruebas.
+Expected: PASS, 10 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -2496,7 +2528,7 @@ export async function dispararWorkflow(
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-acciones.test.ts`
-Expected: PASS, 25 pruebas.
+Expected: PASS, 21 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -2772,6 +2804,39 @@ describe('durabilidad', () => {
     );
   });
 
+  // El arriendo se toma antes del trabajo caro; si el trabajo falla y no se
+  // suelta, el reintento inmediato del cliente se descarta durante 90 s.
+  it('libera el arriendo si Claude falla', async () => {
+    generar.mockResolvedValue({ ok: false, error: 'refusal' });
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  it('libera el arriendo si el envío falla', async () => {
+    enviarMensaje.mockResolvedValue({ ok: false, error: 'GHL envío 403' });
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  // Si el aviso saliera antes, el asesor abriría la notificación y encontraría
+  // el contacto todavía en blanco.
+  it('avisa al equipo sólo después de escribir el contacto y la nota', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    const orden: string[] = [];
+    actualizarContacto.mockImplementation(async () => { orden.push('contacto'); return undefined; });
+    agregarNota.mockImplementation(async () => { orden.push('nota'); return undefined; });
+    dispararWorkflow.mockImplementation(async () => { orden.push('aviso'); return undefined; });
+    await procesar('c1', deps);
+    expect(orden).toEqual(['contacto', 'nota', 'aviso']);
+  });
+
+  it('estampa el aviso en una escritura aparte, no junto al resto del estado', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    await procesar('c1', deps);
+    const ultima = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(Object.keys(ultima)).toEqual(['notificado_at']);
+  });
+
   // Si el latch no se persiste, la guarda del humano deja de ser permanente.
   it('grita en el log si no pudo persistir el latch de humano', async () => {
     const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -2858,6 +2923,15 @@ function debeAvisar(fila: Fila, datos: Datos, turnos: number): boolean {
   return turnos >= config.TOPE_TURNOS;
 }
 
+// El arriendo se toma ANTES del trabajo caro, así que hay que soltarlo también
+// cuando ese trabajo falla. Si no, el contacto queda bloqueado hasta 90 s — y
+// justo después de un turno fallido es cuando el cliente vuelve a escribir,
+// así que su reintento se descartaría en silencio. Eso es exactamente la espera
+// muda que este agente existe para evitar.
+async function liberarArriendo(contactId: string, db: Db): Promise<void> {
+  await guardar(contactId, { procesando_hasta: null }, db);
+}
+
 export async function procesar(
   contactId: string, deps: DepsProcesar,
 ): Promise<{ desenlace: Desenlace; detalle?: string }> {
@@ -2916,14 +2990,20 @@ export async function procesar(
     },
     { anthropicKey, fetchImpl },
   );
-  if (!generado.ok) return { desenlace: 'error', detalle: generado.error };
+  if (!generado.ok) {
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'error', detalle: generado.error };
+  }
 
   const envio = await enviarMensaje(
     { contactId, canal, texto: generado.salida.respuesta }, escritura,
   );
   // El turno no se consume si el envío falló: el siguiente mensaje del cliente
   // lo reintenta en vez de darlo por perdido.
-  if (!envio.ok) return { desenlace: 'error', detalle: envio.error };
+  if (!envio.ok) {
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'error', detalle: envio.error };
+  }
 
   const datos = fusionarDatos(fila.datos, generado.salida.datos);
   const turnos = fila.turnos + 1;
@@ -2942,9 +3022,10 @@ export async function procesar(
   // 'agotado' y no hay ningún evento futuro que lo reintente: un lead
   // cualificado del que nadie se entera, que es justo lo que este agente existe
   // para evitar.
-  const errorAviso = avisar ? await dispararWorkflow(contactId, escritura) : undefined;
-  const avisoHecho = avisar && !errorAviso;
-
+  // El estado se persiste PRIMERO, en cuanto el mensaje salió, porque es lo
+  // único de lo que dependen las guardas del turno siguiente: perder `enviados`
+  // deja al agente confundiendo su propio saliente con el de un asesor. Las
+  // escrituras en GHL van después; ninguna guarda depende de ellas.
   const errorGuardar = await guardar(
     contactId,
     {
@@ -2957,22 +3038,38 @@ export async function procesar(
       // mensaje no debe esperar a que expire.
       procesando_hasta: null,
       enviados: envio.messageId ? [...fila.enviados, envio.messageId] : fila.enviados,
-      ...(avisoHecho ? { notificado_at: new Date().toISOString() } : {}),
     },
     db,
   );
 
   // Estas escrituras no pueden hacer fallar el turno: al cliente ya se le
   // respondió, que es lo que importa. Sus errores van al log y nada más.
-  const errores = [
-    errorAviso,
+  const errores: (string | undefined)[] = [
     errorGuardar,
     await actualizarContacto(contactId, datos, escritura),
     await agregarNota(contactId, resumenParaNota(datos, canal), escritura),
-  ].filter(Boolean);
+  ];
 
-  if (errores.length > 0) {
-    console.error('[agente] Se respondió pero falló alguna escritura.', 'contacto:', contactId, errores);
+  // El aviso al equipo va AL FINAL, cuando el contacto ya tiene sus campos, sus
+  // tags y su nota escritos. Si se disparara antes, el asesor abriría la
+  // notificación y encontraría un contacto todavía en blanco.
+  //
+  // Y `notificado_at` se estampa sólo si el disparo salió, en una segunda
+  // escritura pequeña. Al revés —estampar junto con el resto y disparar
+  // después— un 500 pasajero de GHL perdería el aviso para siempre, porque
+  // `debeAvisar` no volvería a autorizarlo nunca.
+  if (avisar) {
+    const errorAviso = await dispararWorkflow(contactId, escritura);
+    errores.push(errorAviso);
+    if (!errorAviso) {
+      errores.push(await guardar(contactId, { notificado_at: new Date().toISOString() }, db));
+    }
+  }
+
+  const reales = errores.filter(Boolean);
+
+  if (reales.length > 0) {
+    console.error('[agente] Se respondió pero falló alguna escritura.', 'contacto:', contactId, reales);
   }
 
   return { desenlace: 'respondido' };
@@ -3005,7 +3102,7 @@ archivo se commitea igual, como el 0002.
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-procesar.test.ts`
-Expected: PASS, 21 pruebas.
+Expected: PASS, 29 pruebas.
 
 - [ ] **Step 5: Commit**
 
