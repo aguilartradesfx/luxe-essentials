@@ -307,10 +307,14 @@ describe('fallos', () => {
     expect(guardar).not.toHaveBeenCalledWith('c1', expect.objectContaining({ turnos: 1 }), expect.anything());
   });
 
-  it('un canal que la allowlist no acepta ni llega a la orquestación', async () => {
+  // El mock fabrica a propósito algo que el pipeline real no produce: la
+  // allowlist de `aMensajeReal` filtra los tipos no soportados antes de llegar
+  // aquí. Lo que se comprueba es la defensa: si alguna vez se colara uno, el
+  // turno se detiene en vez de intentar enviar por un canal desconocido.
+  it('se detiene si un tipo sin canal de envío se colara hasta la orquestación', async () => {
     hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_SMS' })]));
     const r = await procesar('c1', deps);
-    expect(r.desenlace).toBe('sin-entrante');
+    expect(r.desenlace).toBe('canal-no-soportado');
     expect(enviarMensaje).not.toHaveBeenCalled();
   });
 });

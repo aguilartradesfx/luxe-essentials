@@ -47,7 +47,7 @@ describe('generar', () => {
     await generar(entrada, { ...deps, fetchImpl });
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
     expect(body.model).toBe('claude-opus-5');
-    expect(body.max_tokens).toBe(1024);
+    expect(body.max_tokens).toBe(4096);
     expect(body.output_config.effort).toBe('low');
   });
 
