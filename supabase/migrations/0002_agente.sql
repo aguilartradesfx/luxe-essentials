@@ -22,5 +22,14 @@ create table if not exists public.agente_conversaciones (
   updated_at        timestamptz not null default now()
 );
 
+
+alter table public.agente_conversaciones enable row level security;
+
+-- Sin políticas, igual que public.leads: sólo el service role escribe, desde el
+-- route handler. Esto no es opcional — la tabla guarda nombre, correo y teléfono
+-- de cada persona que escribe al negocio, y NEXT_PUBLIC_SUPABASE_ANON_KEY viaja
+-- al navegador en el bundle de la landing. Sin RLS, cualquiera que extraiga esa
+-- clave lee la tabla entera por PostgREST.
+
 create index if not exists agente_conversaciones_estado_idx
   on public.agente_conversaciones (estado);

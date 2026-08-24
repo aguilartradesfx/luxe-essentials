@@ -37,6 +37,7 @@ describe('config del agente', () => {
   it('el prompt le prohíbe inventar precios y plazos', () => {
     const p = config.PROMPT_SISTEMA.toLowerCase();
     expect(p).toContain('precio');
+    expect(p).toContain('plazo');
     expect(p).toContain('nunca');
   });
 });
