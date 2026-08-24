@@ -195,6 +195,12 @@ delante del cliente:
 2. Cualquier mensaje saliente de canal real cuyo `id` no esté en `enviados[]` se considera
    humano, y se cruza con el campo `source` del mensaje.
 
+Sólo cuentan los salientes **posteriores al último entrante**. Un correo que un asesor mandó
+hace meses, antes de que la persona escribiera, es historia y no una toma de control: con la
+base comercial en prospección manual, mirar la conversación entera dejaría mudo al agente en
+todo contacto que un asesor hubiera tocado alguna vez. La permanencia la da el estado, no el
+escaneo.
+
 El estado pasa a `humano` y es terminal. No hay vuelta atrás automática.
 
 **Guarda 3 — Un mensaje entrante se procesa exactamente una vez.**

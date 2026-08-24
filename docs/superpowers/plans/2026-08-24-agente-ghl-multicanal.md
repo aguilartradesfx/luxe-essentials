@@ -682,6 +682,21 @@ describe('huboRespuestaHumana', () => {
     const c = conv([real({ id: 'x' }), real({ id: 'y' })]);
     expect(huboRespuestaHumana(c, [])).toBe(false);
   });
+
+  // Con la base comercial entrando en prospección manual, éste es el caso que
+  // decide si el agente sirve de algo con los contactos que ya existen.
+  it('un saliente ajeno anterior al último entrante es historia, no una toma de control', () => {
+    const c = conv([
+      real({ id: 'correo-viejo-del-asesor', direccion: 'outbound' }),
+      real({ id: 'escribe-ahora' }),
+    ]);
+    expect(huboRespuestaHumana(c, [])).toBe(false);
+  });
+
+  it('es falso cuando no hay ningún entrante del que tomar el control', () => {
+    const c = conv([real({ id: 'solo-saliente', direccion: 'outbound' })]);
+    expect(huboRespuestaHumana(c, [])).toBe(false);
+  });
 });
 ```
 
@@ -836,16 +851,31 @@ export function ultimoReal(c: Conversacion): MensajeReal | undefined {
 // hablándole encima al asesor delante del cliente, así que ante la duda
 // (un id que no pudimos registrar) esta función dice que sí hubo humano
 // y el agente calla de más — que es el fallo seguro.
+//
+// Sólo cuentan los salientes POSTERIORES al último entrante. Un correo que un
+// asesor mandó hace meses, antes de que esta persona escribiera, es historia y
+// no una toma de control: con la base comercial entrando en prospección manual,
+// mirar la conversación entera dejaría mudo al agente en todo contacto que un
+// asesor hubiera tocado alguna vez.
+//
+// La permanencia no la da este escaneo sino el latch de estado: en cuanto se
+// detecta, el contacto pasa a 'humano' y procesar() ni vuelve a hidratarlo.
 export function huboRespuestaHumana(c: Conversacion, enviados: string[]): boolean {
+  const ultimoEntrante = c.mensajes.map((m) => m.direccion).lastIndexOf('inbound');
+  // Sin ningún entrante no hay conversación que nadie pueda haber tomado.
+  if (ultimoEntrante === -1) return false;
+
   const mios = new Set(enviados);
-  return c.mensajes.some((m) => m.direccion === 'outbound' && !mios.has(m.id));
+  return c.mensajes
+    .slice(ultimoEntrante + 1)
+    .some((m) => m.direccion === 'outbound' && !mios.has(m.id));
 }
 ```
 
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-conversacion.test.ts`
-Expected: PASS, 20 pruebas.
+Expected: PASS, 22 pruebas.
 
 - [ ] **Step 5: Commit**
 
