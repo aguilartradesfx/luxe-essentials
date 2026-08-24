@@ -595,6 +595,48 @@ describe('hidratar', () => {
     expect(r.ok).toBe(false);
   });
 
+  // Sesgo seguro: lo ambiguo se lee como saliente. Ver el comentario en
+  // aMensajeReal — el default contrario abriría un bucle de autorrespuesta.
+  it('trata como saliente un mensaje con direction ausente o ilegible', async () => {
+    const fetchImpl = ghl(UNA_CONVERSACION, {
+      messages: { messages: [msg({ direction: undefined }), msg({ id: 'raro', direction: 'de-lado' })] },
+    });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    if (!r.ok) throw new Error('debía hidratar');
+    expect(r.conversacion.mensajes.map((m) => m.direccion)).toEqual(['outbound', 'outbound']);
+  });
+
+  it('un mensaje sin fecha legible no puede colarse como el último', async () => {
+    const fetchImpl = ghl(UNA_CONVERSACION, {
+      messages: {
+        messages: [
+          msg({ id: 'con-fecha', dateAdded: '2026-08-24T10:00:00.000Z' }),
+          msg({ id: 'sin-fecha', dateAdded: undefined }),
+        ],
+      },
+    });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    if (!r.ok) throw new Error('debía hidratar');
+    const ultimo = r.conversacion.mensajes[r.conversacion.mensajes.length - 1];
+    expect(ultimo.id).toBe('con-fecha');
+  });
+
+  it('falla limpio cuando el cuerpo no es JSON', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: async () => '<html>502 Bad Gateway</html>' });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  it('no revienta cuando attachments no es un array', async () => {
+    const fetchImpl = ghl(UNA_CONVERSACION, {
+      messages: { messages: [msg({ attachments: 'no-soy-un-array' })] },
+    });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    expect(r.ok && r.conversacion.mensajes[0].adjuntos).toEqual([]);
+  });
+
   it('manda el bearer y la versión de conversaciones', async () => {
     const fetchImpl = ghl(UNA_CONVERSACION, { messages: { messages: [] } });
     await hidratar('c1', { ...deps, fetchImpl });
@@ -706,7 +748,14 @@ function aMensajeReal(crudo: unknown): MensajeReal | null {
   return {
     id: m.id,
     tipo: m.messageType,
-    direccion: m.direction === 'outbound' ? 'outbound' : 'inbound',
+    // Si `direction` llega ausente o ilegible, se asume SALIENTE. Es el sesgo
+    // seguro en las DOS guardas: un mensaje ambiguo al final hace que el agente
+    // no responda, y `huboRespuestaHumana` lo cuenta como humano y lo calla.
+    // Al revés sería peor de lo que parece — un saliente PROPIO con la dirección
+    // corrupta se leería como entrante, el agente se contestaría a sí mismo, y
+    // esa respuesta volvería a entrar por el webhook: bucle infinito pagando
+    // cada vuelta.
+    direccion: m.direction === 'inbound' ? 'inbound' : 'outbound',
     texto: typeof m.body === 'string' ? m.body : '',
     adjuntos: Array.isArray(m.attachments)
       ? m.attachments.filter((a): a is string => typeof a === 'string')
@@ -796,7 +845,7 @@ export function huboRespuestaHumana(c: Conversacion, enviados: string[]): boolea
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-conversacion.test.ts`
-Expected: PASS, 16 pruebas.
+Expected: PASS, 20 pruebas.
 
 - [ ] **Step 5: Commit**
 
