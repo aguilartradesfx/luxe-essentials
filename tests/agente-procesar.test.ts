@@ -238,6 +238,39 @@ describe('durabilidad', () => {
     );
   });
 
+  // El arriendo se toma antes del trabajo caro; si el trabajo falla y no se
+  // suelta, el reintento inmediato del cliente se descarta durante 90 s.
+  it('libera el arriendo si Claude falla', async () => {
+    generar.mockResolvedValue({ ok: false, error: 'refusal' });
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  it('libera el arriendo si el envío falla', async () => {
+    enviarMensaje.mockResolvedValue({ ok: false, error: 'GHL envío 403' });
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  // Si el aviso saliera antes, el asesor abriría la notificación y encontraría
+  // el contacto todavía en blanco.
+  it('avisa al equipo sólo después de escribir el contacto y la nota', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    const orden: string[] = [];
+    actualizarContacto.mockImplementation(async () => { orden.push('contacto'); return undefined; });
+    agregarNota.mockImplementation(async () => { orden.push('nota'); return undefined; });
+    dispararWorkflow.mockImplementation(async () => { orden.push('aviso'); return undefined; });
+    await procesar('c1', deps);
+    expect(orden).toEqual(['contacto', 'nota', 'aviso']);
+  });
+
+  it('estampa el aviso en una escritura aparte, no junto al resto del estado', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    await procesar('c1', deps);
+    const ultima = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(Object.keys(ultima)).toEqual(['notificado_at']);
+  });
+
   // Si el latch no se persiste, la guarda del humano deja de ser permanente.
   it('grita en el log si no pudo persistir el latch de humano', async () => {
     const espia = vi.spyOn(console, 'error').mockImplementation(() => {});

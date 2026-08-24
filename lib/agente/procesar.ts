@@ -31,6 +31,15 @@ function debeAvisar(fila: Fila, datos: Datos, turnos: number): boolean {
   return turnos >= config.TOPE_TURNOS;
 }
 
+// El arriendo se toma ANTES del trabajo caro, así que hay que soltarlo también
+// cuando ese trabajo falla. Si no, el contacto queda bloqueado hasta 90 s — y
+// justo después de un turno fallido es cuando el cliente vuelve a escribir,
+// así que su reintento se descartaría en silencio. Eso es exactamente la espera
+// muda que este agente existe para evitar.
+async function liberarArriendo(contactId: string, db: Db): Promise<void> {
+  await guardar(contactId, { procesando_hasta: null }, db);
+}
+
 export async function procesar(
   contactId: string, deps: DepsProcesar,
 ): Promise<{ desenlace: Desenlace; detalle?: string }> {
@@ -89,14 +98,20 @@ export async function procesar(
     },
     { anthropicKey, fetchImpl },
   );
-  if (!generado.ok) return { desenlace: 'error', detalle: generado.error };
+  if (!generado.ok) {
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'error', detalle: generado.error };
+  }
 
   const envio = await enviarMensaje(
     { contactId, canal, texto: generado.salida.respuesta }, escritura,
   );
   // El turno no se consume si el envío falló: el siguiente mensaje del cliente
   // lo reintenta en vez de darlo por perdido.
-  if (!envio.ok) return { desenlace: 'error', detalle: envio.error };
+  if (!envio.ok) {
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'error', detalle: envio.error };
+  }
 
   const datos = fusionarDatos(fila.datos, generado.salida.datos);
   const turnos = fila.turnos + 1;
@@ -115,9 +130,10 @@ export async function procesar(
   // 'agotado' y no hay ningún evento futuro que lo reintente: un lead
   // cualificado del que nadie se entera, que es justo lo que este agente existe
   // para evitar.
-  const errorAviso = avisar ? await dispararWorkflow(contactId, escritura) : undefined;
-  const avisoHecho = avisar && !errorAviso;
-
+  // El estado se persiste PRIMERO, en cuanto el mensaje salió, porque es lo
+  // único de lo que dependen las guardas del turno siguiente: perder `enviados`
+  // deja al agente confundiendo su propio saliente con el de un asesor. Las
+  // escrituras en GHL van después; ninguna guarda depende de ellas.
   const errorGuardar = await guardar(
     contactId,
     {
@@ -130,22 +146,38 @@ export async function procesar(
       // mensaje no debe esperar a que expire.
       procesando_hasta: null,
       enviados: envio.messageId ? [...fila.enviados, envio.messageId] : fila.enviados,
-      ...(avisoHecho ? { notificado_at: new Date().toISOString() } : {}),
     },
     db,
   );
 
   // Estas escrituras no pueden hacer fallar el turno: al cliente ya se le
   // respondió, que es lo que importa. Sus errores van al log y nada más.
-  const errores = [
-    errorAviso,
+  const errores: (string | undefined)[] = [
     errorGuardar,
     await actualizarContacto(contactId, datos, escritura),
     await agregarNota(contactId, resumenParaNota(datos, canal), escritura),
-  ].filter(Boolean);
+  ];
 
-  if (errores.length > 0) {
-    console.error('[agente] Se respondió pero falló alguna escritura.', 'contacto:', contactId, errores);
+  // El aviso al equipo va AL FINAL, cuando el contacto ya tiene sus campos, sus
+  // tags y su nota escritos. Si se disparara antes, el asesor abriría la
+  // notificación y encontraría un contacto todavía en blanco.
+  //
+  // Y `notificado_at` se estampa sólo si el disparo salió, en una segunda
+  // escritura pequeña. Al revés —estampar junto con el resto y disparar
+  // después— un 500 pasajero de GHL perdería el aviso para siempre, porque
+  // `debeAvisar` no volvería a autorizarlo nunca.
+  if (avisar) {
+    const errorAviso = await dispararWorkflow(contactId, escritura);
+    errores.push(errorAviso);
+    if (!errorAviso) {
+      errores.push(await guardar(contactId, { notificado_at: new Date().toISOString() }, db));
+    }
+  }
+
+  const reales = errores.filter(Boolean);
+
+  if (reales.length > 0) {
+    console.error('[agente] Se respondió pero falló alguna escritura.', 'contacto:', contactId, reales);
   }
 
   return { desenlace: 'respondido' };
