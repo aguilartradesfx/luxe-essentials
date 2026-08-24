@@ -3430,3 +3430,29 @@ consolas. Hay que confirmarlos con el dueño del proyecto.
 7. **Comprobar que el bucle no existe:** tras esa primera respuesta, verificar que no llega
    un segundo mensaje del agente. Si llega, la Guarda 1 no está funcionando: **apagar el
    workflow en GHL de inmediato** antes de seguir depurando.
+
+---
+
+## Ola de arreglo final (posterior a la revisión de rama completa)
+
+Los bloques de código de este plan son **anteriores** a la revisión de la rama completa. Esa
+revisión encontró un bloqueante y cinco hallazgos importantes que sólo se ven mirando los
+ocho módulos juntos, y que se aplicaron después. El código en git es la referencia; este plan
+es el registro del diseño. Lo que cambió:
+
+| # | Archivo | Qué |
+|---|---|---|
+| 1 | `app/api/ghl/webhook/route.ts` | **Bloqueante.** Faltaba `export const maxDuration = 60`. `after()` en Vercel se traduce a `waitUntil`, que sigue acotado por el presupuesto de la función (10 s por defecto) mientras el pipeline tarda 5–20 s. |
+| 2 | `lib/agente/cerebro.ts` | `max_tokens` de 1024 a 4096 —es tope duro sobre thinking *más* texto— y comprobación de `stop_reason: 'max_tokens'`, que llega con HTTP 200 y JSON a medias. |
+| 3 | `lib/agente/medios.ts` | Tope de 25 MB para audio (los vídeos entran por esa rama y no tenían ninguno) y medición por `content-length` antes de descargar. |
+| 4 | `lib/agente/acciones.ts` | Log cuando GHL no devuelve `messageId`: el único caso en que la guarda del humano se equivoca y calla un contacto para siempre. |
+| 5 | `lib/agente/cerebro.ts` + `procesar.ts` | Los salientes escritos por asesores se marcan `[mensaje escrito por un asesor humano]`. Sin eso el modelo los leía como propios y podía reafirmar precios y plazos que un humano dio hace meses. |
+| 6 | `app/api/ghl/webhook/route.ts` | Se registran los cinco desenlaces, no sólo `error`. Los otros cuatro son decisiones deliberadas de no responder y eran invisibles. |
+| 7 | `lib/agente/canal.ts` | `esCorreo` derivado del diccionario de canales en vez de duplicarlo. |
+| 8–11 | varios | `console.warn` para el webhook sin contactId, prueba de cabecera vacía, `FILA_NUEVA` completa. |
+
+**Pendiente conocido, no arreglado a propósito:** la comprobación por cabecera del punto 3
+quedó antes del descarte de tipos no soportados, así que un PDF de más de 5 MB cuenta como
+fallo y el modelo pide el dato por escrito. Arreglo: mover ese bloque después del
+`if (clase === 'otro') continue;`. Y la rama nueva no tiene cobertura, porque el doble de
+descarga de las pruebas nunca define `content-length`.
