@@ -30,21 +30,37 @@ function extension(url: string): string {
   return (limpia.split('.').pop() ?? '').toLowerCase();
 }
 
+function normalizar(contentType: string | null): string {
+  return (contentType ?? '').split(';')[0].trim().toLowerCase();
+}
+
+const GENERICOS = ['', 'application/octet-stream', 'binary/octet-stream'];
+
 // GHL no siempre manda un content-type útil (a veces application/octet-stream),
 // así que la extensión de la URL es el desempate.
-function clasificar(url: string, contentType: string | null): 'imagen' | 'audio' | 'otro' {
-  const ct = (contentType ?? '').split(';')[0].trim().toLowerCase();
+//
+// 'otro' y 'desconocido' NO son lo mismo, y confundirlos costaría adjuntos:
+// 'otro' es un tipo que identificamos y sabemos que no tratamos —un PDF seguirá
+// siendo un PDF por mucho que el cliente lo reenvíe, así que no es un fallo
+// suyo—, mientras que 'desconocido' es que ninguna de las dos señales dijo
+// nada. Eso último pasa de verdad: las URLs del CDN de GHL vienen sin extensión
+// (files.leadconnectorhq.com/uploads/abc123) y a veces con content-type
+// genérico, así que una foto real puede caer aquí. Se cuenta como fallo para
+// que el modelo sepa pedirla por escrito en vez de descartarla en silencio.
+function clasificar(url: string, contentType: string | null): 'imagen' | 'audio' | 'otro' | 'desconocido' {
+  const ct = normalizar(contentType);
   if (IMAGENES.includes(ct)) return 'imagen';
   if (ct.startsWith('audio/') || ct === 'video/mp4' || ct === 'video/webm') return 'audio';
 
   const ext = extension(url);
   if (EXT_IMAGEN[ext]) return 'imagen';
   if (EXT_AUDIO.includes(ext)) return 'audio';
-  return 'otro';
+
+  return GENERICOS.includes(ct) ? 'desconocido' : 'otro';
 }
 
 function tipoImagen(url: string, contentType: string | null): string {
-  const ct = (contentType ?? '').split(';')[0].trim().toLowerCase();
+  const ct = normalizar(contentType);
   if (IMAGENES.includes(ct)) return ct;
   return EXT_IMAGEN[extension(url)] ?? 'image/jpeg';
 }
@@ -83,6 +99,14 @@ export async function prepararMedios(urls: string[], deps: Deps): Promise<Medios
       // Un PDF o un vCard no son un fallo del cliente: simplemente no sabemos
       // tratarlos y el modelo se las arregla con el texto del mensaje.
       if (clase === 'otro') continue;
+
+      // Aquí, en cambio, no sabemos qué es. Podría ser una foto real que no
+      // supimos reconocer, así que cuenta como fallo y el modelo pedirá el dato
+      // por escrito en vez de perderlo sin que nadie se entere.
+      if (clase === 'desconocido') {
+        medios.fallos += 1;
+        continue;
+      }
 
       const bytes = await res.arrayBuffer();
 

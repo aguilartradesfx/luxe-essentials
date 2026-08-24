@@ -81,6 +81,28 @@ describe('prepararMedios', () => {
     expect(r.transcripciones).toEqual([]);
   });
 
+  // El caso real de GHL: sus URLs de CDN no traen extensión y el content-type
+  // llega genérico. Antes esto se descartaba en silencio, sin avisar al modelo.
+  it('cuenta como fallo lo que no puede clasificar, para que el modelo pueda preguntar', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(descarga(10, 'application/octet-stream'));
+    const r = await prepararMedios(['https://files.leadconnectorhq.com/uploads/abc123'], { ...deps, fetchImpl });
+    expect(r.bloques).toHaveLength(0);
+    expect(r.transcripciones).toEqual([]);
+    expect(r.fallos).toBe(1);
+  });
+
+  it('cuenta como fallo una descarga que responde con error HTTP', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      headers: { get: () => null },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const r = await prepararMedios(['https://cdn/borrada.jpg'], { ...deps, fetchImpl });
+    expect(r.bloques).toHaveLength(0);
+    expect(r.fallos).toBe(1);
+  });
+
   it('no llama a la red cuando no hay adjuntos', async () => {
     const fetchImpl = vi.fn();
     const r = await prepararMedios([], { ...deps, fetchImpl });
