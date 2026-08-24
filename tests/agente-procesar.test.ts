@@ -220,14 +220,14 @@ describe('durabilidad', () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
     dispararWorkflow.mockResolvedValue('GHL workflow 500: boom');
     await procesar('c1', deps);
-    const cambios = guardar.mock.calls.at(-1)[1];
+    const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect('notificado_at' in cambios).toBe(false);
   });
 
   it('estampa el aviso cuando el workflow sí salió', async () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
     await procesar('c1', deps);
-    const cambios = guardar.mock.calls.at(-1)[1];
+    const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(typeof cambios.notificado_at).toBe('string');
   });
 

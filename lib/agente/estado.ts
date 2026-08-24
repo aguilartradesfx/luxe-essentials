@@ -82,7 +82,14 @@ export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
   const { data: real } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
   if (real) return { ...real, datos: { ...DATOS_VACIOS, ...(real.datos ?? {}) } } as Fila;
 
-  return { ...nueva, conversation_id: null, canal: null, ultimo_mensaje_id: null, notificado_at: null } as Fila;
+  return {
+    ...nueva,
+    conversation_id: null,
+    canal: null,
+    ultimo_mensaje_id: null,
+    procesando_hasta: null,
+    notificado_at: null,
+  } as Fila;
 }
 
 // Guarda 3. UPDATE condicional: si la fila ya tiene registrado este mismo
