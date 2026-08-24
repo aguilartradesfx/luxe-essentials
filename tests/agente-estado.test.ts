@@ -126,9 +126,13 @@ function dbLectura(fila: unknown, error: unknown = null, errorAlta: unknown = nu
   return { db, registro };
 }
 
+// Refleja la tabla real: `select('*')` devuelve TODAS las columnas, así que el
+// fixture tiene que traerlas todas o la prueba de paridad de claves compara la
+// rama nueva contra una fila incompleta y falla por un motivo falso.
 const FILA_COMPLETA = {
   contact_id: 'c1', conversation_id: null, canal: null, estado: 'activo',
-  turnos: 0, datos: {}, ultimo_mensaje_id: null, enviados: [], notificado_at: null,
+  turnos: 0, datos: {}, ultimo_mensaje_id: null, procesando_hasta: null,
+  enviados: [], notificado_at: null,
 };
 
 describe('leerOCrear', () => {
