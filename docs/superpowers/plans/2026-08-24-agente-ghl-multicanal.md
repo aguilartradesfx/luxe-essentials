@@ -3359,6 +3359,13 @@ en GoHighLevel, mientras un asesor toma la conversación. Diseño completo en
 **Requisito del token:** el Private Integration necesita los scopes `conversations.readonly`,
 `conversations/message.readonly`, `conversations/message.write` y `contacts.write`.
 
+**Orden de despliegue.** Hay dos migraciones: `0002_agente.sql` crea la tabla y
+`0003_agente_arriendo.sql` añade la columna `procesando_hasta`, que el código usa en cada
+mensaje. `npm run db:migrate` aplica las pendientes en orden, pero **hay que ejecutarlo antes
+de desplegar el código**: si el código llega primero, cada intento de tomar el candado recibe
+un error de columna inexistente y el agente no responde a nadie. Falla cerrado y ruidoso, no
+en silencio, pero el orden ahorra el susto.
+
 **El agente calla solo** en cuanto un humano responde desde GHL, y tras 4 respuestas
 automáticas. Para reactivarlo en un contacto:
 
@@ -3400,18 +3407,26 @@ consolas. Hay que confirmarlos con el dueño del proyecto.
 2. **Cargar las variables nuevas en Vercel** (`LUXE_AGENTE_WEBHOOK_SECRET`,
    `LUXE_ANTHROPIC_API_KEY`, `LUXE_OPENAI_API_KEY`) y **eliminar allí** cualquier
    `GHL_PRIVATE_INTEGRATION`, `ANTHROPIC_API_KEY` u `OPENAI_API_KEY` sin prefijo.
-3. **Restaurar Supabase y aplicar la migración.** El proyecto `ayjcduotuvvjdwgyuvih` no
-   respondía el 2026-08-24 — ni DNS ni pooler — y las variables de producción en Vercel
-   apuntan a él. Hasta que se resuelva, la Fase 1 tampoco puede guardar leads. Una vez
-   restaurado (o migrado a un proyecto nuevo, actualizando las variables en Vercel y en
-   `.env.local`): `npm run db:migrate`.
-4. **Primera prueba en real:** escribir desde un WhatsApp propio antes de dejar el workflow
+3. **Restaurar Supabase y aplicar las DOS migraciones, antes de desplegar el código.** El
+   proyecto `ayjcduotuvvjdwgyuvih` no respondía el 2026-08-24 — ni DNS ni pooler — y las
+   variables de producción en Vercel apuntan a él. Hasta que se resuelva, la Fase 1 tampoco
+   puede guardar leads. Una vez restaurado (o migrado a un proyecto nuevo, actualizando las
+   variables en Vercel y en `.env.local`): `npm run db:migrate`, que aplica `0002_agente.sql`
+   y `0003_agente_arriendo.sql` en orden. Si el código se despliega antes que la 0003, cada
+   mensaje falla al tomar el candado y el agente no responde a nadie.
+
+4. **Verificar el candado contra la base ya restaurada.** Su filtro de PostgREST no se pudo
+   probar contra ninguna base real (Supabase estaba caído al escribirlo). Basta un PATCH con
+   curl sobre una fila de prueba comprobando que devuelve 1 fila la primera vez y 0 la segunda
+   dentro de los 90 s. La prueba de humo equivalente y más barata: mandar dos WhatsApp
+   seguidos y comprobar que llega exactamente UNA respuesta.
+5. **Primera prueba en real:** escribir desde un WhatsApp propio antes de dejar el workflow
    activo para todos. Comprobar en la tabla que `turnos` sube a 1 y que `enviados` trae el id.
-5. **Revalidar el esquema de salida contra la API real** si alguien lo tocó. Ninguna prueba
+6. **Revalidar el esquema de salida contra la API real** si alguien lo tocó. Ninguna prueba
    del repo puede hacerlo —todas simulan `fetch`—, así que un esquema inválido pasaría la
    suite entera y fallaría con 400 en cada mensaje de producción. Basta una llamada real con
    el esquema puesto; ver el comentario en `lib/agente/cerebro.ts` sobre por qué `producto`
    usa `anyOf`.
-6. **Comprobar que el bucle no existe:** tras esa primera respuesta, verificar que no llega
+7. **Comprobar que el bucle no existe:** tras esa primera respuesta, verificar que no llega
    un segundo mensaje del agente. Si llega, la Guarda 1 no está funcionando: **apagar el
    workflow en GHL de inmediato** antes de seguir depurando.
