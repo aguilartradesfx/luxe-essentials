@@ -79,7 +79,17 @@ export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
 
   // Si otra invocación ganó la creación, la fila real puede no ser la nuestra.
   // Se relee para no devolver un estado inventado.
-  const { data: real } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+  const { data: real, error: errorRelectura } = await db
+    .from(TABLA)
+    .select('*')
+    .eq('contact_id', contactId)
+    .maybeSingle();
+  // Misma razón que la primera lectura: un fallo aquí devolvería en silencio la
+  // fila fabricada 'activo'/turnos 0, que es justo lo que puede resucitar a un
+  // contacto ya marcado 'humano'.
+  if (errorRelectura) {
+    throw new Error(`[agente] No se pudo releer el estado de ${contactId}: ${errorRelectura.message}`);
+  }
   if (real) return { ...real, datos: { ...DATOS_VACIOS, ...(real.datos ?? {}) } } as Fila;
 
   return {

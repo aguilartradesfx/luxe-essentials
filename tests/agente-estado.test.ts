@@ -111,11 +111,26 @@ describe('tomarMensaje', () => {
 });
 
 // Doble del cliente para las rutas de lectura y alta.
-function dbLectura(fila: unknown, error: unknown = null, errorAlta: unknown = null) {
+function dbLectura(
+  fila: unknown, error: unknown = null, errorAlta: unknown = null, errorRelectura: unknown = null,
+) {
   const registro: { upsert?: unknown; opciones?: unknown } = {};
+  // leerOCrear puede leer dos veces: la primera para buscar el contacto y la
+  // segunda tras el alta, para no devolver un estado inventado si otra
+  // invocación ganó la creación.
+  let lecturas = 0;
   const db = {
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: fila, error }) }) }),
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => {
+            lecturas += 1;
+            return lecturas === 1
+              ? { data: fila, error }
+              : { data: null, error: errorRelectura };
+          },
+        }),
+      }),
       upsert: async (nueva: unknown, opciones: unknown) => {
         registro.upsert = nueva;
         registro.opciones = opciones;
@@ -177,6 +192,13 @@ describe('leerOCrear', () => {
   it('lanza si la lectura falla, en vez de fingir un contacto nuevo', async () => {
     const { db } = dbLectura(null, { message: 'timeout' });
     await expect(leerOCrear('c1', db as never)).rejects.toThrow(/timeout/);
+  });
+
+  // Misma razón que la primera lectura: devolver en silencio la fila fabricada
+  // 'activo'/turnos 0 puede resucitar a un contacto ya marcado 'humano'.
+  it('lanza si la relectura posterior al alta falla', async () => {
+    const { db } = dbLectura(null, null, null, { message: 'timeout en la relectura' });
+    await expect(leerOCrear('c1', db as never)).rejects.toThrow(/relectura/);
   });
 
   it('lanza si el alta falla', async () => {
