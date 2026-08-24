@@ -1681,6 +1681,62 @@ describe('generar', () => {
     expect(r.error).toContain('refusal');
   });
 
+  // El mensaje del SyntaxError de JSON.parse arrastra la entrada, y ahí va
+  // texto derivado de lo que escribió el cliente. Ese error va al log.
+  it('no filtra la salida del modelo en el mensaje de error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'Ana Pérez, ana@hotelx.com, +506 8888 8888' }],
+        }),
+    });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).not.toContain('ana@hotelx.com');
+    expect(r.error).not.toContain('Ana Pérez');
+  });
+
+  it('rechaza una respuesta más larga de lo que cabe en un mensaje', async () => {
+    const fetchImpl = claude({ respuesta: 'a'.repeat(1501), datos: DATOS_VACIOS });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  it('falla limpio cuando la red se cae, sin lanzar', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  // La API exige que el primer turno sea del usuario.
+  it('descarta los turnos assistant iniciales', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar(
+      {
+        ...entrada,
+        mensajes: [
+          { id: 'o1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'outbound' as const, texto: 'anterior', adjuntos: [] },
+          { id: 'i1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'inbound' as const, texto: 'hola', adjuntos: [] },
+        ],
+      },
+      { ...deps, fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages[0].role).toBe('user');
+  });
+
+  it('inserta un turno mínimo cuando no queda ningún mensaje', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar({ ...entrada, mensajes: [] }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].role).toBe('user');
+  });
+
   it('falla limpio cuando la API responde 429', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' });
     const r = await generar(entrada, { ...deps, fetchImpl });
@@ -1774,6 +1830,12 @@ function construirMensajes(e: EntradaCerebro) {
   }));
 
   // La API exige que el primer turno sea del usuario.
+  //
+  // Los turnos consecutivos del MISMO rol sí se aceptan: la API los combina.
+  // Verificado contra la API real el 2026-08-24 con tres turnos `user` seguidos
+  // y con user/assistant/user/user, ambos 200 y extrayendo bien los datos. No
+  // hace falta fusionarlos, y es un caso normal en WhatsApp, donde la gente
+  // manda tres mensajes cortos en vez de uno largo.
   while (turnos.length > 0 && turnos[0].role === 'assistant') turnos.shift();
   if (turnos.length === 0) {
     turnos.push({ role: 'user', content: [{ type: 'text', text: '(sin texto)' }] });
@@ -1846,10 +1908,12 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `Anthropic ${res.status}: ${texto.slice(0, 200)}` };
 
-    const datos = JSON.parse(texto) as {
-      stop_reason?: string;
-      content?: { type?: string; text?: string }[];
-    };
+    let datos: { stop_reason?: string; content?: { type?: string; text?: string }[] };
+    try {
+      datos = JSON.parse(texto);
+    } catch {
+      return { ok: false, error: 'Anthropic devolvió una respuesta que no es JSON.' };
+    }
 
     // Un refusal llega con HTTP 200 y content vacío. Hay que mirarlo ANTES de
     // tocar content[0], o el fallo aparece como un TypeError sin relación.
@@ -1860,7 +1924,19 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const bruto = datos.content?.find((b) => b.type === 'text')?.text;
     if (!bruto) return { ok: false, error: 'Anthropic no devolvió ningún bloque de texto.' };
 
-    const parseado = salidaSchema.safeParse(JSON.parse(bruto));
+    // El mensaje del SyntaxError de JSON.parse incluye un fragmento de la
+    // entrada —para cadenas cortas, la entrada entera—, y `bruto` es texto que
+    // el modelo generó a partir de lo que escribió el cliente. Ese error acaba
+    // en el log del servidor, así que se sustituye por uno fijo: el repo no
+    // registra contenido de clientes en ninguna parte.
+    let crudo: unknown;
+    try {
+      crudo = JSON.parse(bruto);
+    } catch {
+      return { ok: false, error: 'Anthropic no devolvió JSON válido.' };
+    }
+
+    const parseado = salidaSchema.safeParse(crudo);
     if (!parseado.success) {
       return { ok: false, error: `La salida no cumple el esquema: ${parseado.error.issues[0]?.message}` };
     }
@@ -1875,7 +1951,7 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-cerebro.test.ts`
-Expected: PASS, 11 pruebas.
+Expected: PASS, 16 pruebas.
 
 - [ ] **Step 5: Commit**
 
