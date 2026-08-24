@@ -24,6 +24,7 @@ export type Fila = {
   turnos: number;
   datos: Datos;
   ultimo_mensaje_id: string | null;
+  procesando_hasta: string | null;
   enviados: string[];
   notificado_at: string | null;
 };
@@ -63,11 +64,23 @@ export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
 
   if (data) return { ...data, datos: { ...DATOS_VACIOS, ...(data.datos ?? {}) } } as Fila;
 
+  // `ignoreDuplicates` es obligatorio: un upsert normal PISA la fila si otra
+  // invocación la creó entre nuestro select y este insert, y la pisaría con
+  // estado 'activo', turnos 0 y enviados vacío. En la ventana de dos webhooks
+  // simultáneos para el primer mensaje de un contacto que un asesor ya está
+  // atendiendo, eso resucitaría un contacto recién marcado 'humano'.
   const nueva = { contact_id: contactId, estado: 'activo', turnos: 0, datos: DATOS_VACIOS, enviados: [] };
-  const { error: errorAlta } = await db.from(TABLA).upsert(nueva, { onConflict: 'contact_id' });
+  const { error: errorAlta } = await db
+    .from(TABLA)
+    .upsert(nueva, { onConflict: 'contact_id', ignoreDuplicates: true });
   if (errorAlta) {
     throw new Error(`[agente] No se pudo crear el estado de ${contactId}: ${errorAlta.message}`);
   }
+
+  // Si otra invocación ganó la creación, la fila real puede no ser la nuestra.
+  // Se relee para no devolver un estado inventado.
+  const { data: real } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+  if (real) return { ...real, datos: { ...DATOS_VACIOS, ...(real.datos ?? {}) } } as Fila;
 
   return { ...nueva, conversation_id: null, canal: null, ultimo_mensaje_id: null, notificado_at: null } as Fila;
 }
@@ -75,6 +88,11 @@ export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
 // Guarda 3. UPDATE condicional: si la fila ya tiene registrado este mismo
 // mensaje, no devuelve nada y el turno se abandona. Es lo que hace que un
 // reintento de GHL no produzca una segunda respuesta al cliente.
+// Ventana del arriendo. Un turno completo (hidratar, transcribir, generar,
+// enviar) ronda los 5-20 s; 90 s deja margen sin dejar un contacto bloqueado
+// mucho rato si el proceso muere a mitad.
+const ARRIENDO_SEGUNDOS = 90;
+
 export async function tomarMensaje(contactId: string, mensajeId: string, db: Db): Promise<boolean> {
   // El filtro `or` de PostgREST se construye como texto, así que una coma o un
   // paréntesis en el id lo partirían y cambiarían la condición. Los ids de GHL
@@ -84,14 +102,33 @@ export async function tomarMensaje(contactId: string, mensajeId: string, db: Db)
     throw new Error(`[agente] Id de mensaje con forma inesperada: ${mensajeId.slice(0, 20)}`);
   }
 
+  const ahora = new Date();
+  const hasta = new Date(ahora.getTime() + ARRIENDO_SEGUNDOS * 1000).toISOString();
+
   const { data, error } = await db
     .from(TABLA)
-    .update({ ultimo_mensaje_id: mensajeId, updated_at: new Date().toISOString() })
+    .update({
+      ultimo_mensaje_id: mensajeId,
+      procesando_hasta: hasta,
+      updated_at: ahora.toISOString(),
+    })
     .eq('contact_id', contactId)
     // `neq` a secas no matchea NULL (en SQL `NULL <> 'x'` es NULL, no true),
     // así que una fila recién creada nunca podría reclamarse. El `or` con
-    // `is.null` cubre ese caso.
+    // `is.null` cubre ese caso. Esto deduplica el MISMO mensaje.
     .or(`ultimo_mensaje_id.is.null,ultimo_mensaje_id.neq.${mensajeId}`)
+    // Y esto serializa el CONTACTO. Sin esta segunda condición, un cliente que
+    // manda "hola" y luego "quiero uniformes" —lo normal en WhatsApp— genera
+    // dos webhooks con ids distintos que reclaman cada uno el suyo y corren en
+    // paralelo: el cliente recibe dos respuestas, y las dos escrituras de
+    // estado pisan la misma lectura perdiendo el id de un enviado. Ese id
+    // perdido hace que al turno siguiente el propio saliente del agente parezca
+    // de un humano y el contacto quede mudo para siempre.
+    //
+    // Los dos `or` se combinan con AND: PostgREST une con AND los parámetros
+    // repetidos. El valor va entre comillas porque un timestamp ISO lleva
+    // puntos y dos puntos, que son separadores del filtro.
+    .or(`procesando_hasta.is.null,procesando_hasta.lt."${ahora.toISOString()}"`)
     .select('contact_id');
 
   // Un fallo de base NO es lo mismo que "otro proceso ya lo tomó". Devolver
@@ -105,16 +142,22 @@ export async function tomarMensaje(contactId: string, mensajeId: string, db: Db)
   return Array.isArray(data) && data.length > 0;
 }
 
-export async function guardar(contactId: string, cambios: Partial<Fila>, db: Db): Promise<void> {
+// Devuelve el mensaje de error en vez de tragárselo, para que quien llama pueda
+// decidir. No lanza: hay llamadas —las de después de enviar— donde al cliente ya
+// se le respondió y hacer fallar el turno no desharía ese envío. Pero hay otra
+// —el latch de 'humano'— donde perder la escritura significa que el agente puede
+// volver a hablarle encima a un asesor, y ésa sí necesita enterarse.
+export async function guardar(
+  contactId: string, cambios: Partial<Fila>, db: Db,
+): Promise<string | undefined> {
   const { error } = await db
     .from(TABLA)
     .update({ ...cambios, updated_at: new Date().toISOString() })
     .eq('contact_id', contactId);
 
-  // Aquí NO se lanza: al cliente ya se le respondió y hacer fallar el turno no
-  // desharía ese envío. Pero tiene que verse, porque un fallo aquí pierde el id
-  // que alimenta la guarda del humano y el contador de turnos.
   if (error) {
     console.error('[agente] No se pudo guardar el estado.', 'contacto:', contactId, error.message);
+    return error.message;
   }
+  return undefined;
 }

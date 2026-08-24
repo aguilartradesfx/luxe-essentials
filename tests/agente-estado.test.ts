@@ -32,19 +32,21 @@ describe('fusionarDatos', () => {
 // que registra el filtro `or` construido, porque ese filtro es justamente la
 // parte fácil de escribir mal.
 function dbFalso(filasDevueltas: unknown[], error: unknown = null) {
-  const registro: { or?: string; update?: unknown } = {};
+  const registro: { or: string[]; update?: Record<string, unknown> } = { or: [] };
   const db = {
     from: () => ({
-      update: (campos: unknown) => {
+      update: (campos: Record<string, unknown>) => {
         registro.update = campos;
-        return {
-          eq: () => ({
-            or: (filtro: string) => {
-              registro.or = filtro;
-              return { select: async () => ({ data: filasDevueltas, error }) };
-            },
-          }),
+        // El candado encadena DOS `.or()`, así que el eslabón se devuelve a sí
+        // mismo hasta que llega el `.select()`.
+        const eslabon: Record<string, unknown> = {
+          or: (filtro: string) => {
+            registro.or.push(filtro);
+            return eslabon;
+          },
+          select: async () => ({ data: filasDevueltas, error }),
         };
+        return { eq: () => eslabon };
       },
     }),
   };
@@ -70,8 +72,28 @@ describe('tomarMensaje', () => {
   it('el filtro contempla la fila nueva con ultimo_mensaje_id en NULL', async () => {
     const { db, registro } = dbFalso([{ contact_id: 'c1' }]);
     await tomarMensaje('c1', 'm-99', db as never);
-    expect(registro.or).toContain('ultimo_mensaje_id.is.null');
-    expect(registro.or).toContain('ultimo_mensaje_id.neq.m-99');
+    const filtros = registro.or.join(' | ');
+    expect(filtros).toContain('ultimo_mensaje_id.is.null');
+    expect(filtros).toContain('ultimo_mensaje_id.neq.m-99');
+  });
+
+  // Sin este segundo filtro, un cliente que manda dos mensajes seguidos genera
+  // dos webhooks con ids distintos que reclaman cada uno el suyo y corren en
+  // paralelo: dos respuestas y un id de enviado perdido.
+  it('serializa el contacto además de deduplicar el mensaje', async () => {
+    const { db, registro } = dbFalso([{ contact_id: 'c1' }]);
+    await tomarMensaje('c1', 'm-99', db as never);
+    expect(registro.or).toHaveLength(2);
+    const filtros = registro.or.join(' | ');
+    expect(filtros).toContain('procesando_hasta.is.null');
+    expect(filtros).toContain('procesando_hasta.lt.');
+  });
+
+  it('estampa un arriendo con vencimiento en el futuro', async () => {
+    const { db, registro } = dbFalso([{ contact_id: 'c1' }]);
+    await tomarMensaje('c1', 'm-99', db as never);
+    const hasta = Date.parse(registro.update?.procesando_hasta as string);
+    expect(hasta).toBeGreaterThan(Date.now());
   });
 
   it('rechaza un id con caracteres que romperían el filtro, en vez de inyectarlo', async () => {
@@ -90,12 +112,13 @@ describe('tomarMensaje', () => {
 
 // Doble del cliente para las rutas de lectura y alta.
 function dbLectura(fila: unknown, error: unknown = null, errorAlta: unknown = null) {
-  const registro: { upsert?: unknown } = {};
+  const registro: { upsert?: unknown; opciones?: unknown } = {};
   const db = {
     from: () => ({
       select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: fila, error }) }) }),
-      upsert: async (nueva: unknown) => {
+      upsert: async (nueva: unknown, opciones: unknown) => {
         registro.upsert = nueva;
+        registro.opciones = opciones;
         return { error: errorAlta };
       },
     }),
@@ -122,6 +145,16 @@ describe('leerOCrear', () => {
     expect(fila.estado).toBe('activo');
     expect(fila.turnos).toBe(0);
     expect(registro.upsert).toMatchObject({ contact_id: 'c1' });
+  });
+
+  // Un upsert normal PISA la fila si otra invocación la creó entre nuestro
+  // select y este insert, y la pisaría con estado 'activo' y enviados vacío.
+  // Con dos webhooks simultáneos sobre un contacto que un asesor acaba de
+  // tomar, eso resucitaría un contacto recién marcado 'humano'.
+  it('no pisa la fila si otra invocación ganó la creación', async () => {
+    const { db, registro } = dbLectura(null);
+    await leerOCrear('c1', db as never);
+    expect(registro.opciones).toMatchObject({ ignoreDuplicates: true });
   });
 
   // Si las dos ramas devolvieran formas distintas, los consumidores fallarían
@@ -172,10 +205,18 @@ describe('guardar', () => {
   // No lanza a propósito: al cliente ya se le respondió y fallar el turno no
   // desharía el envío. Pero tiene que verse, porque perder esta escritura
   // pierde el id que alimenta la guarda del humano.
-  it('no lanza si la escritura falla, pero deja rastro en el log', async () => {
+  it('devuelve undefined cuando la escritura sale bien', async () => {
+    const { db } = dbGuardar();
+    await expect(guardar('c1', { turnos: 3 }, db as never)).resolves.toBeUndefined();
+  });
+
+  // No lanza —al cliente ya se le respondió— pero sí devuelve el error, porque
+  // hay una llamada (el latch de 'humano') donde perder la escritura significa
+  // que el agente puede volver a hablarle encima a un asesor.
+  it('no lanza si la escritura falla, pero devuelve el error y lo registra', async () => {
     const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { db } = dbGuardar({ message: 'disco lleno' });
-    await expect(guardar('c1', { turnos: 3 }, db as never)).resolves.toBeUndefined();
+    await expect(guardar('c1', { turnos: 3 }, db as never)).resolves.toBe('disco lleno');
     expect(espia).toHaveBeenCalled();
     espia.mockRestore();
   });
