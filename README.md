@@ -39,3 +39,33 @@ fila queda con `ghl_error` poblado y el lead sigue recuperable:
 ```sql
 select id, created_at, email, ghl_error from public.leads where ghl_contact_id is null;
 ```
+
+## Agente de respuesta multicanal
+
+Responde automáticamente los mensajes que entran por WhatsApp, Instagram, Facebook y correo
+en GoHighLevel, mientras un asesor toma la conversación. Diseño completo en
+`docs/superpowers/specs/2026-08-24-agente-ghl-multicanal-design.md`.
+
+**Puesta en marcha en GHL:** crear un workflow con trigger *Customer Replied* y una acción
+*Webhook* apuntando a `https://<dominio>/api/ghl/webhook`, método POST, con la cabecera
+`x-luxe-agente-secreto` igual al valor de `LUXE_AGENTE_WEBHOOK_SECRET`.
+
+**Requisito del token:** el Private Integration necesita los scopes `conversations.readonly`,
+`conversations/message.readonly`, `conversations/message.write` y `contacts.write`.
+
+**El agente calla solo** en cuanto un humano responde desde GHL, y tras 4 respuestas
+automáticas. Para reactivarlo en un contacto:
+
+```sql
+update public.agente_conversaciones
+   set estado = 'activo', turnos = 0
+ where contact_id = '<id>';
+```
+
+**Para ver qué hizo:**
+
+```sql
+select contact_id, canal, estado, turnos, notificado_at, datos
+  from public.agente_conversaciones
+ order by updated_at desc limit 20;
+```
