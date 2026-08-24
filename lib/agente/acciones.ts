@@ -104,12 +104,21 @@ export async function actualizarContacto(
     cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: datos.nombre }];
   }
 
-  if (Object.keys(cuerpo).length === 0) return undefined;
-
   const tagProducto = config.tagDeProducto(datos.producto);
   // Los tags del PUT reemplazan, así que se conservan los que ya tenía.
   const previos = Array.isArray(actual.tags) ? (actual.tags as string[]) : [];
-  cuerpo.tags = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
+  const deseados = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
+  const faltanTags = deseados.length > previos.length;
+
+  // Se escribe si hay algún campo que rellenar O si faltan tags por poner.
+  // La segunda condición no es un detalle: un contacto que viene de la
+  // importación ya trae correo y teléfono del ERP, así que no habrá ningún
+  // campo vacío que justifique el PUT — y sin ella ese contacto nunca
+  // recibiría el tag de interés, que es justo lo que el equipo usa para saber
+  // con quién habló el agente y qué le interesaba.
+  if (Object.keys(cuerpo).length === 0 && !faltanTags) return undefined;
+
+  cuerpo.tags = deseados;
 
   try {
     const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
