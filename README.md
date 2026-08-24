@@ -53,6 +53,13 @@ en GoHighLevel, mientras un asesor toma la conversación. Diseño completo en
 **Requisito del token:** el Private Integration necesita los scopes `conversations.readonly`,
 `conversations/message.readonly`, `conversations/message.write` y `contacts.write`.
 
+**Orden de despliegue.** Hay dos migraciones: `0002_agente.sql` crea la tabla y
+`0003_agente_arriendo.sql` añade la columna `procesando_hasta`, que el código usa en cada
+mensaje. `npm run db:migrate` aplica las pendientes en orden, pero **hay que ejecutarlo antes
+de desplegar el código**: si el código llega primero, cada intento de tomar el candado recibe
+un error de columna inexistente y el agente no responde a nadie. Falla cerrado y ruidoso, no
+en silencio, pero el orden ahorra el susto.
+
 **El agente calla solo** en cuanto un humano responde desde GHL, y tras 4 respuestas
 automáticas. Para reactivarlo en un contacto:
 
