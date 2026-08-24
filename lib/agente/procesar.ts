@@ -47,7 +47,19 @@ export async function procesar(
   // Guarda 2, antes que nada: si el asesor ya entró, el agente no vuelve a
   // hablar aunque el cliente siga escribiendo.
   if (huboRespuestaHumana(conversacion, fila.enviados)) {
-    await guardar(contactId, { estado: 'humano' }, db);
+    const errorLatch = await guardar(contactId, { estado: 'humano' }, db);
+    // Este latch es lo único que hace permanente la guarda. Si no se persiste,
+    // el agente puede volver a hablarle encima al asesor en cuanto el cliente
+    // escriba otra vez, porque huboRespuestaHumana sólo mira los salientes
+    // posteriores al último entrante. Por eso se registra aparte y más fuerte
+    // que el resto de fallos de escritura.
+    if (errorLatch) {
+      console.error(
+        '[agente] NO SE PUDO MARCAR EL CONTACTO COMO ATENDIDO POR UN HUMANO.',
+        'El agente podría volver a responder sobre esta conversación.',
+        'contacto:', contactId, errorLatch,
+      );
+    }
     return { desenlace: 'humano-presente' };
   }
 
@@ -96,7 +108,17 @@ export async function procesar(
       ? 'agotado'
       : 'activo';
 
-  await guardar(
+  // El aviso al equipo se dispara ANTES de estampar `notificado_at`, y sólo se
+  // estampa si salió bien. Al revés —estampar y luego disparar— un 500 pasajero
+  // de GHL perdería el aviso para siempre: `debeAvisar` no volvería a
+  // autorizarlo nunca. Y si eso ocurre en el turno del tope, el contacto queda
+  // 'agotado' y no hay ningún evento futuro que lo reintente: un lead
+  // cualificado del que nadie se entera, que es justo lo que este agente existe
+  // para evitar.
+  const errorAviso = avisar ? await dispararWorkflow(contactId, escritura) : undefined;
+  const avisoHecho = avisar && !errorAviso;
+
+  const errorGuardar = await guardar(
     contactId,
     {
       conversation_id: conversacion.conversationId,
@@ -104,18 +126,22 @@ export async function procesar(
       datos,
       turnos,
       estado,
+      // Se libera el arriendo del contacto: el turno terminó y el siguiente
+      // mensaje no debe esperar a que expire.
+      procesando_hasta: null,
       enviados: envio.messageId ? [...fila.enviados, envio.messageId] : fila.enviados,
-      ...(avisar ? { notificado_at: new Date().toISOString() } : {}),
+      ...(avisoHecho ? { notificado_at: new Date().toISOString() } : {}),
     },
     db,
   );
 
-  // Estas tres escrituras no pueden hacer fallar el turno: al cliente ya se le
+  // Estas escrituras no pueden hacer fallar el turno: al cliente ya se le
   // respondió, que es lo que importa. Sus errores van al log y nada más.
   const errores = [
+    errorAviso,
+    errorGuardar,
     await actualizarContacto(contactId, datos, escritura),
     await agregarNota(contactId, resumenParaNota(datos, canal), escritura),
-    avisar ? await dispararWorkflow(contactId, escritura) : undefined,
   ].filter(Boolean);
 
   if (errores.length > 0) {

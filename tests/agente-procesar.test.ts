@@ -213,6 +213,43 @@ describe('aviso al equipo', () => {
   });
 });
 
+describe('durabilidad', () => {
+  // Estampar y luego disparar perdería el aviso para siempre ante un 500
+  // pasajero: debeAvisar no volvería a autorizarlo nunca.
+  it('no da el aviso por hecho si el workflow falló', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    dispararWorkflow.mockResolvedValue('GHL workflow 500: boom');
+    await procesar('c1', deps);
+    const cambios = guardar.mock.calls.at(-1)[1];
+    expect('notificado_at' in cambios).toBe(false);
+  });
+
+  it('estampa el aviso cuando el workflow sí salió', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    await procesar('c1', deps);
+    const cambios = guardar.mock.calls.at(-1)[1];
+    expect(typeof cambios.notificado_at).toBe('string');
+  });
+
+  it('libera el arriendo del contacto al terminar el turno', async () => {
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith(
+      'c1', expect.objectContaining({ procesando_hasta: null }), expect.anything(),
+    );
+  });
+
+  // Si el latch no se persiste, la guarda del humano deja de ser permanente.
+  it('grita en el log si no pudo persistir el latch de humano', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    hidratar.mockResolvedValue(conversacionCon([entrante(), entrante({ id: 'del-asesor', direccion: 'outbound' })]));
+    guardar.mockResolvedValue('timeout');
+    const r = await procesar('c1', deps);
+    expect(r.desenlace).toBe('humano-presente');
+    expect(espia).toHaveBeenCalled();
+    espia.mockRestore();
+  });
+});
+
 describe('fallos', () => {
   it('no responde si la hidratación falla', async () => {
     hidratar.mockResolvedValue({ ok: false, error: 'GHL search 500' });
