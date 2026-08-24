@@ -141,7 +141,22 @@ export function ultimoReal(c: Conversacion): MensajeReal | undefined {
 // hablándole encima al asesor delante del cliente, así que ante la duda
 // (un id que no pudimos registrar) esta función dice que sí hubo humano
 // y el agente calla de más — que es el fallo seguro.
+//
+// Sólo cuentan los salientes POSTERIORES al último entrante. Un correo que un
+// asesor mandó hace meses, antes de que esta persona escribiera, es historia y
+// no una toma de control: con la base comercial entrando en prospección manual,
+// mirar la conversación entera dejaría mudo al agente en todo contacto que un
+// asesor hubiera tocado alguna vez.
+//
+// La permanencia no la da este escaneo sino el latch de estado: en cuanto se
+// detecta, el contacto pasa a 'humano' y procesar() ni vuelve a hidratarlo.
 export function huboRespuestaHumana(c: Conversacion, enviados: string[]): boolean {
+  const ultimoEntrante = c.mensajes.map((m) => m.direccion).lastIndexOf('inbound');
+  // Sin ningún entrante no hay conversación que nadie pueda haber tomado.
+  if (ultimoEntrante === -1) return false;
+
   const mios = new Set(enviados);
-  return c.mensajes.some((m) => m.direccion === 'outbound' && !mios.has(m.id));
+  return c.mensajes
+    .slice(ultimoEntrante + 1)
+    .some((m) => m.direccion === 'outbound' && !mios.has(m.id));
 }

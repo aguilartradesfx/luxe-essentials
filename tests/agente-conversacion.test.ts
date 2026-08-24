@@ -210,4 +210,19 @@ describe('huboRespuestaHumana', () => {
     const c = conv([real({ id: 'x' }), real({ id: 'y' })]);
     expect(huboRespuestaHumana(c, [])).toBe(false);
   });
+
+  // Con la base comercial entrando en prospección manual, éste es el caso que
+  // decide si el agente sirve de algo con los contactos que ya existen.
+  it('un saliente ajeno anterior al último entrante es historia, no una toma de control', () => {
+    const c = conv([
+      real({ id: 'correo-viejo-del-asesor', direccion: 'outbound' }),
+      real({ id: 'escribe-ahora' }),
+    ]);
+    expect(huboRespuestaHumana(c, [])).toBe(false);
+  });
+
+  it('es falso cuando no hay ningún entrante del que tomar el control', () => {
+    const c = conv([real({ id: 'solo-saliente', direccion: 'outbound' })]);
+    expect(huboRespuestaHumana(c, [])).toBe(false);
+  });
 });
