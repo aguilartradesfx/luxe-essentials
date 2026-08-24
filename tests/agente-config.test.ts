@@ -11,7 +11,7 @@ describe('config del agente', () => {
   });
 
   it('expone la clave del campo personalizado de la persona de contacto', () => {
-    expect(config.CAMPO_PERSONA).toBe('persona_contacto');
+    expect(config.CAMPO_PERSONA).toBe('contact.persona_contacto');
   });
 
   it('mapea cada producto a su tag, y null cuando no hay producto', () => {
