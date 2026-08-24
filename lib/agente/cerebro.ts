@@ -16,7 +16,17 @@ const ESQUEMA = {
         nombre: { type: ['string', 'null'] },
         email: { type: ['string', 'null'] },
         telefono: { type: ['string', 'null'] },
-        producto: { type: ['string', 'null'], enum: [...PRODUCTOS, null] },
+        // `producto` usa anyOf y sus hermanos no, y la diferencia es deliberada:
+        // la API acepta `type: ['string','null']` mientras no haya enum, pero lo
+        // rechaza con 400 en cuanto se combina con uno ("Enum value 'uniformes'
+        // does not match declared type"). Verificado contra la API real el
+        // 2026-08-24; no lo "uniformes" con sus hermanos sin volver a probarlo,
+        // porque ninguna prueba de este repo puede detectarlo: todas simulan
+        // fetch, así que el fallo sólo aparecería en producción y en cada
+        // mensaje.
+        producto: {
+          anyOf: [{ type: 'string', enum: [...PRODUCTOS] }, { type: 'null' }],
+        },
         ubicacion: { type: ['string', 'null'] },
       },
       required: ['nombre', 'email', 'telefono', 'producto', 'ubicacion'],
