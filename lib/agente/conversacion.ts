@@ -53,7 +53,14 @@ function aMensajeReal(crudo: unknown): MensajeReal | null {
   return {
     id: m.id,
     tipo: m.messageType,
-    direccion: m.direction === 'outbound' ? 'outbound' : 'inbound',
+    // Si `direction` llega ausente o ilegible, se asume SALIENTE. Es el sesgo
+    // seguro en las DOS guardas: un mensaje ambiguo al final hace que el agente
+    // no responda, y `huboRespuestaHumana` lo cuenta como humano y lo calla.
+    // Al revés sería peor de lo que parece — un saliente PROPIO con la dirección
+    // corrupta se leería como entrante, el agente se contestaría a sí mismo, y
+    // esa respuesta volvería a entrar por el webhook: bucle infinito pagando
+    // cada vuelta.
+    direccion: m.direction === 'inbound' ? 'inbound' : 'outbound',
     texto: typeof m.body === 'string' ? m.body : '',
     adjuntos: Array.isArray(m.attachments)
       ? m.attachments.filter((a): a is string => typeof a === 'string')
