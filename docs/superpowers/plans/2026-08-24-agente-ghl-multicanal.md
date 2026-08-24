@@ -1991,7 +1991,7 @@ Crear `tests/agente-acciones.test.ts`:
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
-import { enviarMensaje, actualizarContacto, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
+import { enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
 import { DATOS_VACIOS } from '@/lib/agente/estado';
 
 const deps = { apiKey: 'llave' };
@@ -2117,6 +2117,30 @@ describe('actualizarContacto', () => {
     expect(body.tags).toContain('interes-hogar');
   });
 
+  // Un contacto importado trae correo y teléfono del ERP, así que no hay campos
+  // vacíos que rellenar. Sin esta rama el equipo nunca sabría con quién habló
+  // el agente ni qué le interesaba.
+  it('escribe los tags aunque no haya ningún campo que rellenar', async () => {
+    const fetchImpl = contactoYPut({ email: 'ya@estaba.com', phone: '+506 1', tags: ['origen-erp-2026'] });
+    await actualizarContacto(
+      'c1', { ...DATOS_VACIOS, email: 'otro@x.com', producto: 'uniformes' }, { ...deps, fetchImpl },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const body = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(body.tags).toContain('origen-erp-2026');
+    expect(body.tags).toContain('interes-uniformes');
+  });
+
+  // Pero tampoco se escribe por escribir: sin campos vacíos y con los tags ya
+  // puestos, no hay PUT.
+  it('no escribe cuando no hay campos vacíos ni tags nuevos', async () => {
+    const fetchImpl = contactoYPut({ email: 'ya@estaba.com', tags: ['agente-ia', 'interes-uniformes'] });
+    await actualizarContacto(
+      'c1', { ...DATOS_VACIOS, email: 'otro@x.com', producto: 'uniformes' }, { ...deps, fetchImpl },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('no llama a la red cuando no hay ni un dato que guardar', async () => {
     const fetchImpl = vi.fn();
     await actualizarContacto('c1', DATOS_VACIOS, { ...deps, fetchImpl });
@@ -2127,6 +2151,24 @@ describe('actualizarContacto', () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
     const err = await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana' }, { ...deps, fetchImpl });
     expect(err).toContain('ECONNRESET');
+  });
+});
+
+describe('agregarNota', () => {
+  it('escribe la nota en el contacto con la versión de contactos', async () => {
+    const fetchImpl = ok({});
+    await agregarNota('c1', 'texto de la nota', { ...deps, fetchImpl });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toContain('/contacts/c1/notes');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Version).toBe('2021-07-28');
+    expect(JSON.parse(init.body)).toEqual({ body: 'texto de la nota' });
+  });
+
+  it('devuelve el error sin lanzar', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
+    const err = await agregarNota('c1', 'x', { ...deps, fetchImpl });
+    expect(err).toContain('500');
   });
 });
 
@@ -2268,12 +2310,21 @@ export async function actualizarContacto(
     cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: datos.nombre }];
   }
 
-  if (Object.keys(cuerpo).length === 0) return undefined;
-
   const tagProducto = config.tagDeProducto(datos.producto);
   // Los tags del PUT reemplazan, así que se conservan los que ya tenía.
   const previos = Array.isArray(actual.tags) ? (actual.tags as string[]) : [];
-  cuerpo.tags = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
+  const deseados = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
+  const faltanTags = deseados.length > previos.length;
+
+  // Se escribe si hay algún campo que rellenar O si faltan tags por poner.
+  // La segunda condición no es un detalle: un contacto que viene de la
+  // importación ya trae correo y teléfono del ERP, así que no habrá ningún
+  // campo vacío que justifique el PUT — y sin ella ese contacto nunca
+  // recibiría el tag de interés, que es justo lo que el equipo usa para saber
+  // con quién habló el agente y qué le interesaba.
+  if (Object.keys(cuerpo).length === 0 && !faltanTags) return undefined;
+
+  cuerpo.tags = deseados;
 
   try {
     const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
@@ -2350,7 +2401,7 @@ export async function dispararWorkflow(
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-acciones.test.ts`
-Expected: PASS, 17 pruebas.
+Expected: PASS, 21 pruebas.
 
 - [ ] **Step 5: Commit**
 

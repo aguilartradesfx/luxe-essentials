@@ -287,9 +287,9 @@ de escribirlo, porque el `PUT` de GHL sobrescribe.
 visita. Escribir ahí la ubicación que alguien mencione por chat rompería la segmentación
 comercial. La ubicación declarada va únicamente a la nota.
 
-**`persona_contacto` (campo personalizado).** En la base importada `First Name` lleva el
+**`contact.persona_contacto` (campo personalizado).** En la base importada `First Name` lleva el
 nombre comercial del negocio, no el de una persona. El nombre de quien escribe se guarda en
-el campo personalizado `persona_contacto`, y `firstName` sólo se escribe cuando está vacío
+el campo personalizado `contact.persona_contacto`, y `firstName` sólo se escribe cuando está vacío
 —es decir, en contactos nuevos que no vienen del ERP.
 
 **Tags:** `agente-ia`, más `interes-uniformes` / `interes-hogar` según el producto declarado.
