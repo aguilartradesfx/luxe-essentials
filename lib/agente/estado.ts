@@ -49,11 +49,26 @@ export function fusionarDatos(previos: Datos, nuevos: Partial<Datos>): Datos {
 }
 
 export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
-  const { data } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+  const { data, error } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+
+  // Un error de lectura NO puede confundirse con "contacto nuevo". Supabase
+  // devuelve data null en ambos casos, y tratarlo como fila fresca sería grave:
+  // un contacto ya marcado 'humano' o 'agotado' volvería a parecer 'activo' con
+  // los turnos a cero, y el agente empezaría a hablar otra vez sobre una
+  // conversación que un asesor ya había tomado. Se lanza para que el fallo se
+  // vea en el log del webhook en vez de convertirse en un bot indeseado.
+  if (error) {
+    throw new Error(`[agente] No se pudo leer el estado de ${contactId}: ${error.message}`);
+  }
+
   if (data) return { ...data, datos: { ...DATOS_VACIOS, ...(data.datos ?? {}) } } as Fila;
 
   const nueva = { contact_id: contactId, estado: 'activo', turnos: 0, datos: DATOS_VACIOS, enviados: [] };
-  await db.from(TABLA).upsert(nueva, { onConflict: 'contact_id' });
+  const { error: errorAlta } = await db.from(TABLA).upsert(nueva, { onConflict: 'contact_id' });
+  if (errorAlta) {
+    throw new Error(`[agente] No se pudo crear el estado de ${contactId}: ${errorAlta.message}`);
+  }
+
   return { ...nueva, conversation_id: null, canal: null, ultimo_mensaje_id: null, notificado_at: null } as Fila;
 }
 
@@ -69,7 +84,7 @@ export async function tomarMensaje(contactId: string, mensajeId: string, db: Db)
     throw new Error(`[agente] Id de mensaje con forma inesperada: ${mensajeId.slice(0, 20)}`);
   }
 
-  const { data } = await db
+  const { data, error } = await db
     .from(TABLA)
     .update({ ultimo_mensaje_id: mensajeId, updated_at: new Date().toISOString() })
     .eq('contact_id', contactId)
@@ -79,12 +94,27 @@ export async function tomarMensaje(contactId: string, mensajeId: string, db: Db)
     .or(`ultimo_mensaje_id.is.null,ultimo_mensaje_id.neq.${mensajeId}`)
     .select('contact_id');
 
+  // Un fallo de base NO es lo mismo que "otro proceso ya lo tomó". Devolver
+  // false aquí haría que el agente se saltara en silencio el mensaje de un
+  // cliente real — que es exactamente el silencio que este proyecto existe para
+  // evitar, y encima indistinguible de un duplicado legítimo en los logs.
+  if (error) {
+    throw new Error(`[agente] Falló el candado de ${contactId}: ${error.message}`);
+  }
+
   return Array.isArray(data) && data.length > 0;
 }
 
 export async function guardar(contactId: string, cambios: Partial<Fila>, db: Db): Promise<void> {
-  await db
+  const { error } = await db
     .from(TABLA)
     .update({ ...cambios, updated_at: new Date().toISOString() })
     .eq('contact_id', contactId);
+
+  // Aquí NO se lanza: al cliente ya se le respondió y hacer fallar el turno no
+  // desharía ese envío. Pero tiene que verse, porque un fallo aquí pierde el id
+  // que alimenta la guarda del humano y el contador de turnos.
+  if (error) {
+    console.error('[agente] No se pudo guardar el estado.', 'contacto:', contactId, error.message);
+  }
 }
