@@ -107,7 +107,7 @@ describe('config del agente', () => {
   });
 
   it('expone la clave del campo personalizado de la persona de contacto', () => {
-    expect(config.CAMPO_PERSONA).toBe('persona_contacto');
+    expect(config.CAMPO_PERSONA).toBe('contact.persona_contacto');
   });
 
   it('mapea cada producto a su tag, y null cuando no hay producto', () => {
@@ -199,7 +199,11 @@ export const config = {
   // Campo personalizado de la carpeta "Luxe · Base Comercial 2026". En la base
   // importada First Name lleva el nombre comercial del negocio, así que el
   // nombre de la persona que escribe necesita su propio campo.
-  CAMPO_PERSONA: 'persona_contacto',
+  // Con el prefijo `contact.`, que es como GHL reporta las claves de sus campos
+  // personalizados (verificado el 2026-08-24 contra la location: devuelve
+  // contact.zona_comercial, contact.subzona_ruta, etc.). Sin el prefijo, la
+  // escritura probablemente se descarta sin error y el dato se pierde callado.
+  CAMPO_PERSONA: 'contact.persona_contacto',
   TOPE_TURNOS: 4,
   TAGS_BASE: ['agente-ia'],
 
