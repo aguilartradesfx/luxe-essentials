@@ -1,0 +1,35 @@
+# Vercel sube el árbol de trabajo. Este archivo es EXHAUSTIVO a propósito:
+# al existir un .vercelignore no se puede dar por hecho que la CLI siga
+# heredando el .gitignore, y aquí hay credenciales y datos personales en juego.
+
+# --- Credenciales. Nunca suben; las variables reales viven en Vercel. ---
+.env
+.env.local
+.env.*.local
+
+# --- Datos personales: 3.340 clientes reales con cédulas y teléfonos. ---
+Database/
+
+# --- Estado de la importación: mapa ID-ERP -> contactId de GoHighLevel. ---
+out/
+
+# --- Lo que Vercel reconstruye por su cuenta. ---
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+
+# --- Material fuente pesado, ya optimizado a public/images/. ---
+IMÁGENES/
+IMAGENES-GENERADAS/
+NUEVAS IMÁGENES/
+propuesta-hero/
+*.pdf
+*.jpg
+
+# --- Andamiaje de desarrollo: no forma parte del sitio. ---
+.superpowers/
+docs/
+tests/
+vitest.config.ts
+vitest.setup.ts
+.DS_Store
