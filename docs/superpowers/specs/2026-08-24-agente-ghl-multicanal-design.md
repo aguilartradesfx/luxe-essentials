@@ -195,6 +195,12 @@ delante del cliente:
 2. Cualquier mensaje saliente de canal real cuyo `id` no esté en `enviados[]` se considera
    humano, y se cruza con el campo `source` del mensaje.
 
+Sólo cuentan los salientes **posteriores al último entrante**. Un correo que un asesor mandó
+hace meses, antes de que la persona escribiera, es historia y no una toma de control: con la
+base comercial en prospección manual, mirar la conversación entera dejaría mudo al agente en
+todo contacto que un asesor hubiera tocado alguna vez. La permanencia la da el estado, no el
+escaneo.
+
 El estado pasa a `humano` y es terminal. No hay vuelta atrás automática.
 
 **Guarda 3 — Un mensaje entrante se procesa exactamente una vez.**
@@ -281,9 +287,9 @@ de escribirlo, porque el `PUT` de GHL sobrescribe.
 visita. Escribir ahí la ubicación que alguien mencione por chat rompería la segmentación
 comercial. La ubicación declarada va únicamente a la nota.
 
-**`persona_contacto` (campo personalizado).** En la base importada `First Name` lleva el
+**`contact.persona_contacto` (campo personalizado).** En la base importada `First Name` lleva el
 nombre comercial del negocio, no el de una persona. El nombre de quien escribe se guarda en
-el campo personalizado `persona_contacto`, y `firstName` sólo se escribe cuando está vacío
+el campo personalizado `contact.persona_contacto`, y `firstName` sólo se escribe cuando está vacío
 —es decir, en contactos nuevos que no vienen del ERP.
 
 **Tags:** `agente-ia`, más `interes-uniformes` / `interes-hogar` según el producto declarado.
@@ -319,6 +325,15 @@ create table if not exists public.agente_conversaciones (
   notificado_at     timestamptz,
   updated_at        timestamptz not null default now()
 );
+
+
+alter table public.agente_conversaciones enable row level security;
+
+-- Sin políticas, igual que public.leads: sólo el service role escribe, desde el
+-- route handler. Esto no es opcional — la tabla guarda nombre, correo y teléfono
+-- de cada persona que escribe al negocio, y NEXT_PUBLIC_SUPABASE_ANON_KEY viaja
+-- al navegador en el bundle de la landing. Sin RLS, cualquiera que extraiga esa
+-- clave lee la tabla entera por PostgREST.
 
 create index if not exists agente_conversaciones_estado_idx
   on public.agente_conversaciones (estado);

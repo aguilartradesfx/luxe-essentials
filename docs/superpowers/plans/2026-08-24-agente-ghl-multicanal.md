@@ -55,7 +55,7 @@ Cada archivo de `lib/agente/` tiene su propio archivo de pruebas en `tests/agent
 
 **Interfaces:**
 - Consumes: nada.
-- Produces: `PRODUCTOS` (tupla), `type Producto`, y `config` (objeto con `WORKFLOW_AVISO: string`, `TOPE_TURNOS: number`, `TAGS_BASE: string[]`, `tagDeProducto(p): string | null`, `PROMPT_SISTEMA: string`, `BASE_GHL: string`, `VERSION_CONVERSACIONES: string`, `VERSION_CONTACTOS: string`).
+- Produces: `PRODUCTOS` (tupla), `type Producto`, y `config` (objeto con `WORKFLOW_AVISO: string`, `CAMPO_PERSONA: string`, `TOPE_TURNOS: number`, `TAGS_BASE: string[]`, `tagDeProducto(p): string | null`, `PROMPT_SISTEMA: string`, `BASE_GHL: string`, `VERSION_CONVERSACIONES: string`, `VERSION_CONTACTOS: string`).
 
 - [ ] **Step 1: Arreglar el entorno**
 
@@ -106,6 +106,10 @@ describe('config del agente', () => {
     expect(config.TOPE_TURNOS).toBe(4);
   });
 
+  it('expone la clave del campo personalizado de la persona de contacto', () => {
+    expect(config.CAMPO_PERSONA).toBe('contact.persona_contacto');
+  });
+
   it('mapea cada producto a su tag, y null cuando no hay producto', () => {
     expect(config.tagDeProducto('uniformes')).toBe('interes-uniformes');
     expect(config.tagDeProducto('hogar')).toBe('interes-hogar');
@@ -113,17 +117,23 @@ describe('config del agente', () => {
     expect(config.tagDeProducto(null)).toBeNull();
   });
 
-  // El prompt se cachea en la API de Anthropic, y el mínimo de caché en
-  // Opus 5 son 512 tokens. Por debajo de eso el bloque no cachea y cada
-  // respuesta se cobra completa, en silencio. ~4 chars por token es la
-  // regla gruesa: 2500 chars ronda los 600 tokens, con margen.
+  // El prompt se cachea en la API de Anthropic, y el mínimo de caché en Opus 5
+  // son 512 TOKENS. Por debajo de eso el bloque no cachea y cada respuesta se
+  // cobra completa, en silencio.
+  //
+  // El umbral en caracteres es un proxy calibrado con una medición real contra
+  // /v1/messages/count_tokens: 2153 caracteres de este prompt = 948 tokens, o
+  // sea ~2.3 chars/token (el español tokeniza peor que el inglés; la regla de
+  // ~4 chars/token es de inglés y aquí sobreestima por casi el doble).
+  // 512 tokens ≈ 1160 caracteres, así que 1500 deja margen cómodo.
   it('el prompt es lo bastante largo para que la caché lo acepte', () => {
-    expect(config.PROMPT_SISTEMA.length).toBeGreaterThan(2500);
+    expect(config.PROMPT_SISTEMA.length).toBeGreaterThan(1500);
   });
 
   it('el prompt le prohíbe inventar precios y plazos', () => {
     const p = config.PROMPT_SISTEMA.toLowerCase();
     expect(p).toContain('precio');
+    expect(p).toContain('plazo');
     expect(p).toContain('nunca');
   });
 });
@@ -186,6 +196,14 @@ export const config = {
   VERSION_CONTACTOS: '2021-07-28',
 
   WORKFLOW_AVISO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
+  // Campo personalizado de la carpeta "Luxe · Base Comercial 2026". En la base
+  // importada First Name lleva el nombre comercial del negocio, así que el
+  // nombre de la persona que escribe necesita su propio campo.
+  // Con el prefijo `contact.`, que es como GHL reporta las claves de sus campos
+  // personalizados (verificado el 2026-08-24 contra la location: devuelve
+  // contact.zona_comercial, contact.subzona_ruta, etc.). Sin el prefijo, la
+  // escritura probablemente se descarta sin error y el dato se pierde callado.
+  CAMPO_PERSONA: 'contact.persona_contacto',
   TOPE_TURNOS: 4,
   TAGS_BASE: ['agente-ia'],
 
@@ -200,7 +218,7 @@ export const config = {
 - [ ] **Step 6: Ejecutar la prueba y verificar que pasa**
 
 Run: `npx vitest run tests/agente-config.test.ts`
-Expected: PASS, 5 pruebas.
+Expected: PASS, 6 pruebas.
 
 - [ ] **Step 7: Escribir la migración**
 
@@ -231,14 +249,31 @@ create table if not exists public.agente_conversaciones (
   updated_at        timestamptz not null default now()
 );
 
+
+alter table public.agente_conversaciones enable row level security;
+
+-- Sin políticas, igual que public.leads: sólo el service role escribe, desde el
+-- route handler. Esto no es opcional — la tabla guarda nombre, correo y teléfono
+-- de cada persona que escribe al negocio, y NEXT_PUBLIC_SUPABASE_ANON_KEY viaja
+-- al navegador en el bundle de la landing. Sin RLS, cualquiera que extraiga esa
+-- clave lee la tabla entera por PostgREST.
+
 create index if not exists agente_conversaciones_estado_idx
   on public.agente_conversaciones (estado);
 ```
 
-- [ ] **Step 8: Aplicar la migración**
+- [ ] **Step 8: Aplicar la migración — DIFERIDO**
 
-Run: `npm run db:migrate`
-Expected: la migración `0002_agente.sql` se aplica sin error. Si el script reporta que ya estaba aplicada, revisar que la tabla exista antes de continuar.
+**No ejecutar `npm run db:migrate` todavía.** El 2026-08-24 se comprobó que el proyecto de
+Supabase `ayjcduotuvvjdwgyuvih` no resuelve en DNS y el pooler responde `Tenant or user not
+found`. Es un problema de infraestructura ajeno a este plan, y afecta también a la Fase 1 en
+producción.
+
+El archivo `.sql` se commitea igual: es código versionado, y aplicarlo es un paso de
+despliegue, no de implementación. Queda registrado en "Antes de desplegar".
+
+Verificación posible ahora, sin base de datos: que el SQL sea sintácticamente válido y que
+el archivo esté donde `scripts/db.mjs` lo busca (`supabase/migrations/`).
 
 - [ ] **Step 9: Commit**
 
@@ -564,6 +599,48 @@ describe('hidratar', () => {
     expect(r.ok).toBe(false);
   });
 
+  // Sesgo seguro: lo ambiguo se lee como saliente. Ver el comentario en
+  // aMensajeReal — el default contrario abriría un bucle de autorrespuesta.
+  it('trata como saliente un mensaje con direction ausente o ilegible', async () => {
+    const fetchImpl = ghl(UNA_CONVERSACION, {
+      messages: { messages: [msg({ direction: undefined }), msg({ id: 'raro', direction: 'de-lado' })] },
+    });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    if (!r.ok) throw new Error('debía hidratar');
+    expect(r.conversacion.mensajes.map((m) => m.direccion)).toEqual(['outbound', 'outbound']);
+  });
+
+  it('un mensaje sin fecha legible no puede colarse como el último', async () => {
+    const fetchImpl = ghl(UNA_CONVERSACION, {
+      messages: {
+        messages: [
+          msg({ id: 'con-fecha', dateAdded: '2026-08-24T10:00:00.000Z' }),
+          msg({ id: 'sin-fecha', dateAdded: undefined }),
+        ],
+      },
+    });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    if (!r.ok) throw new Error('debía hidratar');
+    const ultimo = r.conversacion.mensajes[r.conversacion.mensajes.length - 1];
+    expect(ultimo.id).toBe('con-fecha');
+  });
+
+  it('falla limpio cuando el cuerpo no es JSON', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: async () => '<html>502 Bad Gateway</html>' });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  it('no revienta cuando attachments no es un array', async () => {
+    const fetchImpl = ghl(UNA_CONVERSACION, {
+      messages: { messages: [msg({ attachments: 'no-soy-un-array' })] },
+    });
+    const r = await hidratar('c1', { ...deps, fetchImpl });
+    expect(r.ok && r.conversacion.mensajes[0].adjuntos).toEqual([]);
+  });
+
   it('manda el bearer y la versión de conversaciones', async () => {
     const fetchImpl = ghl(UNA_CONVERSACION, { messages: { messages: [] } });
     await hidratar('c1', { ...deps, fetchImpl });
@@ -607,6 +684,21 @@ describe('huboRespuestaHumana', () => {
 
   it('ignora los entrantes: el cliente nunca es "el humano" de esta guarda', () => {
     const c = conv([real({ id: 'x' }), real({ id: 'y' })]);
+    expect(huboRespuestaHumana(c, [])).toBe(false);
+  });
+
+  // Con la base comercial entrando en prospección manual, éste es el caso que
+  // decide si el agente sirve de algo con los contactos que ya existen.
+  it('un saliente ajeno anterior al último entrante es historia, no una toma de control', () => {
+    const c = conv([
+      real({ id: 'correo-viejo-del-asesor', direccion: 'outbound' }),
+      real({ id: 'escribe-ahora' }),
+    ]);
+    expect(huboRespuestaHumana(c, [])).toBe(false);
+  });
+
+  it('es falso cuando no hay ningún entrante del que tomar el control', () => {
+    const c = conv([real({ id: 'solo-saliente', direccion: 'outbound' })]);
     expect(huboRespuestaHumana(c, [])).toBe(false);
   });
 });
@@ -675,7 +767,14 @@ function aMensajeReal(crudo: unknown): MensajeReal | null {
   return {
     id: m.id,
     tipo: m.messageType,
-    direccion: m.direction === 'outbound' ? 'outbound' : 'inbound',
+    // Si `direction` llega ausente o ilegible, se asume SALIENTE. Es el sesgo
+    // seguro en las DOS guardas: un mensaje ambiguo al final hace que el agente
+    // no responda, y `huboRespuestaHumana` lo cuenta como humano y lo calla.
+    // Al revés sería peor de lo que parece — un saliente PROPIO con la dirección
+    // corrupta se leería como entrante, el agente se contestaría a sí mismo, y
+    // esa respuesta volvería a entrar por el webhook: bucle infinito pagando
+    // cada vuelta.
+    direccion: m.direction === 'inbound' ? 'inbound' : 'outbound',
     texto: typeof m.body === 'string' ? m.body : '',
     adjuntos: Array.isArray(m.attachments)
       ? m.attachments.filter((a): a is string => typeof a === 'string')
@@ -756,16 +855,31 @@ export function ultimoReal(c: Conversacion): MensajeReal | undefined {
 // hablándole encima al asesor delante del cliente, así que ante la duda
 // (un id que no pudimos registrar) esta función dice que sí hubo humano
 // y el agente calla de más — que es el fallo seguro.
+//
+// Sólo cuentan los salientes POSTERIORES al último entrante. Un correo que un
+// asesor mandó hace meses, antes de que esta persona escribiera, es historia y
+// no una toma de control: con la base comercial entrando en prospección manual,
+// mirar la conversación entera dejaría mudo al agente en todo contacto que un
+// asesor hubiera tocado alguna vez.
+//
+// La permanencia no la da este escaneo sino el latch de estado: en cuanto se
+// detecta, el contacto pasa a 'humano' y procesar() ni vuelve a hidratarlo.
 export function huboRespuestaHumana(c: Conversacion, enviados: string[]): boolean {
+  const ultimoEntrante = c.mensajes.map((m) => m.direccion).lastIndexOf('inbound');
+  // Sin ningún entrante no hay conversación que nadie pueda haber tomado.
+  if (ultimoEntrante === -1) return false;
+
   const mios = new Set(enviados);
-  return c.mensajes.some((m) => m.direccion === 'outbound' && !mios.has(m.id));
+  return c.mensajes
+    .slice(ultimoEntrante + 1)
+    .some((m) => m.direccion === 'outbound' && !mios.has(m.id));
 }
 ```
 
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-conversacion.test.ts`
-Expected: PASS, 16 pruebas.
+Expected: PASS, 22 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -806,7 +920,7 @@ Crear `tests/agente-estado.test.ts`:
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
-import { fusionarDatos, tomarMensaje, DATOS_VACIOS } from '@/lib/agente/estado';
+import { fusionarDatos, tomarMensaje, leerOCrear, guardar, DATOS_VACIOS } from '@/lib/agente/estado';
 
 describe('fusionarDatos', () => {
   it('rellena lo que faltaba', () => {
@@ -838,20 +952,22 @@ describe('fusionarDatos', () => {
 // El candado de la guarda 3. Se prueba contra un doble del cliente de Supabase
 // que registra el filtro `or` construido, porque ese filtro es justamente la
 // parte fácil de escribir mal.
-function dbFalso(filasDevueltas: unknown[]) {
-  const registro: { or?: string; update?: unknown } = {};
+function dbFalso(filasDevueltas: unknown[], error: unknown = null) {
+  const registro: { or: string[]; update?: Record<string, unknown> } = { or: [] };
   const db = {
     from: () => ({
-      update: (campos: unknown) => {
+      update: (campos: Record<string, unknown>) => {
         registro.update = campos;
-        return {
-          eq: () => ({
-            or: (filtro: string) => {
-              registro.or = filtro;
-              return { select: async () => ({ data: filasDevueltas, error: null }) };
-            },
-          }),
+        // El candado encadena DOS `.or()`, así que el eslabón se devuelve a sí
+        // mismo hasta que llega el `.select()`.
+        const eslabon: Record<string, unknown> = {
+          or: (filtro: string) => {
+            registro.or.push(filtro);
+            return eslabon;
+          },
+          select: async () => ({ data: filasDevueltas, error }),
         };
+        return { eq: () => eslabon };
       },
     }),
   };
@@ -877,13 +993,179 @@ describe('tomarMensaje', () => {
   it('el filtro contempla la fila nueva con ultimo_mensaje_id en NULL', async () => {
     const { db, registro } = dbFalso([{ contact_id: 'c1' }]);
     await tomarMensaje('c1', 'm-99', db as never);
-    expect(registro.or).toContain('ultimo_mensaje_id.is.null');
-    expect(registro.or).toContain('ultimo_mensaje_id.neq.m-99');
+    const filtros = registro.or.join(' | ');
+    expect(filtros).toContain('ultimo_mensaje_id.is.null');
+    expect(filtros).toContain('ultimo_mensaje_id.neq.m-99');
+  });
+
+  // Sin este segundo filtro, un cliente que manda dos mensajes seguidos genera
+  // dos webhooks con ids distintos que reclaman cada uno el suyo y corren en
+  // paralelo: dos respuestas y un id de enviado perdido.
+  it('serializa el contacto además de deduplicar el mensaje', async () => {
+    const { db, registro } = dbFalso([{ contact_id: 'c1' }]);
+    await tomarMensaje('c1', 'm-99', db as never);
+    expect(registro.or).toHaveLength(2);
+    const filtros = registro.or.join(' | ');
+    expect(filtros).toContain('procesando_hasta.is.null');
+    expect(filtros).toContain('procesando_hasta.lt.');
+  });
+
+  it('estampa un arriendo con vencimiento en el futuro', async () => {
+    const { db, registro } = dbFalso([{ contact_id: 'c1' }]);
+    await tomarMensaje('c1', 'm-99', db as never);
+    const hasta = Date.parse(registro.update?.procesando_hasta as string);
+    expect(hasta).toBeGreaterThan(Date.now());
   });
 
   it('rechaza un id con caracteres que romperían el filtro, en vez de inyectarlo', async () => {
     const { db } = dbFalso([{ contact_id: 'c1' }]);
     await expect(tomarMensaje('c1', 'm,99)', db as never)).rejects.toThrow();
+  });
+
+  // Un fallo de base y un duplicado legítimo producen el mismo `data` vacío.
+  // Si esto devolviera false, el agente se saltaría en silencio a un cliente
+  // real y en el log parecería un reintento normal de GHL.
+  it('lanza si la base falla, en vez de devolver false', async () => {
+    const { db } = dbFalso([], { message: 'connection reset' });
+    await expect(tomarMensaje('c1', 'm-99', db as never)).rejects.toThrow(/connection reset/);
+  });
+});
+
+// Doble del cliente para las rutas de lectura y alta.
+function dbLectura(
+  fila: unknown, error: unknown = null, errorAlta: unknown = null, errorRelectura: unknown = null,
+) {
+  const registro: { upsert?: unknown; opciones?: unknown } = {};
+  // leerOCrear puede leer dos veces: la primera para buscar el contacto y la
+  // segunda tras el alta, para no devolver un estado inventado si otra
+  // invocación ganó la creación.
+  let lecturas = 0;
+  const db = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => {
+            lecturas += 1;
+            return lecturas === 1
+              ? { data: fila, error }
+              : { data: null, error: errorRelectura };
+          },
+        }),
+      }),
+      upsert: async (nueva: unknown, opciones: unknown) => {
+        registro.upsert = nueva;
+        registro.opciones = opciones;
+        return { error: errorAlta };
+      },
+    }),
+  };
+  return { db, registro };
+}
+
+// Refleja la tabla real: `select('*')` devuelve TODAS las columnas, así que el
+// fixture tiene que traerlas todas o la prueba de paridad de claves compara la
+// rama nueva contra una fila incompleta y falla por un motivo falso.
+const FILA_COMPLETA = {
+  contact_id: 'c1', conversation_id: null, canal: null, estado: 'activo',
+  turnos: 0, datos: {}, ultimo_mensaje_id: null, procesando_hasta: null,
+  enviados: [], notificado_at: null,
+};
+
+describe('leerOCrear', () => {
+  it('devuelve la fila existente con los datos completados', async () => {
+    const { db } = dbLectura({ ...FILA_COMPLETA, turnos: 2, datos: { nombre: 'Ana Pérez' } });
+    const fila = await leerOCrear('c1', db as never);
+    expect(fila.turnos).toBe(2);
+    expect(fila.datos).toEqual({ ...DATOS_VACIOS, nombre: 'Ana Pérez' });
+  });
+
+  it('da de alta el contacto la primera vez que lo ve', async () => {
+    const { db, registro } = dbLectura(null);
+    const fila = await leerOCrear('c1', db as never);
+    expect(fila.estado).toBe('activo');
+    expect(fila.turnos).toBe(0);
+    expect(registro.upsert).toMatchObject({ contact_id: 'c1' });
+  });
+
+  // Un upsert normal PISA la fila si otra invocación la creó entre nuestro
+  // select y este insert, y la pisaría con estado 'activo' y enviados vacío.
+  // Con dos webhooks simultáneos sobre un contacto que un asesor acaba de
+  // tomar, eso resucitaría un contacto recién marcado 'humano'.
+  it('no pisa la fila si otra invocación ganó la creación', async () => {
+    const { db, registro } = dbLectura(null);
+    await leerOCrear('c1', db as never);
+    expect(registro.opciones).toMatchObject({ ignoreDuplicates: true });
+  });
+
+  // Si las dos ramas devolvieran formas distintas, los consumidores fallarían
+  // de maneras difíciles de rastrear: sólo con contactos nuevos, o sólo con
+  // los ya vistos.
+  it('las dos ramas devuelven exactamente las mismas claves', async () => {
+    const existente = await leerOCrear('c1', dbLectura(FILA_COMPLETA).db as never);
+    const nueva = await leerOCrear('c1', dbLectura(null).db as never);
+    expect(Object.keys(nueva).sort()).toEqual(Object.keys(existente).sort());
+  });
+
+  // El caso grave: Supabase devuelve data null tanto si el contacto no existe
+  // como si la consulta falló. Tratar el fallo como contacto nuevo resucitaría
+  // a uno marcado 'humano' con los turnos a cero, y el agente volvería a hablar
+  // encima del asesor.
+  it('lanza si la lectura falla, en vez de fingir un contacto nuevo', async () => {
+    const { db } = dbLectura(null, { message: 'timeout' });
+    await expect(leerOCrear('c1', db as never)).rejects.toThrow(/timeout/);
+  });
+
+  // Misma razón que la primera lectura: devolver en silencio la fila fabricada
+  // 'activo'/turnos 0 puede resucitar a un contacto ya marcado 'humano'.
+  it('lanza si la relectura posterior al alta falla', async () => {
+    const { db } = dbLectura(null, null, null, { message: 'timeout en la relectura' });
+    await expect(leerOCrear('c1', db as never)).rejects.toThrow(/relectura/);
+  });
+
+  it('lanza si el alta falla', async () => {
+    const { db } = dbLectura(null, null, { message: 'conflicto' });
+    await expect(leerOCrear('c1', db as never)).rejects.toThrow(/conflicto/);
+  });
+});
+
+function dbGuardar(error: unknown = null) {
+  const registro: { update?: Record<string, unknown> } = {};
+  const db = {
+    from: () => ({
+      update: (campos: Record<string, unknown>) => {
+        registro.update = campos;
+        return { eq: async () => ({ error }) };
+      },
+    }),
+  };
+  return { db, registro };
+}
+
+describe('guardar', () => {
+  it('escribe los cambios y sella updated_at', async () => {
+    const { db, registro } = dbGuardar();
+    await guardar('c1', { turnos: 3 }, db as never);
+    expect(registro.update).toMatchObject({ turnos: 3 });
+    expect(typeof registro.update?.updated_at).toBe('string');
+  });
+
+  // No lanza a propósito: al cliente ya se le respondió y fallar el turno no
+  // desharía el envío. Pero tiene que verse, porque perder esta escritura
+  // pierde el id que alimenta la guarda del humano.
+  it('devuelve undefined cuando la escritura sale bien', async () => {
+    const { db } = dbGuardar();
+    await expect(guardar('c1', { turnos: 3 }, db as never)).resolves.toBeUndefined();
+  });
+
+  // No lanza —al cliente ya se le respondió— pero sí devuelve el error, porque
+  // hay una llamada (el latch de 'humano') donde perder la escritura significa
+  // que el agente puede volver a hablarle encima a un asesor.
+  it('no lanza si la escritura falla, pero devuelve el error y lo registra', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { db } = dbGuardar({ message: 'disco lleno' });
+    await expect(guardar('c1', { turnos: 3 }, db as never)).resolves.toBe('disco lleno');
+    expect(espia).toHaveBeenCalled();
+    espia.mockRestore();
   });
 });
 ```
@@ -922,6 +1204,7 @@ export type Fila = {
   turnos: number;
   datos: Datos;
   ultimo_mensaje_id: string | null;
+  procesando_hasta: string | null;
   enviados: string[];
   notificado_at: string | null;
 };
@@ -947,17 +1230,66 @@ export function fusionarDatos(previos: Datos, nuevos: Partial<Datos>): Datos {
 }
 
 export async function leerOCrear(contactId: string, db: Db): Promise<Fila> {
-  const { data } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+  const { data, error } = await db.from(TABLA).select('*').eq('contact_id', contactId).maybeSingle();
+
+  // Un error de lectura NO puede confundirse con "contacto nuevo". Supabase
+  // devuelve data null en ambos casos, y tratarlo como fila fresca sería grave:
+  // un contacto ya marcado 'humano' o 'agotado' volvería a parecer 'activo' con
+  // los turnos a cero, y el agente empezaría a hablar otra vez sobre una
+  // conversación que un asesor ya había tomado. Se lanza para que el fallo se
+  // vea en el log del webhook en vez de convertirse en un bot indeseado.
+  if (error) {
+    throw new Error(`[agente] No se pudo leer el estado de ${contactId}: ${error.message}`);
+  }
+
   if (data) return { ...data, datos: { ...DATOS_VACIOS, ...(data.datos ?? {}) } } as Fila;
 
+  // `ignoreDuplicates` es obligatorio: un upsert normal PISA la fila si otra
+  // invocación la creó entre nuestro select y este insert, y la pisaría con
+  // estado 'activo', turnos 0 y enviados vacío. En la ventana de dos webhooks
+  // simultáneos para el primer mensaje de un contacto que un asesor ya está
+  // atendiendo, eso resucitaría un contacto recién marcado 'humano'.
   const nueva = { contact_id: contactId, estado: 'activo', turnos: 0, datos: DATOS_VACIOS, enviados: [] };
-  await db.from(TABLA).upsert(nueva, { onConflict: 'contact_id' });
-  return { ...nueva, conversation_id: null, canal: null, ultimo_mensaje_id: null, notificado_at: null } as Fila;
+  const { error: errorAlta } = await db
+    .from(TABLA)
+    .upsert(nueva, { onConflict: 'contact_id', ignoreDuplicates: true });
+  if (errorAlta) {
+    throw new Error(`[agente] No se pudo crear el estado de ${contactId}: ${errorAlta.message}`);
+  }
+
+  // Si otra invocación ganó la creación, la fila real puede no ser la nuestra.
+  // Se relee para no devolver un estado inventado.
+  const { data: real, error: errorRelectura } = await db
+    .from(TABLA)
+    .select('*')
+    .eq('contact_id', contactId)
+    .maybeSingle();
+  // Misma razón que la primera lectura: un fallo aquí devolvería en silencio la
+  // fila fabricada 'activo'/turnos 0, que es justo lo que puede resucitar a un
+  // contacto ya marcado 'humano'.
+  if (errorRelectura) {
+    throw new Error(`[agente] No se pudo releer el estado de ${contactId}: ${errorRelectura.message}`);
+  }
+  if (real) return { ...real, datos: { ...DATOS_VACIOS, ...(real.datos ?? {}) } } as Fila;
+
+  return {
+    ...nueva,
+    conversation_id: null,
+    canal: null,
+    ultimo_mensaje_id: null,
+    procesando_hasta: null,
+    notificado_at: null,
+  } as Fila;
 }
 
 // Guarda 3. UPDATE condicional: si la fila ya tiene registrado este mismo
 // mensaje, no devuelve nada y el turno se abandona. Es lo que hace que un
 // reintento de GHL no produzca una segunda respuesta al cliente.
+// Ventana del arriendo. Un turno completo (hidratar, transcribir, generar,
+// enviar) ronda los 5-20 s; 90 s deja margen sin dejar un contacto bloqueado
+// mucho rato si el proceso muere a mitad.
+const ARRIENDO_SEGUNDOS = 90;
+
 export async function tomarMensaje(contactId: string, mensajeId: string, db: Db): Promise<boolean> {
   // El filtro `or` de PostgREST se construye como texto, así que una coma o un
   // paréntesis en el id lo partirían y cambiarían la condición. Los ids de GHL
@@ -967,31 +1299,71 @@ export async function tomarMensaje(contactId: string, mensajeId: string, db: Db)
     throw new Error(`[agente] Id de mensaje con forma inesperada: ${mensajeId.slice(0, 20)}`);
   }
 
-  const { data } = await db
+  const ahora = new Date();
+  const hasta = new Date(ahora.getTime() + ARRIENDO_SEGUNDOS * 1000).toISOString();
+
+  const { data, error } = await db
     .from(TABLA)
-    .update({ ultimo_mensaje_id: mensajeId, updated_at: new Date().toISOString() })
+    .update({
+      ultimo_mensaje_id: mensajeId,
+      procesando_hasta: hasta,
+      updated_at: ahora.toISOString(),
+    })
     .eq('contact_id', contactId)
     // `neq` a secas no matchea NULL (en SQL `NULL <> 'x'` es NULL, no true),
     // así que una fila recién creada nunca podría reclamarse. El `or` con
-    // `is.null` cubre ese caso.
+    // `is.null` cubre ese caso. Esto deduplica el MISMO mensaje.
     .or(`ultimo_mensaje_id.is.null,ultimo_mensaje_id.neq.${mensajeId}`)
+    // Y esto serializa el CONTACTO. Sin esta segunda condición, un cliente que
+    // manda "hola" y luego "quiero uniformes" —lo normal en WhatsApp— genera
+    // dos webhooks con ids distintos que reclaman cada uno el suyo y corren en
+    // paralelo: el cliente recibe dos respuestas, y las dos escrituras de
+    // estado pisan la misma lectura perdiendo el id de un enviado. Ese id
+    // perdido hace que al turno siguiente el propio saliente del agente parezca
+    // de un humano y el contacto quede mudo para siempre.
+    //
+    // Los dos `or` se combinan con AND: PostgREST une con AND los parámetros
+    // repetidos. El valor va entre comillas porque un timestamp ISO lleva
+    // puntos y dos puntos, que son separadores del filtro.
+    .or(`procesando_hasta.is.null,procesando_hasta.lt."${ahora.toISOString()}"`)
     .select('contact_id');
+
+  // Un fallo de base NO es lo mismo que "otro proceso ya lo tomó". Devolver
+  // false aquí haría que el agente se saltara en silencio el mensaje de un
+  // cliente real — que es exactamente el silencio que este proyecto existe para
+  // evitar, y encima indistinguible de un duplicado legítimo en los logs.
+  if (error) {
+    throw new Error(`[agente] Falló el candado de ${contactId}: ${error.message}`);
+  }
 
   return Array.isArray(data) && data.length > 0;
 }
 
-export async function guardar(contactId: string, cambios: Partial<Fila>, db: Db): Promise<void> {
-  await db
+// Devuelve el mensaje de error en vez de tragárselo, para que quien llama pueda
+// decidir. No lanza: hay llamadas —las de después de enviar— donde al cliente ya
+// se le respondió y hacer fallar el turno no desharía ese envío. Pero hay otra
+// —el latch de 'humano'— donde perder la escritura significa que el agente puede
+// volver a hablarle encima a un asesor, y ésa sí necesita enterarse.
+export async function guardar(
+  contactId: string, cambios: Partial<Fila>, db: Db,
+): Promise<string | undefined> {
+  const { error } = await db
     .from(TABLA)
     .update({ ...cambios, updated_at: new Date().toISOString() })
     .eq('contact_id', contactId);
+
+  if (error) {
+    console.error('[agente] No se pudo guardar el estado.', 'contacto:', contactId, error.message);
+    return error.message;
+  }
+  return undefined;
 }
 ```
 
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-estado.test.ts`
-Expected: PASS, 8 pruebas.
+Expected: PASS, 21 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -1106,6 +1478,28 @@ describe('prepararMedios', () => {
     expect(r.transcripciones).toEqual([]);
   });
 
+  // El caso real de GHL: sus URLs de CDN no traen extensión y el content-type
+  // llega genérico. Antes esto se descartaba en silencio, sin avisar al modelo.
+  it('cuenta como fallo lo que no puede clasificar, para que el modelo pueda preguntar', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(descarga(10, 'application/octet-stream'));
+    const r = await prepararMedios(['https://files.leadconnectorhq.com/uploads/abc123'], { ...deps, fetchImpl });
+    expect(r.bloques).toHaveLength(0);
+    expect(r.transcripciones).toEqual([]);
+    expect(r.fallos).toBe(1);
+  });
+
+  it('cuenta como fallo una descarga que responde con error HTTP', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      headers: { get: () => null },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const r = await prepararMedios(['https://cdn/borrada.jpg'], { ...deps, fetchImpl });
+    expect(r.bloques).toHaveLength(0);
+    expect(r.fallos).toBe(1);
+  });
+
   it('no llama a la red cuando no hay adjuntos', async () => {
     const fetchImpl = vi.fn();
     const r = await prepararMedios([], { ...deps, fetchImpl });
@@ -1155,21 +1549,37 @@ function extension(url: string): string {
   return (limpia.split('.').pop() ?? '').toLowerCase();
 }
 
+function normalizar(contentType: string | null): string {
+  return (contentType ?? '').split(';')[0].trim().toLowerCase();
+}
+
+const GENERICOS = ['', 'application/octet-stream', 'binary/octet-stream'];
+
 // GHL no siempre manda un content-type útil (a veces application/octet-stream),
 // así que la extensión de la URL es el desempate.
-function clasificar(url: string, contentType: string | null): 'imagen' | 'audio' | 'otro' {
-  const ct = (contentType ?? '').split(';')[0].trim().toLowerCase();
+//
+// 'otro' y 'desconocido' NO son lo mismo, y confundirlos costaría adjuntos:
+// 'otro' es un tipo que identificamos y sabemos que no tratamos —un PDF seguirá
+// siendo un PDF por mucho que el cliente lo reenvíe, así que no es un fallo
+// suyo—, mientras que 'desconocido' es que ninguna de las dos señales dijo
+// nada. Eso último pasa de verdad: las URLs del CDN de GHL vienen sin extensión
+// (files.leadconnectorhq.com/uploads/abc123) y a veces con content-type
+// genérico, así que una foto real puede caer aquí. Se cuenta como fallo para
+// que el modelo sepa pedirla por escrito en vez de descartarla en silencio.
+function clasificar(url: string, contentType: string | null): 'imagen' | 'audio' | 'otro' | 'desconocido' {
+  const ct = normalizar(contentType);
   if (IMAGENES.includes(ct)) return 'imagen';
   if (ct.startsWith('audio/') || ct === 'video/mp4' || ct === 'video/webm') return 'audio';
 
   const ext = extension(url);
   if (EXT_IMAGEN[ext]) return 'imagen';
   if (EXT_AUDIO.includes(ext)) return 'audio';
-  return 'otro';
+
+  return GENERICOS.includes(ct) ? 'desconocido' : 'otro';
 }
 
 function tipoImagen(url: string, contentType: string | null): string {
-  const ct = (contentType ?? '').split(';')[0].trim().toLowerCase();
+  const ct = normalizar(contentType);
   if (IMAGENES.includes(ct)) return ct;
   return EXT_IMAGEN[extension(url)] ?? 'image/jpeg';
 }
@@ -1209,6 +1619,14 @@ export async function prepararMedios(urls: string[], deps: Deps): Promise<Medios
       // tratarlos y el modelo se las arregla con el texto del mensaje.
       if (clase === 'otro') continue;
 
+      // Aquí, en cambio, no sabemos qué es. Podría ser una foto real que no
+      // supimos reconocer, así que cuenta como fallo y el modelo pedirá el dato
+      // por escrito en vez de perderlo sin que nadie se entere.
+      if (clase === 'desconocido') {
+        medios.fallos += 1;
+        continue;
+      }
+
       const bytes = await res.arrayBuffer();
 
       if (clase === 'imagen') {
@@ -1240,7 +1658,7 @@ export async function prepararMedios(urls: string[], deps: Deps): Promise<Medios
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-medios.test.ts`
-Expected: PASS, 8 pruebas.
+Expected: PASS, 10 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -1394,6 +1812,62 @@ describe('generar', () => {
     expect(r.error).toContain('refusal');
   });
 
+  // El mensaje del SyntaxError de JSON.parse arrastra la entrada, y ahí va
+  // texto derivado de lo que escribió el cliente. Ese error va al log.
+  it('no filtra la salida del modelo en el mensaje de error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'Ana Pérez, ana@hotelx.com, +506 8888 8888' }],
+        }),
+    });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).not.toContain('ana@hotelx.com');
+    expect(r.error).not.toContain('Ana Pérez');
+  });
+
+  it('rechaza una respuesta más larga de lo que cabe en un mensaje', async () => {
+    const fetchImpl = claude({ respuesta: 'a'.repeat(1501), datos: DATOS_VACIOS });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  it('falla limpio cuando la red se cae, sin lanzar', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
+  // La API exige que el primer turno sea del usuario.
+  it('descarta los turnos assistant iniciales', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar(
+      {
+        ...entrada,
+        mensajes: [
+          { id: 'o1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'outbound' as const, texto: 'anterior', adjuntos: [] },
+          { id: 'i1', tipo: 'TYPE_WHATSAPP' as const, direccion: 'inbound' as const, texto: 'hola', adjuntos: [] },
+        ],
+      },
+      { ...deps, fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages[0].role).toBe('user');
+  });
+
+  it('inserta un turno mínimo cuando no queda ningún mensaje', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar({ ...entrada, mensajes: [] }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].role).toBe('user');
+  });
+
   it('falla limpio cuando la API responde 429', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' });
     const r = await generar(entrada, { ...deps, fetchImpl });
@@ -1430,7 +1904,17 @@ const ESQUEMA = {
         nombre: { type: ['string', 'null'] },
         email: { type: ['string', 'null'] },
         telefono: { type: ['string', 'null'] },
-        producto: { type: ['string', 'null'], enum: [...PRODUCTOS, null] },
+        // `producto` usa anyOf y sus hermanos no, y la diferencia es deliberada:
+        // la API acepta `type: ['string','null']` mientras no haya enum, pero lo
+        // rechaza con 400 en cuanto se combina con uno ("Enum value 'uniformes'
+        // does not match declared type"). Verificado contra la API real el
+        // 2026-08-24; no lo "uniformes" con sus hermanos sin volver a probarlo,
+        // porque ninguna prueba de este repo puede detectarlo: todas simulan
+        // fetch, así que el fallo sólo aparecería en producción y en cada
+        // mensaje.
+        producto: {
+          anyOf: [{ type: 'string', enum: [...PRODUCTOS] }, { type: 'null' }],
+        },
         ubicacion: { type: ['string', 'null'] },
       },
       required: ['nombre', 'email', 'telefono', 'producto', 'ubicacion'],
@@ -1477,6 +1961,12 @@ function construirMensajes(e: EntradaCerebro) {
   }));
 
   // La API exige que el primer turno sea del usuario.
+  //
+  // Los turnos consecutivos del MISMO rol sí se aceptan: la API los combina.
+  // Verificado contra la API real el 2026-08-24 con tres turnos `user` seguidos
+  // y con user/assistant/user/user, ambos 200 y extrayendo bien los datos. No
+  // hace falta fusionarlos, y es un caso normal en WhatsApp, donde la gente
+  // manda tres mensajes cortos en vez de uno largo.
   while (turnos.length > 0 && turnos[0].role === 'assistant') turnos.shift();
   if (turnos.length === 0) {
     turnos.push({ role: 'user', content: [{ type: 'text', text: '(sin texto)' }] });
@@ -1549,10 +2039,12 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `Anthropic ${res.status}: ${texto.slice(0, 200)}` };
 
-    const datos = JSON.parse(texto) as {
-      stop_reason?: string;
-      content?: { type?: string; text?: string }[];
-    };
+    let datos: { stop_reason?: string; content?: { type?: string; text?: string }[] };
+    try {
+      datos = JSON.parse(texto);
+    } catch {
+      return { ok: false, error: 'Anthropic devolvió una respuesta que no es JSON.' };
+    }
 
     // Un refusal llega con HTTP 200 y content vacío. Hay que mirarlo ANTES de
     // tocar content[0], o el fallo aparece como un TypeError sin relación.
@@ -1563,7 +2055,19 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const bruto = datos.content?.find((b) => b.type === 'text')?.text;
     if (!bruto) return { ok: false, error: 'Anthropic no devolvió ningún bloque de texto.' };
 
-    const parseado = salidaSchema.safeParse(JSON.parse(bruto));
+    // El mensaje del SyntaxError de JSON.parse incluye un fragmento de la
+    // entrada —para cadenas cortas, la entrada entera—, y `bruto` es texto que
+    // el modelo generó a partir de lo que escribió el cliente. Ese error acaba
+    // en el log del servidor, así que se sustituye por uno fijo: el repo no
+    // registra contenido de clientes en ninguna parte.
+    let crudo: unknown;
+    try {
+      crudo = JSON.parse(bruto);
+    } catch {
+      return { ok: false, error: 'Anthropic no devolvió JSON válido.' };
+    }
+
+    const parseado = salidaSchema.safeParse(crudo);
     if (!parseado.success) {
       return { ok: false, error: `La salida no cumple el esquema: ${parseado.error.issues[0]?.message}` };
     }
@@ -1578,7 +2082,7 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-cerebro.test.ts`
-Expected: PASS, 11 pruebas.
+Expected: PASS, 16 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -1614,7 +2118,7 @@ Crear `tests/agente-acciones.test.ts`:
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
-import { enviarMensaje, actualizarContacto, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
+import { enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
 import { DATOS_VACIOS } from '@/lib/agente/estado';
 
 const deps = { apiKey: 'llave' };
@@ -1740,6 +2244,30 @@ describe('actualizarContacto', () => {
     expect(body.tags).toContain('interes-hogar');
   });
 
+  // Un contacto importado trae correo y teléfono del ERP, así que no hay campos
+  // vacíos que rellenar. Sin esta rama el equipo nunca sabría con quién habló
+  // el agente ni qué le interesaba.
+  it('escribe los tags aunque no haya ningún campo que rellenar', async () => {
+    const fetchImpl = contactoYPut({ email: 'ya@estaba.com', phone: '+506 1', tags: ['origen-erp-2026'] });
+    await actualizarContacto(
+      'c1', { ...DATOS_VACIOS, email: 'otro@x.com', producto: 'uniformes' }, { ...deps, fetchImpl },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const body = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(body.tags).toContain('origen-erp-2026');
+    expect(body.tags).toContain('interes-uniformes');
+  });
+
+  // Pero tampoco se escribe por escribir: sin campos vacíos y con los tags ya
+  // puestos, no hay PUT.
+  it('no escribe cuando no hay campos vacíos ni tags nuevos', async () => {
+    const fetchImpl = contactoYPut({ email: 'ya@estaba.com', tags: ['agente-ia', 'interes-uniformes'] });
+    await actualizarContacto(
+      'c1', { ...DATOS_VACIOS, email: 'otro@x.com', producto: 'uniformes' }, { ...deps, fetchImpl },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('no llama a la red cuando no hay ni un dato que guardar', async () => {
     const fetchImpl = vi.fn();
     await actualizarContacto('c1', DATOS_VACIOS, { ...deps, fetchImpl });
@@ -1750,6 +2278,24 @@ describe('actualizarContacto', () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
     const err = await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana' }, { ...deps, fetchImpl });
     expect(err).toContain('ECONNRESET');
+  });
+});
+
+describe('agregarNota', () => {
+  it('escribe la nota en el contacto con la versión de contactos', async () => {
+    const fetchImpl = ok({});
+    await agregarNota('c1', 'texto de la nota', { ...deps, fetchImpl });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toContain('/contacts/c1/notes');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Version).toBe('2021-07-28');
+    expect(JSON.parse(init.body)).toEqual({ body: 'texto de la nota' });
+  });
+
+  it('devuelve el error sin lanzar', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
+    const err = await agregarNota('c1', 'x', { ...deps, fetchImpl });
+    expect(err).toContain('500');
   });
 });
 
@@ -1888,15 +2434,24 @@ export async function actualizarContacto(
   // El nombre de la persona va a un campo propio: en la base importada
   // firstName lleva el nombre comercial del negocio, no el de nadie.
   if (datos.nombre) {
-    cuerpo.customFields = [{ key: 'persona_contacto', field_value: datos.nombre }];
+    cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: datos.nombre }];
   }
-
-  if (Object.keys(cuerpo).length === 0) return undefined;
 
   const tagProducto = config.tagDeProducto(datos.producto);
   // Los tags del PUT reemplazan, así que se conservan los que ya tenía.
   const previos = Array.isArray(actual.tags) ? (actual.tags as string[]) : [];
-  cuerpo.tags = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
+  const deseados = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
+  const faltanTags = deseados.length > previos.length;
+
+  // Se escribe si hay algún campo que rellenar O si faltan tags por poner.
+  // La segunda condición no es un detalle: un contacto que viene de la
+  // importación ya trae correo y teléfono del ERP, así que no habrá ningún
+  // campo vacío que justifique el PUT — y sin ella ese contacto nunca
+  // recibiría el tag de interés, que es justo lo que el equipo usa para saber
+  // con quién habló el agente y qué le interesaba.
+  if (Object.keys(cuerpo).length === 0 && !faltanTags) return undefined;
+
+  cuerpo.tags = deseados;
 
   try {
     const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
@@ -1973,7 +2528,7 @@ export async function dispararWorkflow(
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-acciones.test.ts`
-Expected: PASS, 17 pruebas.
+Expected: PASS, 21 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -2224,6 +2779,76 @@ describe('aviso al equipo', () => {
   });
 });
 
+describe('durabilidad', () => {
+  // Estampar y luego disparar perdería el aviso para siempre ante un 500
+  // pasajero: debeAvisar no volvería a autorizarlo nunca.
+  it('no da el aviso por hecho si el workflow falló', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    dispararWorkflow.mockResolvedValue('GHL workflow 500: boom');
+    await procesar('c1', deps);
+    const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect('notificado_at' in cambios).toBe(false);
+  });
+
+  it('estampa el aviso cuando el workflow sí salió', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    await procesar('c1', deps);
+    const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(typeof cambios.notificado_at).toBe('string');
+  });
+
+  it('libera el arriendo del contacto al terminar el turno', async () => {
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith(
+      'c1', expect.objectContaining({ procesando_hasta: null }), expect.anything(),
+    );
+  });
+
+  // El arriendo se toma antes del trabajo caro; si el trabajo falla y no se
+  // suelta, el reintento inmediato del cliente se descarta durante 90 s.
+  it('libera el arriendo si Claude falla', async () => {
+    generar.mockResolvedValue({ ok: false, error: 'refusal' });
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  it('libera el arriendo si el envío falla', async () => {
+    enviarMensaje.mockResolvedValue({ ok: false, error: 'GHL envío 403' });
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  // Si el aviso saliera antes, el asesor abriría la notificación y encontraría
+  // el contacto todavía en blanco.
+  it('avisa al equipo sólo después de escribir el contacto y la nota', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    const orden: string[] = [];
+    actualizarContacto.mockImplementation(async () => { orden.push('contacto'); return undefined; });
+    agregarNota.mockImplementation(async () => { orden.push('nota'); return undefined; });
+    dispararWorkflow.mockImplementation(async () => { orden.push('aviso'); return undefined; });
+    await procesar('c1', deps);
+    expect(orden).toEqual(['contacto', 'nota', 'aviso']);
+  });
+
+  it('estampa el aviso en una escritura aparte, no junto al resto del estado', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    await procesar('c1', deps);
+    const ultima = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(Object.keys(ultima)).toEqual(['notificado_at']);
+  });
+
+  // Si el latch no se persiste, la guarda del humano deja de ser permanente.
+  it('grita en el log si no pudo persistir el latch de humano', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    hidratar.mockResolvedValue(conversacionCon([entrante(), entrante({ id: 'del-asesor', direccion: 'outbound' })]));
+    guardar.mockResolvedValue('timeout');
+    const r = await procesar('c1', deps);
+    expect(r.desenlace).toBe('humano-presente');
+    expect(espia).toHaveBeenCalled();
+    espia.mockRestore();
+  });
+});
+
 describe('fallos', () => {
   it('no responde si la hidratación falla', async () => {
     hidratar.mockResolvedValue({ ok: false, error: 'GHL search 500' });
@@ -2298,6 +2923,15 @@ function debeAvisar(fila: Fila, datos: Datos, turnos: number): boolean {
   return turnos >= config.TOPE_TURNOS;
 }
 
+// El arriendo se toma ANTES del trabajo caro, así que hay que soltarlo también
+// cuando ese trabajo falla. Si no, el contacto queda bloqueado hasta 90 s — y
+// justo después de un turno fallido es cuando el cliente vuelve a escribir,
+// así que su reintento se descartaría en silencio. Eso es exactamente la espera
+// muda que este agente existe para evitar.
+async function liberarArriendo(contactId: string, db: Db): Promise<void> {
+  await guardar(contactId, { procesando_hasta: null }, db);
+}
+
 export async function procesar(
   contactId: string, deps: DepsProcesar,
 ): Promise<{ desenlace: Desenlace; detalle?: string }> {
@@ -2314,7 +2948,19 @@ export async function procesar(
   // Guarda 2, antes que nada: si el asesor ya entró, el agente no vuelve a
   // hablar aunque el cliente siga escribiendo.
   if (huboRespuestaHumana(conversacion, fila.enviados)) {
-    await guardar(contactId, { estado: 'humano' }, db);
+    const errorLatch = await guardar(contactId, { estado: 'humano' }, db);
+    // Este latch es lo único que hace permanente la guarda. Si no se persiste,
+    // el agente puede volver a hablarle encima al asesor en cuanto el cliente
+    // escriba otra vez, porque huboRespuestaHumana sólo mira los salientes
+    // posteriores al último entrante. Por eso se registra aparte y más fuerte
+    // que el resto de fallos de escritura.
+    if (errorLatch) {
+      console.error(
+        '[agente] NO SE PUDO MARCAR EL CONTACTO COMO ATENDIDO POR UN HUMANO.',
+        'El agente podría volver a responder sobre esta conversación.',
+        'contacto:', contactId, errorLatch,
+      );
+    }
     return { desenlace: 'humano-presente' };
   }
 
@@ -2344,14 +2990,20 @@ export async function procesar(
     },
     { anthropicKey, fetchImpl },
   );
-  if (!generado.ok) return { desenlace: 'error', detalle: generado.error };
+  if (!generado.ok) {
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'error', detalle: generado.error };
+  }
 
   const envio = await enviarMensaje(
     { contactId, canal, texto: generado.salida.respuesta }, escritura,
   );
   // El turno no se consume si el envío falló: el siguiente mensaje del cliente
   // lo reintenta en vez de darlo por perdido.
-  if (!envio.ok) return { desenlace: 'error', detalle: envio.error };
+  if (!envio.ok) {
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'error', detalle: envio.error };
+  }
 
   const datos = fusionarDatos(fila.datos, generado.salida.datos);
   const turnos = fila.turnos + 1;
@@ -2363,7 +3015,18 @@ export async function procesar(
       ? 'agotado'
       : 'activo';
 
-  await guardar(
+  // El aviso al equipo se dispara ANTES de estampar `notificado_at`, y sólo se
+  // estampa si salió bien. Al revés —estampar y luego disparar— un 500 pasajero
+  // de GHL perdería el aviso para siempre: `debeAvisar` no volvería a
+  // autorizarlo nunca. Y si eso ocurre en el turno del tope, el contacto queda
+  // 'agotado' y no hay ningún evento futuro que lo reintente: un lead
+  // cualificado del que nadie se entera, que es justo lo que este agente existe
+  // para evitar.
+  // El estado se persiste PRIMERO, en cuanto el mensaje salió, porque es lo
+  // único de lo que dependen las guardas del turno siguiente: perder `enviados`
+  // deja al agente confundiendo su propio saliente con el de un asesor. Las
+  // escrituras en GHL van después; ninguna guarda depende de ellas.
+  const errorGuardar = await guardar(
     contactId,
     {
       conversation_id: conversacion.conversationId,
@@ -2371,32 +3034,75 @@ export async function procesar(
       datos,
       turnos,
       estado,
+      // Se libera el arriendo del contacto: el turno terminó y el siguiente
+      // mensaje no debe esperar a que expire.
+      procesando_hasta: null,
       enviados: envio.messageId ? [...fila.enviados, envio.messageId] : fila.enviados,
-      ...(avisar ? { notificado_at: new Date().toISOString() } : {}),
     },
     db,
   );
 
-  // Estas tres escrituras no pueden hacer fallar el turno: al cliente ya se le
+  // Estas escrituras no pueden hacer fallar el turno: al cliente ya se le
   // respondió, que es lo que importa. Sus errores van al log y nada más.
-  const errores = [
+  const errores: (string | undefined)[] = [
+    errorGuardar,
     await actualizarContacto(contactId, datos, escritura),
     await agregarNota(contactId, resumenParaNota(datos, canal), escritura),
-    avisar ? await dispararWorkflow(contactId, escritura) : undefined,
-  ].filter(Boolean);
+  ];
 
-  if (errores.length > 0) {
-    console.error('[agente] Se respondió pero falló alguna escritura.', 'contacto:', contactId, errores);
+  // El aviso al equipo va AL FINAL, cuando el contacto ya tiene sus campos, sus
+  // tags y su nota escritos. Si se disparara antes, el asesor abriría la
+  // notificación y encontraría un contacto todavía en blanco.
+  //
+  // Y `notificado_at` se estampa sólo si el disparo salió, en una segunda
+  // escritura pequeña. Al revés —estampar junto con el resto y disparar
+  // después— un 500 pasajero de GHL perdería el aviso para siempre, porque
+  // `debeAvisar` no volvería a autorizarlo nunca.
+  if (avisar) {
+    const errorAviso = await dispararWorkflow(contactId, escritura);
+    errores.push(errorAviso);
+    if (!errorAviso) {
+      errores.push(await guardar(contactId, { notificado_at: new Date().toISOString() }, db));
+    }
+  }
+
+  const reales = errores.filter(Boolean);
+
+  if (reales.length > 0) {
+    console.error('[agente] Se respondió pero falló alguna escritura.', 'contacto:', contactId, reales);
   }
 
   return { desenlace: 'respondido' };
 }
 ```
 
+
+- [ ] **Step 3b: Escribir la migración del arriendo**
+
+Crear `supabase/migrations/0003_agente_arriendo.sql`:
+
+```sql
+-- Candado por CONTACTO, no sólo por mensaje.
+--
+-- `ultimo_mensaje_id` evita responder dos veces al MISMO mensaje, pero no
+-- serializa a un contacto que manda dos mensajes seguidos — que es lo normal en
+-- WhatsApp, donde la gente escribe "hola" y luego "quiero uniformes". Sin esta
+-- columna esos dos webhooks corren en paralelo: el cliente recibe dos
+-- respuestas, y las dos escrituras de estado pisan la misma lectura perdiendo
+-- el id de uno de los mensajes enviados. Ese id perdido hace que al turno
+-- siguiente el propio saliente del agente parezca de un humano, y el contacto
+-- quede mudo para siempre sin que nadie se entere.
+alter table public.agente_conversaciones
+  add column if not exists procesando_hasta timestamptz;
+```
+
+No ejecutar `npm run db:migrate`: el proyecto de Supabase del cliente sigue inaccesible. El
+archivo se commitea igual, como el 0002.
+
 - [ ] **Step 4: Ejecutar y verificar que pasa**
 
 Run: `npx vitest run tests/agente-procesar.test.ts`
-Expected: PASS, 21 pruebas.
+Expected: PASS, 29 pruebas.
 
 - [ ] **Step 5: Commit**
 
@@ -2653,6 +3359,13 @@ en GoHighLevel, mientras un asesor toma la conversación. Diseño completo en
 **Requisito del token:** el Private Integration necesita los scopes `conversations.readonly`,
 `conversations/message.readonly`, `conversations/message.write` y `contacts.write`.
 
+**Orden de despliegue.** Hay dos migraciones: `0002_agente.sql` crea la tabla y
+`0003_agente_arriendo.sql` añade la columna `procesando_hasta`, que el código usa en cada
+mensaje. `npm run db:migrate` aplica las pendientes en orden, pero **hay que ejecutarlo antes
+de desplegar el código**: si el código llega primero, cada intento de tomar el candado recibe
+un error de columna inexistente y el agente no responde a nadie. Falla cerrado y ruidoso, no
+en silencio, pero el orden ahorra el susto.
+
 **El agente calla solo** en cuanto un humano responde desde GHL, y tras 4 respuestas
 automáticas. Para reactivarlo en un contacto:
 
@@ -2694,9 +3407,52 @@ consolas. Hay que confirmarlos con el dueño del proyecto.
 2. **Cargar las variables nuevas en Vercel** (`LUXE_AGENTE_WEBHOOK_SECRET`,
    `LUXE_ANTHROPIC_API_KEY`, `LUXE_OPENAI_API_KEY`) y **eliminar allí** cualquier
    `GHL_PRIVATE_INTEGRATION`, `ANTHROPIC_API_KEY` u `OPENAI_API_KEY` sin prefijo.
-3. **Aplicar la migración en producción:** `npm run db:migrate`.
-4. **Primera prueba en real:** escribir desde un WhatsApp propio antes de dejar el workflow
+3. **Restaurar Supabase y aplicar las DOS migraciones, antes de desplegar el código.** El
+   proyecto `ayjcduotuvvjdwgyuvih` no respondía el 2026-08-24 — ni DNS ni pooler — y las
+   variables de producción en Vercel apuntan a él. Hasta que se resuelva, la Fase 1 tampoco
+   puede guardar leads. Una vez restaurado (o migrado a un proyecto nuevo, actualizando las
+   variables en Vercel y en `.env.local`): `npm run db:migrate`, que aplica `0002_agente.sql`
+   y `0003_agente_arriendo.sql` en orden. Si el código se despliega antes que la 0003, cada
+   mensaje falla al tomar el candado y el agente no responde a nadie.
+
+4. **Verificar el candado contra la base ya restaurada.** Su filtro de PostgREST no se pudo
+   probar contra ninguna base real (Supabase estaba caído al escribirlo). Basta un PATCH con
+   curl sobre una fila de prueba comprobando que devuelve 1 fila la primera vez y 0 la segunda
+   dentro de los 90 s. La prueba de humo equivalente y más barata: mandar dos WhatsApp
+   seguidos y comprobar que llega exactamente UNA respuesta.
+5. **Primera prueba en real:** escribir desde un WhatsApp propio antes de dejar el workflow
    activo para todos. Comprobar en la tabla que `turnos` sube a 1 y que `enviados` trae el id.
-5. **Comprobar que el bucle no existe:** tras esa primera respuesta, verificar que no llega
+6. **Revalidar el esquema de salida contra la API real** si alguien lo tocó. Ninguna prueba
+   del repo puede hacerlo —todas simulan `fetch`—, así que un esquema inválido pasaría la
+   suite entera y fallaría con 400 en cada mensaje de producción. Basta una llamada real con
+   el esquema puesto; ver el comentario en `lib/agente/cerebro.ts` sobre por qué `producto`
+   usa `anyOf`.
+7. **Comprobar que el bucle no existe:** tras esa primera respuesta, verificar que no llega
    un segundo mensaje del agente. Si llega, la Guarda 1 no está funcionando: **apagar el
    workflow en GHL de inmediato** antes de seguir depurando.
+
+---
+
+## Ola de arreglo final (posterior a la revisión de rama completa)
+
+Los bloques de código de este plan son **anteriores** a la revisión de la rama completa. Esa
+revisión encontró un bloqueante y cinco hallazgos importantes que sólo se ven mirando los
+ocho módulos juntos, y que se aplicaron después. El código en git es la referencia; este plan
+es el registro del diseño. Lo que cambió:
+
+| # | Archivo | Qué |
+|---|---|---|
+| 1 | `app/api/ghl/webhook/route.ts` | **Bloqueante.** Faltaba `export const maxDuration = 60`. `after()` en Vercel se traduce a `waitUntil`, que sigue acotado por el presupuesto de la función (10 s por defecto) mientras el pipeline tarda 5–20 s. |
+| 2 | `lib/agente/cerebro.ts` | `max_tokens` de 1024 a 4096 —es tope duro sobre thinking *más* texto— y comprobación de `stop_reason: 'max_tokens'`, que llega con HTTP 200 y JSON a medias. |
+| 3 | `lib/agente/medios.ts` | Tope de 25 MB para audio (los vídeos entran por esa rama y no tenían ninguno) y medición por `content-length` antes de descargar. |
+| 4 | `lib/agente/acciones.ts` | Log cuando GHL no devuelve `messageId`: el único caso en que la guarda del humano se equivoca y calla un contacto para siempre. |
+| 5 | `lib/agente/cerebro.ts` + `procesar.ts` | Los salientes escritos por asesores se marcan `[mensaje escrito por un asesor humano]`. Sin eso el modelo los leía como propios y podía reafirmar precios y plazos que un humano dio hace meses. |
+| 6 | `app/api/ghl/webhook/route.ts` | Se registran los cinco desenlaces, no sólo `error`. Los otros cuatro son decisiones deliberadas de no responder y eran invisibles. |
+| 7 | `lib/agente/canal.ts` | `esCorreo` derivado del diccionario de canales en vez de duplicarlo. |
+| 8–11 | varios | `console.warn` para el webhook sin contactId, prueba de cabecera vacía, `FILA_NUEVA` completa. |
+
+**Pendiente conocido, no arreglado a propósito:** la comprobación por cabecera del punto 3
+quedó antes del descarte de tipos no soportados, así que un PDF de más de 5 MB cuenta como
+fallo y el modelo pide el dato por escrito. Arreglo: mover ese bloque después del
+`if (clase === 'otro') continue;`. Y la rama nueva no tiene cobertura, porque el doble de
+descarga de las pruebas nunca define `content-length`.

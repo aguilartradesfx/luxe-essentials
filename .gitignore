@@ -24,3 +24,7 @@ IMÁGENES/
 
 # Imágenes generadas (fuentes PNG grandes). Se optimizan a public/images/.
 IMAGENES-GENERADAS/
+
+# Base comercial del ERP: 3.340 clientes reales con nombres, cédulas, teléfonos,
+# correos y direcciones. Datos personales — NUNCA entran al repositorio.
+Database/
