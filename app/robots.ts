@@ -8,7 +8,8 @@ export default function robots(): MetadataRoute.Robots {
       allow: '/',
       // Los endpoints del formulario y del webhook de GHL no son contenido:
       // sólo aceptan POST y no tienen nada que indexar.
-      disallow: '/api/',
+      // El banco de pruebas es una herramienta interna, no contenido.
+      disallow: ['/api/', '/q7m4'],
     },
     sitemap: `${SITE_URL}/sitemap.xml`,
   };
