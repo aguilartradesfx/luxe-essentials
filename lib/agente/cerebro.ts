@@ -52,6 +52,16 @@ const salidaSchema = z.object({
 
 export type Salida = z.infer<typeof salidaSchema>;
 
+// Consumo real del turno. Se expone para que quien llame pueda medir el coste
+// sin volver a estimarlo a ojo: el banco de pruebas lo muestra en vivo, y el
+// orquestador puede registrarlo si algún día hace falta.
+export type Uso = {
+  entrada: number;
+  salida: number;
+  cacheEscrito: number;
+  cacheLeido: number;
+};
+
 export type EntradaCerebro = {
   mensajes: MensajeReal[];
   mios: string[];
@@ -63,7 +73,7 @@ export type EntradaCerebro = {
 };
 
 type Deps = { anthropicKey: string; fetchImpl?: typeof fetch };
-type Resultado = { ok: true; salida: Salida } | { ok: false; error: string };
+type Resultado = { ok: true; salida: Salida; uso: Uso } | { ok: false; error: string };
 
 type Bloque = BloqueImagen | { type: 'text'; text: string };
 
@@ -168,7 +178,11 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `Anthropic ${res.status}: ${texto.slice(0, 200)}` };
 
-    let datos: { stop_reason?: string; content?: { type?: string; text?: string }[] };
+    let datos: {
+      stop_reason?: string;
+      content?: { type?: string; text?: string }[];
+      usage?: Record<string, number>;
+    };
     try {
       datos = JSON.parse(texto);
     } catch {
@@ -208,7 +222,17 @@ export async function generar(entrada: EntradaCerebro, deps: Deps): Promise<Resu
       return { ok: false, error: `La salida no cumple el esquema: ${parseado.error.issues[0]?.message}` };
     }
 
-    return { ok: true, salida: parseado.data };
+    const u = datos.usage ?? {};
+    return {
+      ok: true,
+      salida: parseado.data,
+      uso: {
+        entrada: u.input_tokens ?? 0,
+        salida: u.output_tokens ?? 0,
+        cacheEscrito: u.cache_creation_input_tokens ?? 0,
+        cacheLeido: u.cache_read_input_tokens ?? 0,
+      },
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

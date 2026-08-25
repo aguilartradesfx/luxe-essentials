@@ -13,6 +13,23 @@ type Datos = {
 
 const VACIOS: Datos = { nombre: null, email: null, telefono: null, producto: null, ubicacion: null };
 
+type Uso = { entrada: number; salida: number; cacheEscrito: number; cacheLeido: number };
+const SIN_USO: Uso = { entrada: 0, salida: 0, cacheEscrito: 0, cacheLeido: 0 };
+
+// Tarifas de Claude Opus 5 por millón de tokens. La caché se lee a una décima
+// parte y se escribe a 1,25x, que es de donde sale casi todo el ahorro.
+const TARIFA = { entrada: 5, salida: 25, cacheEscrito: 6.25, cacheLeido: 0.5 };
+
+function costo(u: Uso): number {
+  return (
+    (u.entrada * TARIFA.entrada +
+      u.salida * TARIFA.salida +
+      u.cacheEscrito * TARIFA.cacheEscrito +
+      u.cacheLeido * TARIFA.cacheLeido) /
+    1_000_000
+  );
+}
+
 const ETIQUETAS: Record<keyof Datos, string> = {
   nombre: 'Nombre',
   email: 'Correo',
@@ -44,6 +61,9 @@ export function Taller() {
   const [copiado, setCopiado] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [guardado, setGuardado] = useState('');
+  // Acumulado desde que se abrió la pestaña. No se reinicia al limpiar el chat:
+  // en una sesión de estrés lo que importa es el gasto total, no el del hilo.
+  const [uso, setUso] = useState<Uso>(SIN_USO);
   const finRef = useRef<HTMLDivElement>(null);
   const notasRef = useRef<HTMLTextAreaElement>(null);
 
@@ -78,6 +98,14 @@ export function Taller() {
       }
       setTurnos([...historial, { de: 'agente', texto: d.respuesta, frases: contarFrases(d.respuesta) }]);
       setDatos(d.datos);
+      if (d.uso) {
+        setUso((a) => ({
+          entrada: a.entrada + (d.uso.entrada ?? 0),
+          salida: a.salida + (d.uso.salida ?? 0),
+          cacheEscrito: a.cacheEscrito + (d.uso.cacheEscrito ?? 0),
+          cacheLeido: a.cacheLeido + (d.uso.cacheLeido ?? 0),
+        }));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Fallo de red');
     } finally {
@@ -219,6 +247,17 @@ export function Taller() {
           <p className="text-xs text-teal">
             Prueba el cerebro del agente: el prompt, el tono y la extracción de datos. No toca
             GoHighLevel ni la base de datos.
+          </p>
+          <p className="mt-1 text-xs text-teal/80">
+            <span className="text-navy">{turnos.filter((t) => t.de === 'agente').length}</span>{' '}
+            respuestas en este hilo · gasto de la sesión{' '}
+            <span className="text-navy">${costo(uso).toFixed(4)}</span>
+            {uso.salida > 0 && (
+              <span className="text-teal/60">
+                {' '}({(uso.entrada + uso.cacheLeido + uso.cacheEscrito).toLocaleString('es-CR')} in
+                / {uso.salida.toLocaleString('es-CR')} out)
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">

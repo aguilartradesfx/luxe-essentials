@@ -9,10 +9,6 @@ export const runtime = 'nodejs';
 // adaptativo puede estirarla. Mismo criterio que el webhook del agente.
 export const maxDuration = 60;
 
-// Tope de turnos por sesión. Esto gasta cuota real de Anthropic, así que si la
-// clave se filtrara, el daño queda acotado a conversaciones cortas.
-const TOPE_TURNOS = 40;
-
 function claveValida(recibida: string | null): boolean {
   const esperada = process.env.LUXE_TALLER_CLAVE;
   if (!esperada || !recibida) return false;
@@ -39,12 +35,10 @@ export async function POST(request: Request) {
   if (turnos.length === 0) {
     return NextResponse.json({ ok: false, error: 'No hay ningún mensaje.' }, { status: 400 });
   }
-  if (turnos.length > TOPE_TURNOS) {
-    return NextResponse.json(
-      { ok: false, error: `Esta sesión llegó a ${TOPE_TURNOS} turnos. Reinicia para seguir.` },
-      { status: 429 },
-    );
-  }
+  // Sin tope de turnos: es un banco de pruebas de estrés y el freno estorbaba.
+  // A cambio se devuelve el consumo de cada turno, y la interfaz lo va sumando
+  // a la vista — informar en vez de bloquear. Ojo: el historial completo viaja
+  // en cada turno, así que el coste de una sesión crece de forma cuadrática.
 
   const esCorreo = cuerpo.canal === 'Email';
   const tipo = esCorreo ? ('TYPE_EMAIL' as const) : ('TYPE_WHATSAPP' as const);
@@ -86,5 +80,6 @@ export async function POST(request: Request) {
     ok: true,
     respuesta: generado.salida.respuesta,
     datos: fusionarDatos(datosPrevios, generado.salida.datos),
+    uso: generado.uso,
   });
 }
