@@ -40,7 +40,10 @@ export function Taller() {
   const [error, setError] = useState('');
 
   const [notas, setNotas] = useState('');
+  const [etiqueta, setEtiqueta] = useState('');
   const [copiado, setCopiado] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [guardado, setGuardado] = useState('');
   const finRef = useRef<HTMLDivElement>(null);
   const notasRef = useRef<HTMLTextAreaElement>(null);
 
@@ -117,9 +120,9 @@ export function Taller() {
     setError('');
   }
 
-  async function copiarSesion() {
+  function comoMarkdown(): string {
     const faltan = (Object.keys(ETIQUETAS) as (keyof Datos)[]).filter((k) => !datos[k]);
-    const md = [
+    return [
       `# Sesión de prueba — agente Luxe`,
       `Canal: ${canal} · ${new Date().toLocaleString('es-CR')}`,
       ``,
@@ -137,9 +140,49 @@ export function Taller() {
       `## Notas`,
       notas.trim() || '(sin notas)',
     ].join('\n');
-    await navigator.clipboard.writeText(md);
+  }
+
+  async function copiarSesion() {
+    await navigator.clipboard.writeText(comoMarkdown());
     setCopiado(true);
     setTimeout(() => setCopiado(false), 2000);
+  }
+
+  // Respaldo cuando la base no responde: la sesión se descarga en vez de
+  // perderse. El objetivo de guardar es que estas observaciones lleguen a
+  // alguien; un error en pantalla no cumple eso.
+  function descargar() {
+    const url = URL.createObjectURL(new Blob([comoMarkdown()], { type: 'text/markdown' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `taller-${etiqueta.trim().replace(/\s+/g, '-') || 'sesion'}-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function guardar() {
+    if (guardando) return;
+    setGuardando(true);
+    setGuardado('');
+    try {
+      const res = await fetch('/api/q7m4/notas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clave, etiqueta, canal, turnos, datos, notas }),
+      });
+      const d = await res.json();
+      if (res.ok && d.ok) {
+        setGuardado(`Guardado en la base · ${String(d.id).slice(0, 8)}`);
+      } else {
+        descargar();
+        setGuardado(`La base no respondió, así que se descargó el archivo. (${d.error ?? res.status})`);
+      }
+    } catch (e) {
+      descargar();
+      setGuardado(`Sin conexión con la base; se descargó el archivo. (${e instanceof Error ? e.message : 'red'})`);
+    } finally {
+      setGuardando(false);
+    }
   }
 
   if (!dentro) {
@@ -277,10 +320,24 @@ export function Taller() {
               ref={notasRef}
               value={notas}
               onChange={(e) => setNotas(e.target.value)}
-              rows={14}
+              rows={12}
               placeholder="Lo que detectes: respuestas largas, datos que no captó, tono raro…"
               className="mt-3 w-full resize-y rounded-lg border border-[var(--carta-border)] bg-white p-3 font-mono text-xs leading-relaxed text-navy placeholder:text-teal/50"
             />
+            <input
+              value={etiqueta}
+              onChange={(e) => setEtiqueta(e.target.value)}
+              placeholder="Nombre de esta sesión (opcional)"
+              className="mt-3 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-xs text-navy placeholder:text-teal/50"
+            />
+            <button
+              onClick={guardar}
+              disabled={guardando || turnos.length === 0}
+              className="mt-2 w-full rounded-lg bg-navy px-4 py-2.5 text-sm font-medium text-beige hover:bg-teal disabled:opacity-40"
+            >
+              {guardando ? 'Guardando…' : 'Guardar sesión'}
+            </button>
+            {guardado && <p className="mt-2 text-[11px] leading-relaxed text-teal">{guardado}</p>}
           </div>
         </aside>
       </div>
