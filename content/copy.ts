@@ -223,15 +223,18 @@ export const copy = {
   },
 
   footer: {
-    // Teléfono, correo y redes siguen sin confirmar: el cliente dejó esas tres
-    // preguntas en blanco. La dirección sí está resuelta: no tienen bodega
-    // porque no manejan inventario, así que sólo se indica el país.
+    // La dirección no es una omisión: no tienen bodega porque no manejan
+    // inventario, así que sólo se indica el país. `redes` va como texto
+    // plano y no como enlace porque los perfiles aún no existen — el día que
+    // existan, esto pasa a ser una lista de <a>, no un cambio de copy.
     contactoTitulo: 'Contacto',
-    telefono: 'Pendiente de confirmar',
-    email: 'Pendiente de confirmar',
+    telefono: '+506 6140 2511',
+    telefonoHref: 'tel:+50661402511',
+    email: 'info@luxeessentialscr.com',
+    emailHref: 'mailto:info@luxeessentialscr.com',
     direccion: 'Costa Rica',
     horario: 'Lunes a viernes, 8:00 a 17:00',
-    redes: 'Pendiente de confirmar',
+    redes: 'Luxe Essentials',
     derechos: 'Luxe Essentials. Todos los derechos reservados.',
   },
 

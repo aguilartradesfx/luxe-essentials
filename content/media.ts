@@ -76,13 +76,6 @@ export const MEDIA = [
     pending: false,
   },
   {
-    id: 'planta-bordado',
-    ratio: '4:3',
-    alt: 'Hilera de máquinas bordadoras industriales de cabezales múltiples bordando sobre tela azul marino',
-    brief: 'Bordado industrial',
-    pending: false,
-  },
-  {
     id: 'hero-tela',
     ratio: '21:9',
     alt: 'Camisa corporativa azul marino y filipina de chef negra con vivo verde, en primer plano',
@@ -232,6 +225,16 @@ export const MEDIA = [
 ] as const satisfies readonly MediaEntry[];
 
 export type MediaId = (typeof MEDIA)[number]['id'];
+
+// El índice es un Map, así que una entrada repetida no explota: pisa
+// silenciosamente a la anterior y su `alt`/`ratio` dejan de usarse sin que
+// nada falle. Ya pasó una vez con 'planta-bordado'. Este chequeo corre al
+// importar el módulo, o sea durante `next build`, y rompe el build en vez de
+// dejar pasar una entrada muerta.
+const DUPLICADOS = MEDIA.map((e) => e.id).filter((id, i, ids) => ids.indexOf(id) !== i);
+if (DUPLICADOS.length > 0) {
+  throw new Error(`Ids repetidos en el manifest de medios: ${[...new Set(DUPLICADOS)].join(', ')}`);
+}
 
 const INDEX = new Map(MEDIA.map((e) => [e.id, e]));
 

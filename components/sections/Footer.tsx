@@ -14,10 +14,19 @@ export function Footer() {
         <div>
           <h2 className="text-sm font-medium text-beige">{copy.footer.contactoTitulo}</h2>
           <ul className="mt-5 space-y-2 text-sm text-sky">
-            <li>{copy.footer.telefono}</li>
-            <li>{copy.footer.email}</li>
+            <li>
+              <a href={copy.footer.telefonoHref} className="hover:text-beige">
+                {copy.footer.telefono}
+              </a>
+            </li>
+            <li>
+              <a href={copy.footer.emailHref} className="hover:text-beige">
+                {copy.footer.email}
+              </a>
+            </li>
             <li>{copy.footer.direccion}</li>
             <li>{copy.footer.horario}</li>
+            {/* Sin <a>: los perfiles de redes todavía no existen. */}
             <li>{copy.footer.redes}</li>
           </ul>
         </div>
