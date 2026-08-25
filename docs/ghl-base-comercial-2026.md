@@ -128,3 +128,56 @@ no-prospectar              (77 registros contables/test)
 5. Enriquecer `segmento_negocio` en una segunda pasada.
 
 Ya existe acceso API a GHL en este repo (`lib/ghl.ts`, `scripts/ghl-discover.mjs`, credenciales en `.env.local`), así que los campos también se pueden crear vía `POST /locations/{locationId}/customFields` si la IA de GHL se queda corta.
+
+## 8. Importación ejecutada
+
+**3.340 contactos creados** en la subcuenta `NvzW6XEGkUCoKxulcRGG` (Luxe Essentials), sin duplicados: los 3.340 `ID origen ERP` mapean a 3.340 `contactId` únicos.
+
+Se usó `POST /contacts/` y **no** `/contacts/upsert`: en esta base los emails y teléfonos repetidos son sucursales distintas, no duplicados a fusionar. Requiere `allowDuplicateContact: true` en la subcuenta, verificado antes de correr.
+
+| Tag | Contactos |
+|---|---|
+| `origen-erp-2026` | 3.340 |
+| `canal-on-premise` | 2.309 |
+| `canal-off-premise` | 1.031 |
+| `zona-revision-manual` | 526 |
+| `ubicacion-sin-datos` | 526 |
+| `sin-email` | 735 |
+| `email-compartido` | 339 |
+| `telefono-placeholder` | 127 |
+| `no-prospectar` | 75 |
+
+### Dos correos que GHL rechazó con 422
+
+- **ERP 1766 · CAFE ROJO** — `facturas:caferojosanjose@gmail.com`. El `facturas:` es una etiqueta de captura del ERP pegada al correo. Se quitó el prefijo.
+- **ERP 2771 · No Hay Dos Sin Tres** — `tapisytapascr.@gmail.com`, con punto pegado a la arroba. **Quedó sin email**: la reparación no es única (`tapisytapascr@` o `tapisytapas.cr@`) y adivinar significa escribirle a un desconocido. Lleva tag `email-formato-revisar`.
+
+## 9. Enriquecimiento de `segmento_negocio`
+
+`scripts/clasificar-segmento.mjs` infiere el segmento por patrones sobre el nombre.
+
+**El nombre comercial manda; la razón social es sólo respaldo acotado.** La sociedad dueña describe el vehículo legal, no el local: `MATSURI SABANA` está inscrito como `CO DISTRIBUIDORA ORIENTAL S.A` y no es un distribuidor. El respaldo por razón social se limita a los rubros que sí nombran al establecimiento — quedan fuera Distribuidor y Spa & Wellness, que resultaron ser ruido de sociedad tenedora.
+
+Criterio general: **precisión por encima de cobertura**. Ante duda queda `Por clasificar`, porque un segmento equivocado manda la oferta de textil incorrecta y eso cuesta más que un campo vacío.
+
+Cobertura: **1.785 de 3.340 (53%)**.
+
+| Segmento | Contactos |
+|---|---|
+| Restaurante | 792 |
+| Supermercado | 213 |
+| Hotel | 209 |
+| Tienda de conveniencia | 199 |
+| Cafetería | 163 |
+| Bar | 74 |
+| Panadería | 44 |
+| Resort | 41 |
+| Distribuidor | 31 |
+| Catering | 15 |
+| Abastecedor | 3 |
+| Spa & Wellness | 1 |
+| *Por clasificar* | *1.555* |
+
+Los 1.555 restantes son marcas sin sustantivo de rubro (`BACCHUS`, `LA ALACENA`, `POMODORO`) o nombres de persona física. No se pueden resolver por patrón; requieren revisión humana o una pasada con LLM.
+
+**Sin marca de procedencia en GHL.** Todos los valores actuales son inferidos, así que la distinción "inferido vs. confirmado" no aporta todavía; agregar un tag habría exigido reenviar el arreglo completo de tags en cada `PUT`, con riesgo de pisar tags puestos a mano. El detalle fila por fila queda en `out/ghl/segmentos.csv`.
