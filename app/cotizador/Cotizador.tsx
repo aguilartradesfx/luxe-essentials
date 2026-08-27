@@ -17,6 +17,29 @@ type SkuUI = { id: string; nombre: string; familia: string };
 
 type Cliente = { nombre: string; empresa: string; email: string };
 
+// Lo que deja el agente cuando captura una intención por WhatsApp: quién es
+// el cliente, qué línea le interesa y cuánto pidió, en texto libre. `cliente`
+// es un jsonb sin forma fija — se lee con `textoDe` para no asumir que un
+// campo existe o es string. Ver Tarea 9 (`registrarIntencion`) y Tarea 10.
+type Borrador = {
+  id: string;
+  created_at: string;
+  contact_id: string | null;
+  cliente: Record<string, unknown>;
+};
+
+// Lo que queda visible tras apretar "Usar" en un borrador: el pedido del
+// cliente, en sus propias palabras, para que el vendedor elija los SKUs
+// contra eso — no contra un número que alguien más interpretó por él.
+type Recordatorio = { producto: string; cantidadTexto: string };
+
+// El jsonb `cliente` de un borrador no tiene forma garantizada: se lee campo
+// por campo, y cualquier cosa que no sea string se trata como ausente en vez
+// de reventar la pantalla.
+function textoDe(valor: unknown): string {
+  return typeof valor === 'string' ? valor : '';
+}
+
 // Una línea por SKU, tal como la ve el vendedor. `cantidadTexto` guarda
 // exactamente lo que hay en el input: si se guardara ya como número, borrar
 // el campo para escribir uno nuevo forzaría a mostrar "0" en vez de vacío.
@@ -75,12 +98,29 @@ function colones(valor: number): string {
   return `₡${Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
+// Fecha y hora en formato fijo (dd/mm/aaaa hh:mm), sin depender de la
+// configuración regional del navegador del vendedor — mismo motivo que
+// `colones` evita `toLocaleString` para los montos.
+function formatearFecha(iso: string): string {
+  const f = new Date(iso);
+  if (Number.isNaN(f.getTime())) return iso;
+  const dos = (n: number) => String(n).padStart(2, '0');
+  return `${dos(f.getDate())}/${dos(f.getMonth() + 1)}/${f.getFullYear()} ${dos(f.getHours())}:${dos(f.getMinutes())}`;
+}
+
 export default function Cotizador() {
   const [clave, setClave] = useState('');
   const [dentro, setDentro] = useState(false);
   const [claveError, setClaveError] = useState('');
   const [entrando, setEntrando] = useState(false);
   const [skus, setSkus] = useState<SkuUI[]>([]);
+
+  // La cola de borradores del agente (Tarea 10): se pide una sola vez, justo
+  // al validar la clave — no en cada tecla, no en cada render.
+  const [borradores, setBorradores] = useState<Borrador[]>([]);
+  const [cargandoBorradores, setCargandoBorradores] = useState(false);
+  const [borradoresError, setBorradoresError] = useState('');
+  const [recordatorio, setRecordatorio] = useState<Recordatorio | null>(null);
 
   const [cliente, setCliente] = useState<Cliente>(CLIENTE_VACIO);
   const [busqueda, setBusqueda] = useState('');
@@ -217,6 +257,43 @@ export default function Cotizador() {
     setPreviaError('');
   }
 
+  // La cola de borradores del agente: `/api/cotizacion/borradores` es POST
+  // (la clave viaja en el cuerpo, no en la URL) y devuelve solo lo que el
+  // agente capturó — sin líneas ni totales, porque nunca los tuvo. Un fallo
+  // acá no bloquea la pantalla: el vendedor puede seguir armando cotizaciones
+  // a mano aunque la cola no cargue.
+  async function cargarBorradores(claveActual: string) {
+    setCargandoBorradores(true);
+    setBorradoresError('');
+    try {
+      const res = await fetch('/api/cotizacion/borradores', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clave: claveActual }),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        setBorradoresError(datos.error ?? `Error ${res.status}`);
+        return;
+      }
+      setBorradores(datos.borradores ?? []);
+    } catch {
+      setBorradoresError('Fallo de red.');
+    } finally {
+      setCargandoBorradores(false);
+    }
+  }
+
+  // Convierte un borrador en el punto de partida de una cotización real:
+  // rellena los datos del cliente y deja un recordatorio visible con el
+  // pedido tal como lo escribió — el vendedor elige los SKUs contra eso, la
+  // pantalla no interpreta "unos 300" por su cuenta.
+  function usarBorrador(borrador: Borrador) {
+    const c = borrador.cliente ?? {};
+    setCliente({ nombre: textoDe(c.nombre), empresa: textoDe(c.empresa), email: textoDe(c.email) });
+    setRecordatorio({ producto: textoDe(c.producto), cantidadTexto: textoDe(c.cantidadTexto) });
+  }
+
   const correoValido = cliente.email.trim().length > 0;
   // El servidor (cotizacionSchema en lib/validation.ts) exige `cliente.nombre`
   // igual que exige el correo. El botón tiene que pedir lo mismo que el
@@ -246,6 +323,9 @@ export default function Cotizador() {
       }
       setSkus(datos.skus);
       setDentro(true);
+      // No se espera esta llamada: la cola de borradores no debe demorar la
+      // entrada a la pantalla principal.
+      void cargarBorradores(clave);
     } catch {
       setClaveError('Fallo de red.');
     } finally {
@@ -335,6 +415,71 @@ export default function Cotizador() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_22rem]">
         <section className="space-y-6">
+          <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
+            <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Borradores pendientes</h2>
+            <p className="mt-1 text-xs text-teal/70">
+              Intención capturada por el agente de WhatsApp — no son cotizaciones calculables,
+              solo el punto de partida para armar una.
+            </p>
+            {cargandoBorradores && <p className="mt-3 text-xs text-teal/70">Cargando…</p>}
+            {!cargandoBorradores && borradoresError && (
+              <p className="mt-3 text-xs text-red-700">{borradoresError}</p>
+            )}
+            {!cargandoBorradores && !borradoresError && borradores.length === 0 && (
+              <p className="mt-3 text-sm text-teal">No hay borradores pendientes.</p>
+            )}
+            {!cargandoBorradores && borradores.length > 0 && (
+              <ul className="mt-3 divide-y divide-[var(--carta-border)]">
+                {borradores.map((borrador) => {
+                  const c = borrador.cliente ?? {};
+                  const nombre = textoDe(c.nombre) || 'Sin nombre';
+                  const empresa = textoDe(c.empresa);
+                  const email = textoDe(c.email) || 'Sin correo';
+                  const producto = textoDe(c.producto) || 'Producto sin especificar';
+                  const cantidadTexto = textoDe(c.cantidadTexto) || 'cantidad no indicada';
+                  return (
+                    <li key={borrador.id} className="py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-navy">
+                            {nombre}
+                            {empresa ? ` · ${empresa}` : ''}
+                          </p>
+                          <p className="text-xs text-teal">{email}</p>
+                          <p className="mt-1 text-xs text-navy">
+                            {producto} —{' '}
+                            {/* La cantidad se muestra literal, tal como la dijo el cliente:
+                                "unos 300" no es 300, y convertirlo es criterio del vendedor. */}
+                            <span className="font-medium">«{cantidadTexto}»</span>
+                          </p>
+                          <p className="mt-1 text-xs text-teal/70">{formatearFecha(borrador.created_at)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => usarBorrador(borrador)}
+                          className="shrink-0 rounded-lg border border-[var(--carta-border)] px-3 py-1.5 text-xs font-medium text-navy hover:bg-navy hover:text-beige"
+                        >
+                          Usar
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {recordatorio && (
+            <div className="rounded-xl border border-[var(--carta-border)] bg-[color:var(--carta-border)]/30 p-4 text-sm text-navy">
+              El cliente pidió, en sus propias palabras:{' '}
+              <span className="font-medium">
+                «{recordatorio.cantidadTexto || 'cantidad no indicada'}» de{' '}
+                {recordatorio.producto || 'producto sin especificar'}
+              </span>
+              . Elegí los SKUs contra ese pedido — la cantidad de arriba no está interpretada.
+            </div>
+          )}
+
           <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
             <label htmlFor="buscador" className="text-xs font-medium uppercase tracking-wide text-teal">
               Buscar producto

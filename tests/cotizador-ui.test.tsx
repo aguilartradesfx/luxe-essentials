@@ -105,6 +105,13 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
     }
 
+    if (url.endsWith('/api/cotizacion/borradores')) {
+      // Tarea 10: se llama justo al entrar. Sin borradores reales en estas
+      // pruebas — lo que le interesa a esta suite es el flujo de armado de
+      // la cotización, no la cola del agente.
+      return new Response(JSON.stringify({ ok: true, borradores: [] }), { status: 200 });
+    }
+
     if (url.endsWith('/api/cotizacion/previsualizar')) {
       if (opciones.fallarRed === 'previsualizar') {
         throw new TypeError('Failed to fetch');
