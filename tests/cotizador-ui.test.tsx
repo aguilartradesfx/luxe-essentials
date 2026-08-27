@@ -9,6 +9,15 @@ import Cotizador from '@/app/cotizador/Cotizador';
 // 300ms) sale de `/api/cotizacion/previsualizar`. Estas pruebas simulan las
 // dos rutas — antes ejercitaban `calcular()` y `CATALOGO` directo en el
 // navegador, ahora ejercitan el fetch que los reemplaza.
+//
+// Revisión posterior a la Tarea 8: se agregaron las pruebas que faltaban
+// sobre el bloqueo de líneas incompletas, la protección contra doble envío,
+// el rechazo visible de decimales, el orden total/IVA, el motivo con
+// descuento cero, los mensajes de red en español y la condición del botón
+// alineada con lo que exige el servidor. Cada una se verificó en rojo
+// (revirtiendo temporalmente el fix correspondiente) antes de dejarla en
+// verde — ver el reporte de la Tarea 8 para el detalle de qué mutante mata
+// cada una.
 
 const SKUS = [
   { id: 'set-600-hilos-king', nombre: 'set de 600 hilos king', familia: 'Sets de cama' },
@@ -16,11 +25,12 @@ const SKUS = [
   { id: 'inserto-duvet-king', nombre: 'inserto de duvet king', familia: 'Edredones' },
 ];
 
-// Réplica mínima de lo que hace `calcular()` en el servidor para las dos
-// líneas que estas pruebas necesitan: sets de cama (escalón de 16 → 10%) y
-// todo lo demás sin descuento. No es el motor real —vive en el servidor y
-// esta prueba no debe reimportarlo, sería volver a arrastrar el catálogo—,
-// solo lo justo para que la pantalla tenga algo coherente que pintar.
+// Réplica mínima de lo que hace `calcular()` en el servidor para las líneas
+// que estas pruebas necesitan: sets de cama (escalón de 16 → 10%, y "sin
+// descuento" por debajo de 10) y todo lo demás sin descuento. No es el motor
+// real —vive en el servidor y esta prueba no debe reimportarlo, sería volver
+// a arrastrar el catálogo—, solo lo justo para que la pantalla tenga algo
+// coherente que pintar.
 function cotizacionSimulada(lineas: { skuId: string; cantidad: number }[], tasaIva: number, bordadoEspecial: boolean) {
   const totalSetsDeCama = lineas
     .filter((l) => l.skuId === 'set-600-hilos-king')
@@ -62,7 +72,14 @@ function cotizacionSimulada(lineas: { skuId: string; cantidad: number }[], tasaI
   };
 }
 
-function mockFetch() {
+type OpcionesFetch = {
+  // Si se define, `/api/cotizacion` responde con éxito la primera vez que se
+  // llega a este número de llamadas y sigue existiendo (para probar qué pasa
+  // si, pese a todo, se dispara una segunda petición).
+  fallarRed?: 'previsualizar' | 'cotizacion';
+};
+
+function mockFetch(opciones: OpcionesFetch = {}) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString();
     const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
@@ -75,8 +92,21 @@ function mockFetch() {
     }
 
     if (url.endsWith('/api/cotizacion/previsualizar')) {
+      if (opciones.fallarRed === 'previsualizar') {
+        throw new TypeError('Failed to fetch');
+      }
       const cotizacion = cotizacionSimulada(cuerpo.lineas ?? [], cuerpo.tasaIva ?? 0.13, cuerpo.bordadoEspecial ?? false);
       return new Response(JSON.stringify({ ok: true, cotizacion }), { status: 200 });
+    }
+
+    if (url.endsWith('/api/cotizacion')) {
+      if (opciones.fallarRed === 'cotizacion') {
+        throw new TypeError('Failed to fetch');
+      }
+      return new Response(
+        JSON.stringify({ ok: true, id: 'cot-1', cotizacion: cotizacionSimulada(cuerpo.lineas ?? [], cuerpo.tasaIva ?? 0.13, cuerpo.bordadoEspecial ?? false), ghl: { estimateId: 'est-1' } }),
+        { status: 200 },
+      );
     }
 
     throw new Error(`Fetch no simulado en la prueba: ${url}`);
@@ -92,6 +122,18 @@ async function entrar(usuario: ReturnType<typeof userEvent.setup>) {
   await waitFor(() => {
     expect(screen.getByLabelText(/buscar/i)).toBeInTheDocument();
   });
+}
+
+// Busca un producto por texto y lo agrega (queda con cantidad "1").
+async function agregar(usuario: ReturnType<typeof userEvent.setup>, texto: string) {
+  await usuario.clear(screen.getByLabelText(/buscar/i));
+  await usuario.type(screen.getByLabelText(/buscar/i), texto);
+  await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+}
+
+async function llenarCliente(usuario: ReturnType<typeof userEvent.setup>, { nombre, email }: { nombre?: string; email?: string }) {
+  if (nombre !== undefined) await usuario.type(screen.getByLabelText(/nombre del cliente/i), nombre);
+  if (email !== undefined) await usuario.type(screen.getByLabelText(/correo del cliente/i), email);
 }
 
 describe('Cotizador', () => {
@@ -141,8 +183,7 @@ describe('Cotizador', () => {
     const usuario = userEvent.setup();
     render(<Cotizador />);
     await entrar(usuario);
-    await usuario.type(screen.getByLabelText(/buscar/i), 'set de 600 hilos king');
-    await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+    await agregar(usuario, 'set de 600 hilos king');
     const cantidad = screen.getByLabelText(/cantidad/i);
     await usuario.clear(cantidad);
     await usuario.type(cantidad, '16');
@@ -152,6 +193,45 @@ describe('Cotizador', () => {
       },
       { timeout: 2000 },
     );
+  });
+
+  it('muestra el motivo también cuando no aplica ningún descuento', async () => {
+    // Mata el mutante "ocultar el motivo cuando el descuento es cero": si el
+    // render solo pinta `calculada.motivo` cuando `descuentoPct > 0`, esta
+    // prueba se queda sin el texto y falla.
+    mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    // Se agrega con cantidad 1: muy por debajo del escalón de descuento.
+    await waitFor(
+      () => {
+        expect(screen.getByText(/1 sets en Sets de cama → sin descuento/)).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  it('el total cotizado aparece antes que el IVA en el resumen, como pidió Luxe por escrito', async () => {
+    // Mata el mutante que invierte el orden del bloque de totales: el brief
+    // (Tarea 8) es explícito — "el total primero y el IVA abajo".
+    mockFetch();
+    const usuario = userEvent.setup();
+    const { container } = render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await waitFor(
+      () => {
+        expect(screen.getByText(/IVA \(/)).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
+    const texto = container.textContent ?? '';
+    const posTotal = texto.indexOf('Total cotizado');
+    const posIva = texto.search(/IVA \(/);
+    expect(posTotal).toBeGreaterThanOrEqual(0);
+    expect(posIva).toBeGreaterThan(posTotal);
   });
 
   it('avisa cuando se marca bordado especial', async () => {
@@ -168,8 +248,7 @@ describe('Cotizador', () => {
     const usuario = userEvent.setup();
     render(<Cotizador />);
     await entrar(usuario);
-    await usuario.type(screen.getByLabelText(/buscar/i), 'set de 600 hilos king');
-    await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+    await agregar(usuario, 'set de 600 hilos king');
     // El selector ofrece valores fijos: no hay forma de escribir una tasa
     // inválida. Si esto se convierte en texto libre, esta prueba debe cambiar
     // a comprobar la normalización — no borrarse.
@@ -183,9 +262,22 @@ describe('Cotizador', () => {
     const usuario = userEvent.setup();
     render(<Cotizador />);
     await entrar(usuario);
-    await usuario.type(screen.getByLabelText(/buscar/i), 'set de 600 hilos king');
-    await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+    await agregar(usuario, 'set de 600 hilos king');
     expect(screen.getByRole('button', { name: /enviar cotización/i })).toBeDisabled();
+  });
+
+  it('no deja enviar sin el nombre del cliente, aunque haya correo (el servidor también lo exige)', async () => {
+    mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { email: 'cliente@empresa.com' });
+    expect(screen.getByRole('button', { name: /enviar cotización/i })).toBeDisabled();
+    await llenarCliente(usuario, { nombre: 'Ana Pérez' });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
   });
 
   it('el catálogo servido a la pantalla no trae precios', async () => {
@@ -198,5 +290,164 @@ describe('Cotizador', () => {
     // familia. Ahora `SkuUI` no lo trae: si algún día vuelve a aparecer aquí,
     // es porque el catálogo completo volvió a viajar al navegador.
     expect(screen.queryByText(/₡90\.000/)).not.toBeInTheDocument();
+  });
+
+  it('rechaza una cantidad decimal de forma visible en vez de truncarla en silencio', async () => {
+    mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    const cantidad = screen.getByLabelText(/cantidad/i);
+    await usuario.clear(cantidad);
+    await usuario.type(cantidad, '2.5');
+
+    // El campo debe seguir mostrando exactamente lo que el vendedor escribió...
+    expect(cantidad).toHaveValue(2.5);
+    // ...con un error visible junto a la línea...
+    expect(screen.getByText(/entero, sin decimales/i)).toBeInTheDocument();
+    // ...y sin cotizar "2" por su cuenta: con la única línea inválida, el
+    // total se queda en cero en vez de mostrar un cálculo que el vendedor no
+    // escribió. (Varias cifras de la pantalla son "₡0" a la vez — subtotal,
+    // ahorro, IVA — así que se apunta puntualmente al valor bajo "Total
+    // cotizado".)
+    const totalValor = screen.getByText('Total cotizado').nextElementSibling;
+    expect(totalValor).toHaveTextContent('₡0');
+    expect(screen.getByRole('button', { name: /enviar cotización/i })).toBeDisabled();
+  });
+
+  it('bloquea el envío si una línea se queda sin cantidad, en vez de mandarla incompleta en silencio', async () => {
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await agregar(usuario, 'filipina tradicional manga corta');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    // Dos líneas en pantalla; se borra la cantidad de la segunda.
+    const cantidades = screen.getAllByLabelText(/cantidad/i);
+    expect(cantidades).toHaveLength(2);
+    await usuario.clear(cantidades[1]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/falta la cantidad/i)).toBeInTheDocument();
+    });
+    const boton = screen.getByRole('button', { name: /enviar cotización/i });
+    expect(boton).toBeDisabled();
+
+    // Aunque se intente, el botón deshabilitado no dispara el envío: nunca
+    // debe llegar una petición a /api/cotizacion con una sola línea cuando
+    // el vendedor armó dos.
+    await usuario.click(boton);
+    const llamadasAlEnvio = fetchEspiado.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamadasAlEnvio).toHaveLength(0);
+  });
+
+  it('el cuerpo del envío final lleva la clave real y las líneas tal cual están en pantalla, sin un total inventado', async () => {
+    // Mata el mutante "mandar total: 1 y quitar la clave": si el envío deja
+    // de mandar la clave, o agrega un campo `total` que el servidor no debe
+    // recibir (lo calcula él con el catálogo real), esta prueba lo detecta.
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamada).toBeDefined();
+    const init = llamada![1] as RequestInit;
+    const cuerpo = JSON.parse(init.body as string);
+
+    expect(cuerpo).toEqual({
+      clave: 'correcta',
+      cliente: { nombre: 'Ana Pérez', email: 'ana@empresa.com' },
+      lineas: [{ skuId: 'set-600-hilos-king', cantidad: 1 }],
+      tasaIva: 0.13,
+      bordadoEspecial: false,
+    });
+    expect('total' in cuerpo).toBe(false);
+  });
+
+  it('no permite un segundo envío tras uno exitoso (protección contra doble clic)', async () => {
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    const boton = screen.getByRole('button', { name: /enviar cotización/i });
+    await usuario.click(boton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    const botonTrasEnvio = screen.getByRole('button', { name: /cotización enviada/i });
+    expect(botonTrasEnvio).toBeDisabled();
+
+    // Un segundo clic (el "clic nervioso") no debe crear otra fila en
+    // Supabase ni otro Estimate en GoHighLevel.
+    await usuario.click(botonTrasEnvio);
+    const llamadasAlEnvio = fetchEspiado.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamadasAlEnvio).toHaveLength(1);
+
+    // Solo "Nueva cotización" reabre la puerta.
+    expect(screen.getByRole('button', { name: /nueva cotización/i })).toBeInTheDocument();
+  });
+
+  it('un fallo de red en la vista previa se muestra en español, no el mensaje crudo del navegador', async () => {
+    mockFetch({ fallarRed: 'previsualizar' });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+
+    await waitFor(
+      () => {
+        expect(screen.getByText(/fallo de red/i)).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
+    expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument();
+  });
+
+  it('un fallo de red al enviar se muestra en español, no el mensaje crudo del navegador', async () => {
+    mockFetch({ fallarRed: 'cotizacion' });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/fallo de red/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Cotizacion, LineaEntrada } from '@/lib/cotizador/tipos';
 
 // Tasa general de IVA en Costa Rica. Duplicada a propósito: es un dato
@@ -38,6 +38,27 @@ const COTIZACION_VACIA: Cotizacion = {
   bordadoEspecial: false,
 };
 
+type ValidacionCantidad = { ok: true; cantidad: number } | { ok: false; mensaje: string };
+
+// Cualquier cosa que no sea "un entero positivo, escrito tal cual" se
+// rechaza de forma visible. `Number.parseInt('2.5', 10)` da 2 sin quejarse
+// — eso dejaba la pantalla mostrando "2.5" mientras cotizaba 2, en silencio.
+// Lo mismo con el campo vacío: antes esa línea desaparecía del cálculo (y
+// del envío) sin avisar, así que el vendedor mandaba una cotización con
+// menos productos de los que veía en pantalla. Ver revisión de la Tarea 8.
+function validarCantidad(texto: string): ValidacionCantidad {
+  const t = texto.trim();
+  if (t === '') return { ok: false, mensaje: 'Falta la cantidad.' };
+  if (!/^\d+$/.test(t)) return { ok: false, mensaje: 'Debe ser un entero, sin decimales.' };
+  const cantidad = Number.parseInt(t, 10);
+  if (cantidad <= 0) return { ok: false, mensaje: 'Debe ser mayor que cero.' };
+  // Mismo tope que `cotizacionSchema` en lib/validation.ts: si el servidor lo
+  // va a rechazar de todas formas, mejor avisarlo aquí que dejar que el envío
+  // final vuelva con un 400 que el vendedor no esperaba.
+  if (cantidad > 10000) return { ok: false, mensaje: 'No puede superar 10.000 unidades.' };
+  return { ok: true, cantidad };
+}
+
 // Sin tildes ni mayúsculas, para que "sabana" encuentre "sábana".
 function normalizar(texto: string): string {
   return texto
@@ -67,6 +88,12 @@ export default function Cotizador() {
   const [tasaIva, setTasaIva] = useState(IVA_GENERAL);
   const [bordadoEspecial, setBordadoEspecial] = useState(false);
   const [enviando, setEnviando] = useState(false);
+  // Distinto de `enviando`: `enviando` es "la petición está en vuelo",
+  // `enviado` es "ya se guardó con éxito". Sin este segundo estado, tras un
+  // envío exitoso el botón volvía a quedar habilitado y un segundo clic
+  // creaba otra fila en Supabase y otro Estimate en GoHighLevel. Ver
+  // revisión de la Tarea 8.
+  const [enviado, setEnviado] = useState(false);
   const [resultado, setResultado] = useState<Resultado | null>(null);
 
   // La vista previa (Tarea 8): ya no hay `calcular` ni catálogo en el
@@ -88,14 +115,21 @@ export default function Cotizador() {
       .slice(0, 20);
   }, [busqueda, skus]);
 
-  // Solo las cantidades que `calcular` acepta: enteros positivos. Mientras el
-  // vendedor borra el campo para escribir una cantidad nueva, esa línea
-  // simplemente no entra al cálculo — no se le pasa un NaN al motor.
-  const entradas: LineaEntrada[] = useMemo(
-    () =>
-      lineas
-        .map((l) => ({ skuId: l.skuId, cantidad: Number.parseInt(l.cantidadTexto, 10) }))
-        .filter((e) => Number.isInteger(e.cantidad) && e.cantidad > 0),
+  // Solo las líneas con una cantidad válida entran al cálculo y al envío.
+  // `hayLineaInvalida` es lo que de verdad bloquea el botón: una línea con
+  // el campo vacío o con un decimal no debe desaparecer en silencio del
+  // pedido, tiene que impedir que el pedido salga.
+  const entradas: LineaEntrada[] = useMemo(() => {
+    const validas: LineaEntrada[] = [];
+    for (const l of lineas) {
+      const v = validarCantidad(l.cantidadTexto);
+      if (v.ok) validas.push({ skuId: l.skuId, cantidad: v.cantidad });
+    }
+    return validas;
+  }, [lineas]);
+
+  const hayLineaInvalida = useMemo(
+    () => lineas.some((l) => !validarCantidad(l.cantidadTexto).ok),
     [lineas],
   );
 
@@ -133,7 +167,10 @@ export default function Cotizador() {
         })
         .catch((e) => {
           if (e instanceof DOMException && e.name === 'AbortError') return;
-          setPreviaError(e instanceof Error ? e.message : 'Fallo de red.');
+          // Nunca `e.message`: para un fallo de red eso es "Failed to fetch"
+          // en inglés, sin sentido para el vendedor. Ver revisión de la
+          // Tarea 8.
+          setPreviaError('Fallo de red.');
         })
         .finally(() => setPrevisualizando(false));
     }, 300);
@@ -147,6 +184,7 @@ export default function Cotizador() {
 
   function agregar(skuId: string) {
     setResultado(null);
+    setEnviado(false);
     setLineas((prev) => {
       const existente = prev.find((l) => l.skuId === skuId);
       if (!existente) return [...prev, { skuId, cantidadTexto: '1' }];
@@ -164,8 +202,29 @@ export default function Cotizador() {
     setLineas((prev) => prev.filter((l) => l.skuId !== skuId));
   }
 
+  // Reinicia el formulario para armar una cotización nueva. Es la única
+  // forma de volver a habilitar el envío después de uno exitoso — un
+  // segundo clic sobre el mismo botón ya no alcanza, a propósito.
+  function nuevaCotizacion() {
+    setLineas([]);
+    setCliente(CLIENTE_VACIO);
+    setBusqueda('');
+    setTasaIva(IVA_GENERAL);
+    setBordadoEspecial(false);
+    setResultado(null);
+    setEnviado(false);
+    setCotizacion(COTIZACION_VACIA);
+    setPreviaError('');
+  }
+
   const correoValido = cliente.email.trim().length > 0;
-  const puedeEnviar = !enviando && entradas.length > 0 && correoValido;
+  // El servidor (cotizacionSchema en lib/validation.ts) exige `cliente.nombre`
+  // igual que exige el correo. El botón tiene que pedir lo mismo que el
+  // servidor: si solo revisa el correo, deja enviar y volver con un 400
+  // evitable. Ver revisión de la Tarea 8.
+  const nombreValido = cliente.nombre.trim().length > 0;
+  const puedeEnviar =
+    !enviando && !enviado && lineas.length > 0 && !hayLineaInvalida && correoValido && nombreValido;
 
   // La pantalla de clave: sin ella no hay catálogo. `/api/cotizacion/catalogo`
   // es quien valida la clave y quien decide qué SKUs bajan al navegador (sin
@@ -187,8 +246,8 @@ export default function Cotizador() {
       }
       setSkus(datos.skus);
       setDentro(true);
-    } catch (e) {
-      setClaveError(e instanceof Error ? e.message : 'Fallo de red.');
+    } catch {
+      setClaveError('Fallo de red.');
     } finally {
       setEntrando(false);
     }
@@ -225,8 +284,12 @@ export default function Cotizador() {
         ghlEstimateId: datos.ghl?.estimateId,
         ghlError: datos.ghl?.error,
       });
-    } catch (e) {
-      setResultado({ ok: false, error: e instanceof Error ? e.message : 'Fallo de red.' });
+      // A partir de aquí el pedido ya existe en Supabase (y probablemente en
+      // GoHighLevel): `puedeEnviar` pasa a false y se queda así hasta que el
+      // vendedor pida explícitamente una cotización nueva.
+      setEnviado(true);
+    } catch {
+      setResultado({ ok: false, error: 'Fallo de red.' });
     } finally {
       setEnviando(false);
     }
@@ -318,7 +381,10 @@ export default function Cotizador() {
                 {lineas.map((linea) => {
                   const sku = porId.get(linea.skuId);
                   if (!sku) return null;
-                  const calculada = cotizacion.lineas.find((l) => l.skuId === linea.skuId);
+                  const validacion = validarCantidad(linea.cantidadTexto);
+                  const calculada = validacion.ok
+                    ? cotizacion.lineas.find((l) => l.skuId === linea.skuId)
+                    : undefined;
                   return (
                     <li key={linea.skuId} className="py-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -338,9 +404,12 @@ export default function Cotizador() {
                             type="number"
                             min={1}
                             aria-label="Cantidad"
+                            aria-invalid={!validacion.ok}
                             value={linea.cantidadTexto}
                             onChange={(e) => cambiarCantidad(linea.skuId, e.target.value)}
-                            className="w-20 rounded-lg border border-[var(--carta-border)] bg-white px-2 py-1.5 text-sm text-navy"
+                            className={`w-20 rounded-lg border bg-white px-2 py-1.5 text-sm text-navy ${
+                              validacion.ok ? 'border-[var(--carta-border)]' : 'border-red-400'
+                            }`}
                           />
                         </label>
                         <span className="text-teal">
@@ -354,13 +423,22 @@ export default function Cotizador() {
                           <span className="text-navy">{calculada ? colones(calculada.subtotal) : '…'}</span>
                         </span>
                       </div>
-                      {calculada && (
+                      {!validacion.ok && (
+                        <p className="mt-1 text-xs text-red-700">{validacion.mensaje}</p>
+                      )}
+                      {validacion.ok && calculada && (
                         <p className="mt-1 text-xs text-teal/80">{calculada.motivo}</p>
                       )}
                     </li>
                   );
                 })}
               </ul>
+            )}
+            {hayLineaInvalida && (
+              <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
+                Hay líneas con la cantidad incompleta o inválida — corregilas o quitalas para
+                poder enviar la cotización.
+              </p>
             )}
           </div>
         </section>
@@ -461,8 +539,18 @@ export default function Cotizador() {
               disabled={!puedeEnviar}
               className="mt-4 w-full rounded-lg bg-navy px-4 py-2.5 text-sm font-medium text-beige hover:bg-teal disabled:opacity-40"
             >
-              {enviando ? 'Enviando…' : 'Enviar cotización'}
+              {enviando ? 'Enviando…' : enviado ? 'Cotización enviada' : 'Enviar cotización'}
             </button>
+
+            {enviado && (
+              <button
+                type="button"
+                onClick={nuevaCotizacion}
+                className="mt-2 w-full rounded-lg border border-[var(--carta-border)] px-4 py-2.5 text-sm font-medium text-navy hover:bg-navy hover:text-beige"
+              >
+                Nueva cotización
+              </button>
+            )}
 
             {resultado && resultado.ok && (
               <p className="mt-3 rounded-lg bg-[color:var(--carta-border)]/30 px-3 py-2 text-xs text-navy">
