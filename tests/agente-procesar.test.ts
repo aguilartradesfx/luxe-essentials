@@ -39,12 +39,18 @@ const { DATOS_VACIOS } = await import('@/lib/agente/estado');
 
 // `registrarIntencion` no está mockeado (no es parte de lib/agente/estado ni
 // lib/agente/acciones), así que llama de verdad a esta cadena cuando el turno
-// trae correo, producto y cantidad. Sin borradores previos por defecto.
+// trae correo, producto y cantidad. Sin borradores previos por defecto, y con
+// `insert` registrado para poder comprobar que el borrador se creó.
+const borradorFalso: { insertados: unknown[] } = { insertados: [] };
 const dbFalso = {
   from: () => ({
     select: () => ({
       eq: () => ({ eq: () => ({ limit: async () => ({ data: [], error: null }) }) }),
     }),
+    insert: async (fila: unknown) => {
+      borradorFalso.insertados.push(fila);
+      return { error: null };
+    },
   }),
 };
 
@@ -70,6 +76,7 @@ function conversacionCon(mensajes: unknown[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  borradorFalso.insertados = [];
   leerOCrear.mockResolvedValue({ ...FILA_NUEVA });
   tomarMensaje.mockResolvedValue(true);
   guardar.mockResolvedValue(undefined);
@@ -221,6 +228,44 @@ describe('aviso al equipo', () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3, notificado_at: '2026-08-24T10:00:00Z' });
     await procesar('c1', deps);
     expect(dispararWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+// `registrarIntencion` no está mockeada en este archivo: estas pruebas
+// ejercitan la conexión real entre `procesar()` y `lib/cotizador/borrador.ts`,
+// no sólo la lógica interna de `registrarIntencion` (ya cubierta en
+// tests/cotizador-borrador.test.ts). Sin ellas, borrar por completo la llamada
+// en procesar.ts deja la suite en verde.
+describe('borrador del cotizador', () => {
+  it('registra la intención cuando el turno trae correo, producto y cantidad', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: {
+        respuesta: 'Con gusto, te preparamos la cotización',
+        datos: {
+          ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@hotel.com',
+          producto: 'uniformes', cantidad: '300 piezas',
+        },
+      },
+    });
+    await procesar('c1', deps);
+    expect(borradorFalso.insertados).toHaveLength(1);
+    const fila = borradorFalso.insertados[0] as Record<string, unknown>;
+    expect(fila.origen).toBe('agente');
+    expect(fila.estado).toBe('borrador');
+    expect(fila.contact_id).toBe('c1');
+  });
+
+  it('no registra nada si falta la cantidad', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: {
+        respuesta: 'Gracias',
+        datos: { ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@hotel.com', producto: 'uniformes' },
+      },
+    });
+    await procesar('c1', deps);
+    expect(borradorFalso.insertados).toHaveLength(0);
   });
 });
 

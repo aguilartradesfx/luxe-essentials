@@ -124,13 +124,6 @@ export async function procesar(
   const turnos = fila.turnos + 1;
   const avisar = debeAvisar(fila, datos, turnos);
 
-  // Se registra en cada turno que cumpla las condiciones; `registrarIntencion`
-  // se encarga de no duplicar. Va aquí y no dentro de `debeAvisar` porque las
-  // condiciones son distintas: avisar necesita nombre y un contacto, cotizar
-  // necesita además producto y cantidad.
-  const errorBorrador = await registrarIntencion({ contactId, datos }, db);
-  if (errorBorrador) console.error('[cotizador] borrador del agente:', errorBorrador);
-
   const estado = esCorreo(ultimo.tipo)
     ? 'email_respondido'
     : turnos >= config.TOPE_TURNOS
@@ -166,10 +159,20 @@ export async function procesar(
 
   // Estas escrituras no pueden hacer fallar el turno: al cliente ya se le
   // respondió, que es lo que importa. Sus errores van al log y nada más.
+  //
+  // `registrarIntencion` va aquí, DESPUÉS de `guardar`, y no entre enviar y
+  // guardar. Ese hueco es el peor lugar posible: si el proceso se queda sin
+  // presupuesto de tiempo mientras corre la consulta de borradores, `guardar`
+  // nunca llega a ejecutarse, se pierde el `messageId` en `enviados`, y en el
+  // turno siguiente el propio saliente del agente parece de un asesor humano
+  // — el contacto queda mudo para siempre. Aquí abajo, un fallo o una demora
+  // de `registrarIntencion` no puede impedir que el estado ya se haya
+  // persistido.
   const errores: (string | undefined)[] = [
     errorGuardar,
     await actualizarContacto(contactId, datos, escritura),
     await agregarNota(contactId, resumenParaNota(datos, canal), escritura),
+    await registrarIntencion({ contactId, datos }, db),
   ];
 
   // El aviso al equipo va AL FINAL, cuando el contacto ya tiene sus campos, sus

@@ -99,6 +99,44 @@ describe('generar', () => {
     expect(r.ok).toBe(false);
   });
 
+  // El esquema de la API y el de Zod tienen que mandar `cantidad` los dos.
+  // Sin esta prueba, borrar la línea de `ESQUEMA` o de `required` deja la
+  // suite entera en verde: nada más comprueba la forma exacta del cuerpo.
+  it('el esquema que se manda a la API incluye cantidad como campo obligatorio', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar(entrada, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const esquemaDatos = body.output_config.format.schema.properties.datos;
+    expect(esquemaDatos.properties).toHaveProperty('cantidad');
+    expect(esquemaDatos.required).toContain('cantidad');
+  });
+
+  // z.object descarta en silencio las claves de sobra: sin la línea de
+  // `cantidad` en salidaSchema, una respuesta que la omite pasaría igual y
+  // `salida.datos.cantidad` llegaría `undefined` sin ningún error en ningún
+  // log. Esta prueba es la que detecta que esa línea desapareció.
+  it('falla limpio cuando la salida del modelo omite cantidad', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          stop_reason: 'end_turn',
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                respuesta: 'ok',
+                datos: { nombre: null, email: null, telefono: null, producto: null, ubicacion: null },
+              }),
+            },
+          ],
+        }),
+    });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
   it('falla limpio cuando el contenido no es JSON', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, status: 200,
