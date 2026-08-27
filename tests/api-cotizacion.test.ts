@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/cotizador/ghl', () => ({
+  crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1' }),
+}));
+
 const insertado: unknown[] = [];
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
@@ -12,6 +16,7 @@ vi.mock('@/lib/supabase/server', () => ({
           }),
         };
       },
+      update: () => ({ eq: async () => ({ error: null }) }),
     }),
   }),
 }));
@@ -179,5 +184,11 @@ describe('POST /api/cotizacion', () => {
     const res = await POST(peticion({ ...valido, tasaIva: 0.01 }));
     const cuerpo = await res.json();
     expect(cuerpo.cotizacion.tasaIva).toBe(0.01);
+  });
+
+  it('devuelve el id del estimate de GoHighLevel', async () => {
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+    expect(cuerpo.ghl.estimateId).toBe('est-1');
   });
 });

@@ -55,6 +55,7 @@ export const cotizacionSchema = z.object({
     .max(IVA_GENERAL, `La tasa de IVA no puede superar la tasa general (${IVA_GENERAL * 100}%).`)
     .optional(),
   bordadoEspecial: z.boolean({ message: 'Bordado especial debe ser verdadero o falso.' }).optional(),
+  contactId: z.string().min(1).optional(),
 });
 
 export type CotizacionInput = z.infer<typeof cotizacionSchema>;

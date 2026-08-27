@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
+import { crearEstimate } from '@/lib/cotizador/ghl';
 import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
@@ -92,5 +93,37 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'No se pudo guardar.' }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, id: data.id, cotizacion });
+  const ghl = await crearEstimate(
+    { cotizacion, cliente: datos.cliente, contactId: datos.contactId },
+    {
+      apiKey: process.env.LUXE_GHL_API_KEY ?? '',
+      locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
+    },
+  );
+
+  // El registro ya existe pase lo que pase. Aquí solo se anota cómo le fue al
+  // CRM: una cotización con ghl_error es recuperable, igual que un lead.
+  await supabaseAdmin()
+    .from('cotizaciones')
+    .update(
+      // `updated_at` va explícito: la columna tiene `default now()` pero no hay
+      // trigger, así que sin esto se quedaría siempre igual a `created_at` y la
+      // auditoría diría que la cotización nunca cambió de estado.
+      ghl.ok
+        ? {
+            estado: 'enviada',
+            ghl_estimate_id: ghl.estimateId,
+            ghl_error: ghl.opportunityError ?? null,
+            updated_at: new Date().toISOString(),
+          }
+        : { estado: 'error', ghl_error: ghl.error, updated_at: new Date().toISOString() },
+    )
+    .eq('id', data.id);
+
+  return NextResponse.json({
+    ok: true,
+    id: data.id,
+    cotizacion,
+    ghl: ghl.ok ? { estimateId: ghl.estimateId } : { error: ghl.error },
+  });
 }
