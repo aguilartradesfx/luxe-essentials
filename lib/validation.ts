@@ -17,3 +17,26 @@ export const leadSchema = z.object({
 });
 
 export type LeadInput = z.infer<typeof leadSchema>;
+
+export const cotizacionSchema = z.object({
+  clave: z.string().min(1),
+  cliente: z.object({
+    nombre: z.string().trim().min(1).max(120),
+    empresa: z.string().trim().max(120).optional(),
+    email: z.string().trim().pipe(z.email('Escribe un correo válido.')),
+  }),
+  lineas: z
+    .array(
+      z.object({
+        skuId: z.string().min(1),
+        cantidad: z.number().int().positive(),
+      }),
+    )
+    .min(1),
+  // Por defecto la tasa general. Se permite cualquier tasa entre 0 y 13%:
+  // Costa Rica tiene reducidas, y Luxe todavía confirma cuáles le aplican.
+  tasaIva: z.number().min(0).max(0.13).optional(),
+  bordadoEspecial: z.boolean().optional(),
+});
+
+export type CotizacionInput = z.infer<typeof cotizacionSchema>;
