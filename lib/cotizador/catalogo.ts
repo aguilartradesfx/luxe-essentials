@@ -16,11 +16,11 @@ export const CATALOGO: Sku[] = [
     "precioLista": 15500
   },
   {
-    "id": "uni-filipina-tradicional-corte-mujer-m-corta",
+    "id": "uni-filipina-tradicional-corte-mujer-manga-corta",
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "filipina tradicional corte mujer m. corta",
+    "nombre": "filipina tradicional corte mujer manga corta",
     "precioLista": 15500
   },
   {
@@ -36,7 +36,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalon de cocina tipo baggy",
+    "nombre": "pantalón de cocina tipo baggy",
     "precioLista": 17500
   },
   {
@@ -44,7 +44,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalon de cocina tipo baggy corte mujer",
+    "nombre": "pantalón de cocina tipo baggy corte mujer",
     "precioLista": 17500
   },
   {
@@ -52,15 +52,15 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalon tradicional formal",
+    "nombre": "pantalón tradicional formal",
     "precioLista": 18000
   },
   {
-    "id": "uni-pantalon-tradiciona-formal-corte-mujer",
+    "id": "uni-pantalon-tradicional-formal-corte-mujer",
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalon tradiciona formal corte mujer",
+    "nombre": "pantalón tradicional formal corte mujer",
     "precioLista": 18000
   },
   {
@@ -108,7 +108,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo polo warp pique (tipo lacoste)",
+    "nombre": "camisa tipo polo warp piqué (tipo Lacoste)",
     "precioLista": 12000
   },
   {
@@ -116,7 +116,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo polo warp pique corte mujer",
+    "nombre": "camisa tipo polo warp piqué corte mujer",
     "precioLista": 12000
   },
   {
@@ -140,7 +140,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo columbia",
+    "nombre": "camisa tipo Columbia",
     "precioLista": 16500
   },
   {
@@ -148,7 +148,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo columbia corte mujer",
+    "nombre": "camisa tipo Columbia corte mujer",
     "precioLista": 16500
   },
   {
@@ -172,7 +172,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa formal oxford manga corta",
+    "nombre": "camisa formal Oxford manga corta",
     "precioLista": 16000
   },
   {
@@ -180,7 +180,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa formal oxford manga corta corte mujer",
+    "nombre": "camisa formal Oxford manga corta corte mujer",
     "precioLista": 16000
   },
   {
@@ -412,7 +412,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda king",
+    "nombre": "funda de duvet 300 hilos king",
     "talla": "king",
     "precioLista": 55000
   },
@@ -421,7 +421,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda queen",
+    "nombre": "funda de duvet 300 hilos queen",
     "talla": "queen",
     "precioLista": 50000
   },
@@ -430,7 +430,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda doble",
+    "nombre": "funda de duvet 300 hilos doble",
     "talla": "doble",
     "precioLista": 45000
   },
@@ -439,7 +439,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda imperial",
+    "nombre": "funda de duvet 300 hilos imperial",
     "talla": "imperial",
     "precioLista": 40000
   },
@@ -668,7 +668,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "almohadas",
     "familia": "Almohadas",
-    "nombre": "king 2 unidades por paquete",
+    "nombre": "almohada king (paquete de 2 unidades)",
     "precioLista": 25000
   },
   {
@@ -676,7 +676,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "almohadas",
     "familia": "Almohadas",
-    "nombre": "queen 4 unidades por paquete",
+    "nombre": "almohada queen (paquete de 4 unidades)",
     "precioLista": 36000
   }
 ];
