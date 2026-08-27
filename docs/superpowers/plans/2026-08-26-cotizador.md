@@ -1774,9 +1774,17 @@ En `app/api/cotizacion/route.ts`, después del `insert` que devolvió `data`, y 
   await supabaseAdmin()
     .from('cotizaciones')
     .update(
+      // `updated_at` va explícito: la columna tiene `default now()` pero no hay
+      // trigger, así que sin esto se quedaría siempre igual a `created_at` y la
+      // auditoría diría que la cotización nunca cambió de estado.
       ghl.ok
-        ? { estado: 'enviada', ghl_estimate_id: ghl.estimateId, ghl_error: ghl.opportunityError ?? null }
-        : { estado: 'error', ghl_error: ghl.error },
+        ? {
+            estado: 'enviada',
+            ghl_estimate_id: ghl.estimateId,
+            ghl_error: ghl.opportunityError ?? null,
+            updated_at: new Date().toISOString(),
+          }
+        : { estado: 'error', ghl_error: ghl.error, updated_at: new Date().toISOString() },
     )
     .eq('id', data.id);
 
@@ -2274,7 +2282,7 @@ Cierra el circuito: lo que el agente capturó llega a los ojos de un vendedor.
 **Interfaces:**
 - Consume: la tabla `cotizaciones` (Tarea 5), las filas que escribe `registrarIntencion`
   (Tarea 9).
-- Produce: `POST /api/cotizacion/borradores` → `{ ok: true, borradores: Borrador[] }` con
+- Produce: `POST /api/cotizacion/borradores` → `{ ok: true, borradores: Borrador[] }`, filtrando por `estado='borrador'` **y** `origen='agente'`, con
   `Borrador = { id: string; created_at: string; contact_id: string | null; cliente: Record<string, unknown> }`.
 
 Es `POST` y no `GET` porque la clave viaja en el cuerpo, igual que en el resto de rutas
@@ -2296,15 +2304,21 @@ const filas = [
   },
 ];
 
+const filtros: [string, string][] = [];
+
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          order: () => ({ limit: async () => ({ data: filas, error: null }) }),
-        }),
-      }),
-    }),
+    from: () => {
+      const encadenable: Record<string, unknown> = {
+        eq: (columna: string, valor: string) => {
+          filtros.push([columna, valor]);
+          return encadenable;
+        },
+        order: () => encadenable,
+        limit: async () => ({ data: filas, error: null }),
+      };
+      return { select: () => encadenable };
+    },
   }),
 }));
 
@@ -2340,6 +2354,16 @@ describe('POST /api/cotizacion/borradores', () => {
       new Request('http://localhost/api/cotizacion/borradores', { method: 'POST', body: 'x' }),
     );
     expect(res.status).toBe(400);
+  });
+
+  it('filtra por estado borrador y por origen agente', async () => {
+    // Sin el filtro de origen, una cotización humana en vuelo hacia GoHighLevel
+    // aparecería en la cola del agente.
+    await POST(peticion({ clave: 'secreta' }));
+    expect(filtros).toEqual([
+      ['estado', 'borrador'],
+      ['origen', 'agente'],
+    ]);
   });
 });
 ```
@@ -2383,6 +2407,10 @@ export async function POST(request: Request) {
     .from('cotizaciones')
     .select('id, created_at, contact_id, cliente')
     .eq('estado', 'borrador')
+    // El filtro por origen no es opcional. La Tarea 6 inserta las cotizaciones
+    // humanas como 'borrador' antes de mandarlas a GoHighLevel, así que una
+    // cotización en vuelo aparecería en la cola del agente sin este filtro.
+    .eq('origen', 'agente')
     .order('created_at', { ascending: false })
     .limit(50);
 
@@ -2398,7 +2426,7 @@ export async function POST(request: Request) {
 - [ ] **Paso 4: Ejecutar y ver que pasa**
 
 Ejecutar: `npx vitest run tests/api-borradores.test.ts`
-Esperado: PASA, 3 pruebas.
+Esperado: PASA, 4 pruebas.
 
 - [ ] **Paso 5: Añadir la sección a `Cotizador.tsx`**
 
