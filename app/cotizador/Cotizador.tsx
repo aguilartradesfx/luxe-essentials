@@ -1,10 +1,19 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { calcular } from '@/lib/cotizador/calcular';
-import { CATALOGO, buscarSku } from '@/lib/cotizador/catalogo';
-import { IVA_GENERAL } from '@/lib/cotizador/escalas';
-import type { LineaEntrada } from '@/lib/cotizador/tipos';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Cotizacion, LineaEntrada } from '@/lib/cotizador/tipos';
+
+// Tasa general de IVA en Costa Rica. Duplicada a propósito: es un dato
+// público (no comercial, a diferencia de `precioLista` o de `ESCALAS`), y
+// esta pantalla ya no puede importar `lib/cotizador/escalas.ts` — arrastraría
+// la estructura de descuentos por volumen al navegador. Ver Tarea 8.
+const IVA_GENERAL = 0.13;
+
+// Lo único que el vendedor necesita para buscar y elegir un SKU. Nada de
+// `precioLista` ni `grupo`: eso es la lista de precios de Luxe, y esta forma
+// es la que de verdad viaja al navegador (la sirve `/api/cotizacion/catalogo`,
+// tras clave). Ver Tarea 8.
+type SkuUI = { id: string; nombre: string; familia: string };
 
 type Cliente = { nombre: string; empresa: string; email: string };
 
@@ -18,6 +27,16 @@ type Resultado =
   | { ok: false; error: string };
 
 const CLIENTE_VACIO: Cliente = { nombre: '', empresa: '', email: '' };
+
+const COTIZACION_VACIA: Cotizacion = {
+  lineas: [],
+  subtotal: 0,
+  ahorro: 0,
+  tasaIva: IVA_GENERAL,
+  iva: 0,
+  total: 0,
+  bordadoEspecial: false,
+};
 
 // Sin tildes ni mayúsculas, para que "sabana" encuentre "sábana".
 function normalizar(texto: string): string {
@@ -37,6 +56,11 @@ function colones(valor: number): string {
 
 export default function Cotizador() {
   const [clave, setClave] = useState('');
+  const [dentro, setDentro] = useState(false);
+  const [claveError, setClaveError] = useState('');
+  const [entrando, setEntrando] = useState(false);
+  const [skus, setSkus] = useState<SkuUI[]>([]);
+
   const [cliente, setCliente] = useState<Cliente>(CLIENTE_VACIO);
   const [busqueda, setBusqueda] = useState('');
   const [lineas, setLineas] = useState<LineaUI[]>([]);
@@ -45,13 +69,24 @@ export default function Cotizador() {
   const [enviando, setEnviando] = useState(false);
   const [resultado, setResultado] = useState<Resultado | null>(null);
 
+  // La vista previa (Tarea 8): ya no hay `calcular` ni catálogo en el
+  // navegador, así que el total y el desglose por línea vienen de
+  // `/api/cotizacion/previsualizar`, con el mismo motor que usa el envío
+  // final. `previaError` es de la previsualización, no del envío — se
+  // muestra aparte de `resultado`.
+  const [cotizacion, setCotizacion] = useState<Cotizacion>(COTIZACION_VACIA);
+  const [previsualizando, setPrevisualizando] = useState(false);
+  const [previaError, setPreviaError] = useState('');
+
+  const porId = useMemo(() => new Map(skus.map((s) => [s.id, s])), [skus]);
+
   const resultadosBusqueda = useMemo(() => {
     const q = normalizar(busqueda.trim());
     if (!q) return [];
-    return CATALOGO.filter(
-      (sku) => normalizar(sku.nombre).includes(q) || normalizar(sku.familia).includes(q),
-    ).slice(0, 20);
-  }, [busqueda]);
+    return skus
+      .filter((sku) => normalizar(sku.nombre).includes(q) || normalizar(sku.familia).includes(q))
+      .slice(0, 20);
+  }, [busqueda, skus]);
 
   // Solo las cantidades que `calcular` acepta: enteros positivos. Mientras el
   // vendedor borra el campo para escribir una cantidad nueva, esa línea
@@ -64,25 +99,51 @@ export default function Cotizador() {
     [lineas],
   );
 
-  // El selector de IVA solo ofrece 0.13 y 0, así que esto nunca debería
-  // lanzar. El try/catch queda como red de seguridad: es preferible mostrar
-  // ceros que tirar la pantalla completa si algo cambia el día de mañana.
-  const cotizacion = useMemo(() => {
-    try {
-      return calcular(entradas, CATALOGO, { tasaIva, bordadoEspecial });
-    } catch (e) {
-      console.error('[cotizador] calcular() rechazó los datos de la vista previa.', e);
-      return {
-        lineas: [],
-        subtotal: 0,
-        ahorro: 0,
-        tasaIva,
-        iva: 0,
-        total: 0,
-        bordadoEspecial,
-      };
+  // Vista previa con rebote de 300ms: cada cambio en las líneas, la tasa de
+  // IVA o el bordado especial reinicia el temporizador en vez de disparar una
+  // llamada por tecla. `AbortController` corta una respuesta que llegue tarde
+  // (p. ej. si el vendedor sigue escribiendo) para que no pise un resultado
+  // más nuevo.
+  useEffect(() => {
+    if (!dentro) return;
+    if (entradas.length === 0) {
+      setCotizacion({ ...COTIZACION_VACIA, tasaIva, bordadoEspecial });
+      setPreviaError('');
+      setPrevisualizando(false);
+      return;
     }
-  }, [entradas, tasaIva, bordadoEspecial]);
+
+    const controlador = new AbortController();
+    const temporizador = setTimeout(() => {
+      setPrevisualizando(true);
+      fetch('/api/cotizacion/previsualizar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clave, lineas: entradas, tasaIva, bordadoEspecial }),
+        signal: controlador.signal,
+      })
+        .then(async (res) => {
+          const datos = await res.json();
+          if (!res.ok || !datos.ok) {
+            setPreviaError(datos.error ?? `Error ${res.status}`);
+            return;
+          }
+          setCotizacion(datos.cotizacion);
+          setPreviaError('');
+        })
+        .catch((e) => {
+          if (e instanceof DOMException && e.name === 'AbortError') return;
+          setPreviaError(e instanceof Error ? e.message : 'Fallo de red.');
+        })
+        .finally(() => setPrevisualizando(false));
+    }, 300);
+
+    return () => {
+      clearTimeout(temporizador);
+      controlador.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `entradas` ya está memoizado sobre `lineas`.
+  }, [entradas, tasaIva, bordadoEspecial, dentro, clave]);
 
   function agregar(skuId: string) {
     setResultado(null);
@@ -105,6 +166,33 @@ export default function Cotizador() {
 
   const correoValido = cliente.email.trim().length > 0;
   const puedeEnviar = !enviando && entradas.length > 0 && correoValido;
+
+  // La pantalla de clave: sin ella no hay catálogo. `/api/cotizacion/catalogo`
+  // es quien valida la clave y quien decide qué SKUs bajan al navegador (sin
+  // precios). Al estilo de app/q7m4/Taller.tsx.
+  async function entrar(e: React.FormEvent) {
+    e.preventDefault();
+    setClaveError('');
+    setEntrando(true);
+    try {
+      const res = await fetch('/api/cotizacion/catalogo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clave }),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        setClaveError(res.status === 401 ? 'Clave incorrecta.' : (datos.error ?? `Error ${res.status}`));
+        return;
+      }
+      setSkus(datos.skus);
+      setDentro(true);
+    } catch (e) {
+      setClaveError(e instanceof Error ? e.message : 'Fallo de red.');
+    } finally {
+      setEntrando(false);
+    }
+  }
 
   async function enviar() {
     if (!puedeEnviar) return;
@@ -144,6 +232,34 @@ export default function Cotizador() {
     }
   }
 
+  if (!dentro) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-6">
+        <form onSubmit={entrar} className="w-full max-w-xs">
+          <h1 className="font-display text-2xl text-navy">Cotizador</h1>
+          <p className="mt-2 text-sm text-teal">Luxe Essentials</p>
+          <input
+            type="password"
+            aria-label="Clave"
+            value={clave}
+            onChange={(e) => setClave(e.target.value)}
+            placeholder="Clave"
+            autoFocus
+            className="mt-6 w-full rounded-lg border border-[var(--carta-border)] bg-white px-4 py-3 text-sm text-navy placeholder:text-teal/60"
+          />
+          {claveError && <p className="mt-2 text-sm text-red-700">{claveError}</p>}
+          <button
+            type="submit"
+            disabled={entrando}
+            className="mt-3 w-full rounded-lg bg-navy px-4 py-3 text-sm font-medium text-beige hover:bg-teal disabled:opacity-40"
+          >
+            {entrando ? 'Entrando…' : 'Entrar'}
+          </button>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
       <header className="border-b border-[var(--carta-border)] pb-4">
@@ -169,7 +285,7 @@ export default function Cotizador() {
               className="mt-2 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2.5 text-sm text-navy placeholder:text-teal/60"
             />
             {busqueda.trim() === '' ? (
-              <p className="mt-3 text-xs text-teal/70">Escribí para buscar entre los {CATALOGO.length} productos del catálogo.</p>
+              <p className="mt-3 text-xs text-teal/70">Escribí para buscar entre los {skus.length} productos del catálogo.</p>
             ) : resultadosBusqueda.length === 0 ? (
               <p className="mt-3 text-xs text-teal/70">Sin resultados para «{busqueda}».</p>
             ) : (
@@ -178,9 +294,7 @@ export default function Cotizador() {
                   <li key={sku.id} className="flex items-center justify-between gap-3 py-2">
                     <div>
                       <p className="text-sm text-navy">{sku.nombre}</p>
-                      <p className="text-xs text-teal">
-                        {sku.familia} · {colones(sku.precioLista)}
-                      </p>
+                      <p className="text-xs text-teal">{sku.familia}</p>
                     </div>
                     <button
                       type="button"
@@ -202,7 +316,7 @@ export default function Cotizador() {
             ) : (
               <ul className="mt-3 divide-y divide-[var(--carta-border)]">
                 {lineas.map((linea) => {
-                  const sku = buscarSku(linea.skuId);
+                  const sku = porId.get(linea.skuId);
                   if (!sku) return null;
                   const calculada = cotizacion.lineas.find((l) => l.skuId === linea.skuId);
                   return (
@@ -232,11 +346,12 @@ export default function Cotizador() {
                         <span className="text-teal">
                           Unitario:{' '}
                           <span className="text-navy">
-                            {colones(calculada ? calculada.precioUnitario : sku.precioLista)}
+                            {calculada ? colones(calculada.precioUnitario) : '…'}
                           </span>
                         </span>
                         <span className="text-teal">
-                          Subtotal: <span className="text-navy">{colones(calculada?.subtotal ?? 0)}</span>
+                          Subtotal:{' '}
+                          <span className="text-navy">{calculada ? colones(calculada.subtotal) : '…'}</span>
                         </span>
                       </div>
                       {calculada && (
@@ -254,6 +369,10 @@ export default function Cotizador() {
           <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
             <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Total cotizado</h2>
             <p className="mt-1 font-display text-3xl text-navy">{colones(cotizacion.total)}</p>
+            {previsualizando && <p className="mt-1 text-xs text-teal/70">Calculando…</p>}
+            {previaError && (
+              <p className="mt-1 text-xs text-red-700">{previaError}</p>
+            )}
 
             {lineas.length > 0 && (
               <dl className="mt-4 space-y-1.5 text-sm">
@@ -331,16 +450,6 @@ export default function Cotizador() {
                   aria-label="Correo del cliente"
                   value={cliente.email}
                   onChange={(e) => setCliente((c) => ({ ...c, email: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
-                />
-              </label>
-              <label className="block text-xs text-teal">
-                Clave
-                <input
-                  type="password"
-                  aria-label="Clave"
-                  value={clave}
-                  onChange={(e) => setClave(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
                 />
               </label>

@@ -59,3 +59,32 @@ export const cotizacionSchema = z.object({
 });
 
 export type CotizacionInput = z.infer<typeof cotizacionSchema>;
+
+// Para la vista previa (Tarea 8): mismas líneas que `cotizacionSchema`, pero
+// sin `cliente` ni `contactId` —la previsualización no guarda nada— y sin el
+// `.min(1)` en `lineas`: la pantalla previsualiza también con el carrito
+// vacío (total en cero), antes de que el vendedor agregue el primer SKU.
+export const previsualizarSchema = z.object({
+  clave: z.string().min(1, 'Falta la clave.'),
+  lineas: z
+    .array(
+      z.object({
+        skuId: z.string().min(1, 'Falta el SKU de la línea.'),
+        cantidad: z
+          .number()
+          .int('La cantidad debe ser un número entero.')
+          .positive('La cantidad debe ser mayor que cero.')
+          .max(10000, 'Revisa la cantidad: no puede superar 10.000 unidades por línea.'),
+      }),
+      { message: 'Las líneas deben ir en un arreglo.' },
+    )
+    .default([]),
+  tasaIva: z
+    .number()
+    .min(0, 'La tasa de IVA no puede ser negativa.')
+    .max(IVA_GENERAL, `La tasa de IVA no puede superar la tasa general (${IVA_GENERAL * 100}%).`)
+    .optional(),
+  bordadoEspecial: z.boolean({ message: 'Bordado especial debe ser verdadero o falso.' }).optional(),
+});
+
+export type PrevisualizarInput = z.infer<typeof previsualizarSchema>;
