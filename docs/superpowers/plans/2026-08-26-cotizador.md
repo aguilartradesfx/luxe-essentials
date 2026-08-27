@@ -44,6 +44,8 @@ solo guarda registro de auditoría y la cola de borradores.
 | `lib/validation.ts` (modificar) | Esquema Zod de la petición de cotización. |
 | `app/api/cotizacion/route.ts` | Endpoint de cálculo y envío, tras clave. |
 | `app/api/cotizacion/borradores/route.ts` | Lista la cola de borradores, tras clave. |
+| `app/api/cotizacion/catalogo/route.ts` | Catálogo de búsqueda sin precios, tras clave. |
+| `app/api/cotizacion/previsualizar/route.ts` | Vista previa del cálculo, tras clave. |
 | `app/cotizador/page.tsx` + `Cotizador.tsx` | Pantalla de armado. |
 | `supabase/migrations/0005_cotizaciones.sql` | Tabla de registro. |
 | `scripts/verificar-estimate-ghl.mjs` | Sonda contra GoHighLevel. |
@@ -1856,16 +1858,34 @@ git commit -m "feat(cotizador): crea el Estimate y mueve la oportunidad en GoHig
 - Consume: `CATALOGO` (Tarea 4), `calcular` (Tarea 3), `POST /api/cotizacion` (Tarea 7).
 - Produce: la ruta `/cotizador`.
 
-El cálculo de la vista previa corre **en el cliente**, con la misma función pura que usa el
-servidor. El servidor recalcula al recibir: nunca se confía en un total que llegó del
-navegador.
+**El cálculo corre en el servidor, no en el navegador.** El primer intento lo puso en el
+cliente y eso arrastró `CATALOGO` y `ESCALAS` al paquete servido: los 70 precios de 2026 y
+la estructura de márgenes quedaron en un archivo estático público, descargable sin
+credencial. Verificado construyendo (`precioLista:9e4` en `.next/static/chunks/`). El
+repositorio excluye los Excel del despliegue por ser información comercial; publicar los
+mismos datos en JSON anula esa protección.
+
+Por eso `Cotizador.tsx` **no importa `catalogo.ts` ni `escalas.ts`**, y hay dos endpoints
+nuevos, ambos tras la misma clave:
+
+- `POST /api/cotizacion/catalogo` → `{ ok, skus: { id, nombre, familia }[] }`. **Sin
+  precios.** El navegador necesita buscar productos, no saber cuánto valen.
+- `POST /api/cotizacion/previsualizar` → recibe `{ clave, lineas, tasaIva, bordadoEspecial }`
+  y devuelve `{ ok, cotizacion }`. Se llama con rebote de 300 ms para no disparar una
+  petición por tecla.
+
+**Y por eso vuelve la pantalla de clave previa**, al estilo de `app/q7m4/`. En el primer
+intento se quitó, con razón: no protegía nada, porque el paquete se sirve antes de que la
+clave exista. Ahora sí es la puerta que decide si el catálogo se descarga.
 
 **Cuidado con la tasa de IVA.** `calcular` lanza si la tasa no es un número finito entre 0
-y 1 — se endureció al revisar la Tarea 3. Aquí no hay Zod de por medio, y un campo de
-texto vacío da `parseFloat('') === NaN`. Si le pasás eso a `calcular`, la pantalla se cae
-entera. El selector debe ofrecer valores fijos (13% y 0%) en vez de texto libre, y el
-estado nunca debe contener algo que `calcular` rechace. Si algún día se acepta texto
-libre, se normaliza antes de llamar: número inválido o vacío vuelve al 13% por defecto.
+y 1. El selector ofrece valores fijos (13% y 0%), nunca texto libre.
+
+**Ninguna línea puede caerse del envío en silencio.** Una cantidad vacía o en cero no debe
+poder salir: el vendedor armaría una cotización de dos productos y el cliente recibiría una
+de uno, sin aviso. O se bloquea el envío mientras haya líneas incompletas, o se marcan
+visiblemente — pero mandar una cotización a la que le falta un renglón tiene que ser
+imposible.
 
 - [ ] **Paso 1: Escribir la prueba que falla**
 
