@@ -316,7 +316,7 @@ describe('Cotizador', () => {
     render(<Cotizador />);
     await entrar(usuario);
     await agregar(usuario, 'set de 600 hilos king');
-    expect(screen.getByRole('button', { name: /enviar cotización/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).toBeDisabled();
   });
 
   it('no deja enviar sin el nombre del cliente, aunque haya correo (el servidor también lo exige)', async () => {
@@ -326,10 +326,10 @@ describe('Cotizador', () => {
     await entrar(usuario);
     await agregar(usuario, 'set de 600 hilos king');
     await llenarCliente(usuario, { email: 'cliente@empresa.com' });
-    expect(screen.getByRole('button', { name: /enviar cotización/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).toBeDisabled();
     await llenarCliente(usuario, { nombre: 'Ana Pérez' });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
   });
 
@@ -366,7 +366,7 @@ describe('Cotizador', () => {
     // cotizado".)
     const totalValor = screen.getByText('Total cotizado').nextElementSibling;
     expect(totalValor).toHaveTextContent('₡0');
-    expect(screen.getByRole('button', { name: /enviar cotización/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).toBeDisabled();
   });
 
   it('bloquea el envío si una línea se queda sin cantidad, en vez de mandarla incompleta en silencio', async () => {
@@ -386,7 +386,7 @@ describe('Cotizador', () => {
     await waitFor(() => {
       expect(screen.getByText(/falta la cantidad/i)).toBeInTheDocument();
     });
-    const boton = screen.getByRole('button', { name: /enviar cotización/i });
+    const boton = screen.getByRole('button', { name: /crear en gohighlevel/i });
     expect(boton).toBeDisabled();
 
     // Aunque se intente, el botón deshabilitado no dispara el envío: nunca
@@ -411,9 +411,9 @@ describe('Cotizador', () => {
     await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
@@ -436,6 +436,76 @@ describe('Cotizador', () => {
     expect('total' in cuerpo).toBe(false);
   });
 
+  it('el botón dice la verdad ANTES del clic, no solo en el mensaje de después', async () => {
+    // Ronda de correcciones "final-fix-C": el botón decía "Enviar cotización"
+    // — el vendedor le creía eso desde antes de hacer clic, y recién después
+    // del clic se enteraba (leyendo el mensaje de resultado) de que en
+    // realidad solo se creó un Estimate en borrador. El texto tiene que decir
+    // la verdad en los tres estados: reposo, en vuelo y ya terminado. Mutante
+    // que esto mata: volver a poner "Enviar cotización" (o "Enviando…") en
+    // cualquiera de los tres.
+    //
+    // El envío a `/api/cotizacion` se retiene a propósito (con una promesa
+    // que esta prueba libera a mano) para poder observar el estado "en
+    // vuelo" — con el `mockFetch` compartido, que resuelve en el mismo
+    // microtask, esa ventana es demasiado angosta para capturarla con
+    // `waitFor`.
+    let liberarEnvio: (() => void) | undefined;
+    const bloqueoEnvio = new Promise<void>((resolve) => {
+      liberarEnvio = resolve;
+    });
+    const fetchEspiado = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
+
+      if (url.endsWith('/api/cotizacion/catalogo')) {
+        return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+      }
+      if (url.endsWith('/api/cotizacion/borradores')) {
+        return new Response(JSON.stringify({ ok: true, borradores: [] }), { status: 200 });
+      }
+      if (url.endsWith('/api/cotizacion/previsualizar')) {
+        const cotizacion = cotizacionSimulada(cuerpo.lineas ?? [], cuerpo.tasaIva ?? 0.13, cuerpo.bordadoEspecial ?? false);
+        return new Response(JSON.stringify({ ok: true, cotizacion }), { status: 200 });
+      }
+      if (url.endsWith('/api/cotizacion')) {
+        await bloqueoEnvio;
+        return new Response(JSON.stringify({ ok: true, id: 'cot-1', ghl: { estimateId: 'est-1' } }), { status: 200 });
+      }
+      throw new Error(`Fetch no simulado en la prueba: ${url}`);
+    });
+
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    const boton = await screen.findByRole('button', { name: /crear en gohighlevel/i });
+    expect(boton).not.toBeDisabled();
+    // El texto de reposo no debe prometer un envío que no ocurre.
+    expect(boton.textContent).not.toMatch(/enviar/i);
+
+    await usuario.click(boton);
+    // Estado "en vuelo": tampoco promete enviar. La petición sigue retenida
+    // por `bloqueoEnvio`, así que este estado es estable hasta liberarlo.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /creando/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /creando/i }).textContent).not.toMatch(/enviar/i);
+
+    liberarEnvio?.();
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+    // Solo hubo una llamada real al servidor propio, disparada por el único clic.
+    const llamadasAlEnvio = fetchEspiado.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamadasAlEnvio).toHaveLength(1);
+  });
+
   it('el mensaje de éxito dice la verdad: creada en GoHighLevel, falta enviarla al cliente', async () => {
     // Ronda de correcciones 2 (hallazgo C1): antes decía "enviada en
     // GoHighLevel", y crearEstimate (lib/cotizador/ghl.ts) nunca envía nada
@@ -449,9 +519,9 @@ describe('Cotizador', () => {
     await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/falta enviarla al cliente/i)).toBeInTheDocument();
@@ -468,9 +538,9 @@ describe('Cotizador', () => {
     await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    const boton = screen.getByRole('button', { name: /enviar cotización/i });
+    const boton = screen.getByRole('button', { name: /crear en gohighlevel/i });
     await usuario.click(boton);
 
     await waitFor(() => {
@@ -520,9 +590,9 @@ describe('Cotizador', () => {
     await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/fallo de red/i)).toBeInTheDocument();
@@ -648,9 +718,9 @@ describe('Borradores pendientes (Tarea 10)', () => {
     await agregar(usuario, 'set de 600 hilos king');
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
@@ -677,9 +747,9 @@ describe('Borradores pendientes (Tarea 10)', () => {
     await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
@@ -715,9 +785,9 @@ describe('Borradores pendientes (Tarea 10)', () => {
     await agregar(usuario, 'set de 600 hilos king');
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
     });
-    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();

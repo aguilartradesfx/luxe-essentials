@@ -122,32 +122,47 @@ function formatearTasa(tasa: number): string {
 // reglas de no-pisar: sólo rellena firstName/companyName/source si estaban
 // vacíos, nunca escribe `city`, y suma el tag `cotizacion` a los que ya
 // tuviera en vez de reemplazarlos.
+// Ronda "final-fix-C": antes, cuando llegaba un `contactId` (el camino del
+// borrador del agente — ver `BorradorActivo` en app/cotizador/Cotizador.tsx)
+// esta función devolvía de inmediato y nunca llamaba a
+// `escribirContactoSinPisar`. Eso no importaba mientras la pantalla nunca
+// mandara `contactId`: el 100% de las cotizaciones pasaba por el `if`
+// siguiente y todas enriquecían el contacto. La corrección del ciclo de
+// borradores activó esta rama justo para el flujo del agente, y desde
+// entonces esas cotizaciones no tocan el CRM en absoluto: ni el tag
+// `cotizacion`, ni `companyName`, ni `source`. El contacto ya resuelto
+// (recibido o recién creado) siempre pasa por el mismo enriquecimiento
+// no-destructivo — no hay motivo para que un contacto conocido de antemano
+// reciba menos que uno recién dado de alta.
 async function resolverContacto(
   p: ParamsEstimate, deps: Required<DepsGhl>,
 ): Promise<{ ok: true; contactId: string } | { ok: false; error: string }> {
-  if (p.contactId) return { ok: true, contactId: p.contactId };
-
   let contactId: string;
-  try {
-    const res = await deps.fetchImpl(`${BASE}/contacts/upsert`, {
-      method: 'POST',
-      headers: cabeceras(deps.apiKey),
-      body: JSON.stringify({ locationId: deps.locationId, email: p.cliente.email }),
-    });
-    const texto = await res.text();
-    if (!res.ok) return { ok: false, error: `GHL contacto ${res.status}: ${texto.slice(0, 200)}` };
-    const datos = JSON.parse(texto) as { contact?: { id?: string }; id?: string };
-    const id = datos.contact?.id ?? datos.id;
-    if (!id) return { ok: false, error: `GHL creó el contacto sin devolver id: ${texto.slice(0, 200)}` };
-    contactId = id;
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+
+  if (p.contactId) {
+    contactId = p.contactId;
+  } else {
+    try {
+      const res = await deps.fetchImpl(`${BASE}/contacts/upsert`, {
+        method: 'POST',
+        headers: cabeceras(deps.apiKey),
+        body: JSON.stringify({ locationId: deps.locationId, email: p.cliente.email }),
+      });
+      const texto = await res.text();
+      if (!res.ok) return { ok: false, error: `GHL contacto ${res.status}: ${texto.slice(0, 200)}` };
+      const datos = JSON.parse(texto) as { contact?: { id?: string }; id?: string };
+      const id = datos.contact?.id ?? datos.id;
+      if (!id) return { ok: false, error: `GHL creó el contacto sin devolver id: ${texto.slice(0, 200)}` };
+      contactId = id;
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
-  // Best-effort: el contacto ya quedó resuelto (nuevo o existente) y la
-  // cotización puede seguir aunque esto falle. Un fallo acá se registra pero
-  // no debe convertir una cotización que sí se puede emitir en un error para
-  // el vendedor.
+  // Best-effort: el contacto ya quedó resuelto (recibido, nuevo o existente)
+  // y la cotización puede seguir aunque esto falle. Un fallo acá se registra
+  // pero no debe convertir una cotización que sí se puede emitir en un error
+  // para el vendedor.
   const errorEscritura = await escribirContactoSinPisar(
     contactId,
     {

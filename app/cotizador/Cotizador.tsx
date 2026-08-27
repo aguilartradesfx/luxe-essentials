@@ -151,13 +151,21 @@ export default function Cotizador() {
   const [lineas, setLineas] = useState<LineaUI[]>([]);
   const [tasaIva, setTasaIva] = useState(IVA_GENERAL);
   const [bordadoEspecial, setBordadoEspecial] = useState(false);
-  const [enviando, setEnviando] = useState(false);
-  // Distinto de `enviando`: `enviando` es "la petición está en vuelo",
-  // `enviado` es "ya se guardó con éxito". Sin este segundo estado, tras un
+  // Renombrado en la ronda de correcciones "final-fix-C": el botón nunca
+  // envía la cotización al cliente (ver el comentario grande sobre
+  // `crearEstimate` en lib/cotizador/ghl.ts) — lo único que esta pantalla
+  // hace es crear el Estimate en GoHighLevel en estado `draft`. Llamar a
+  // este estado `enviando`/`enviado` invitaba a pensar que sí se mandaba
+  // algo hacia afuera. `creando`/`creado` describe lo que de verdad pasa: la
+  // petición a `/api/cotizacion` está en vuelo, o ya terminó de crear la
+  // fila y el Estimate.
+  const [creando, setCreando] = useState(false);
+  // Distinto de `creando`: `creando` es "la petición está en vuelo",
+  // `creado` es "ya se guardó con éxito". Sin este segundo estado, tras un
   // envío exitoso el botón volvía a quedar habilitado y un segundo clic
   // creaba otra fila en Supabase y otro Estimate en GoHighLevel. Ver
   // revisión de la Tarea 8.
-  const [enviado, setEnviado] = useState(false);
+  const [creado, setCreado] = useState(false);
   const [resultado, setResultado] = useState<Resultado | null>(null);
 
   // La vista previa (Tarea 8): ya no hay `calcular` ni catálogo en el
@@ -248,7 +256,7 @@ export default function Cotizador() {
 
   function agregar(skuId: string) {
     setResultado(null);
-    setEnviado(false);
+    setCreado(false);
     setLineas((prev) => {
       const existente = prev.find((l) => l.skuId === skuId);
       if (!existente) return [...prev, { skuId, cantidadTexto: '1' }];
@@ -276,7 +284,7 @@ export default function Cotizador() {
     setTasaIva(IVA_GENERAL);
     setBordadoEspecial(false);
     setResultado(null);
-    setEnviado(false);
+    setCreado(false);
     setCotizacion(COTIZACION_VACIA);
     setPreviaError('');
     // Sin esto, una cotización nueva y sin relación con ningún borrador
@@ -334,8 +342,8 @@ export default function Cotizador() {
   // servidor: si solo revisa el correo, deja enviar y volver con un 400
   // evitable. Ver revisión de la Tarea 8.
   const nombreValido = cliente.nombre.trim().length > 0;
-  const puedeEnviar =
-    !enviando && !enviado && lineas.length > 0 && !hayLineaInvalida && correoValido && nombreValido;
+  const puedeCrear =
+    !creando && !creado && lineas.length > 0 && !hayLineaInvalida && correoValido && nombreValido;
 
   // La pantalla de clave: sin ella no hay catálogo. `/api/cotizacion/catalogo`
   // es quien valida la clave y quien decide qué SKUs bajan al navegador (sin
@@ -367,9 +375,9 @@ export default function Cotizador() {
     }
   }
 
-  async function enviar() {
-    if (!puedeEnviar) return;
-    setEnviando(true);
+  async function crear() {
+    if (!puedeCrear) return;
+    setCreando(true);
     setResultado(null);
     try {
       const res = await fetch('/api/cotizacion', {
@@ -414,13 +422,13 @@ export default function Cotizador() {
         setBorradores((prev) => prev.filter((b) => b.id !== idCerrado));
       }
       // A partir de aquí el pedido ya existe en Supabase (y probablemente en
-      // GoHighLevel): `puedeEnviar` pasa a false y se queda así hasta que el
+      // GoHighLevel): `puedeCrear` pasa a false y se queda así hasta que el
       // vendedor pida explícitamente una cotización nueva.
-      setEnviado(true);
+      setCreado(true);
     } catch {
       setResultado({ ok: false, error: 'Fallo de red.' });
     } finally {
-      setEnviando(false);
+      setCreando(false);
     }
   }
 
@@ -734,19 +742,22 @@ export default function Cotizador() {
 
             <button
               type="button"
-              onClick={() => void enviar()}
-              disabled={!puedeEnviar}
+              onClick={() => void crear()}
+              disabled={!puedeCrear}
               className="mt-4 w-full rounded-lg bg-navy px-4 py-2.5 text-sm font-medium text-beige hover:bg-teal disabled:opacity-40"
             >
-              {/* Ronda de correcciones 2 (hallazgo C1): "Cotización enviada" era falso
-                  — `crearEstimate` (lib/cotizador/ghl.ts) nunca llama al endpoint de
-                  envío de GoHighLevel, así que nada salió hacia el cliente. "Cotización
-                  creada" es lo que de verdad pasó; el detalle de qué falta hacer va en
-                  el mensaje de abajo. */}
-              {enviando ? 'Enviando…' : enviado ? 'Cotización creada' : 'Enviar cotización'}
+              {/* Ronda de correcciones "final-fix-C": "Enviar cotización" ya era falso
+                  ANTES del clic, no solo en el mensaje de después — el vendedor hacía
+                  clic creyendo que mandaba la cotización al cliente, y solo se enteraba
+                  de que no fue así al leer el resultado. `crearEstimate`
+                  (lib/cotizador/ghl.ts) nunca llama al endpoint de envío de
+                  GoHighLevel: solo crea el Estimate ahí, en borrador. El texto del botón
+                  —en los tres estados— tiene que decir eso desde antes del clic; el
+                  detalle de qué falta hacer sigue yendo en el mensaje de abajo. */}
+              {creando ? 'Creando…' : creado ? 'Cotización creada' : 'Crear en GoHighLevel'}
             </button>
 
-            {enviado && (
+            {creado && (
               <button
                 type="button"
                 onClick={nuevaCotizacion}
