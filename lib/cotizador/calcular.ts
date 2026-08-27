@@ -13,7 +13,8 @@ export type OpcionesCalculo = {
 };
 
 // Medio hacia arriba. `Math.round` ya lo hace para positivos, y aquí no hay
-// negativos: un precio o una cantidad negativos se rechazan antes de llegar.
+// negativos: un precio de lista o una cantidad negativos se rechazan antes
+// de llegar (ver las validaciones en `calcular`).
 function redondear(valor: number): number {
   return Math.round(valor);
 }
@@ -24,6 +25,15 @@ export function calcular(
   opciones: OpcionesCalculo = {},
 ): Cotizacion {
   const tasaIva = opciones.tasaIva ?? IVA_GENERAL;
+
+  // La Tarea 8 llama a `calcular` directo desde el estado de React para la
+  // vista previa, sin Zod de por medio: un campo de tasa vacío da
+  // `parseFloat('') === NaN` y sin esta validación el NaN se propaga en
+  // silencio hasta la pantalla del vendedor.
+  if (!Number.isFinite(tasaIva) || tasaIva < 0 || tasaIva > 1) {
+    throw new Error(`Tasa de IVA inválida: ${tasaIva}. Debe ser un número entre 0 y 1.`);
+  }
+
   const porId = new Map(skus.map((s) => [s.id, s]));
 
   // Se fusionan las entradas repetidas antes de calcular. Si el mismo SKU
@@ -38,6 +48,12 @@ export function calcular(
     if (!Number.isInteger(entrada.cantidad) || entrada.cantidad <= 0) {
       throw new Error(
         `Cantidad inválida para ${entrada.skuId}: ${entrada.cantidad}. Debe ser un entero positivo.`,
+      );
+    }
+    const sku = porId.get(entrada.skuId)!;
+    if (!Number.isFinite(sku.precioLista) || sku.precioLista < 0) {
+      throw new Error(
+        `Precio de lista inválido para ${entrada.skuId}: ${sku.precioLista}. Debe ser un número no negativo.`,
       );
     }
     if (!cantidades.has(entrada.skuId)) orden.push(entrada.skuId);
@@ -72,7 +88,11 @@ export function calcular(
     lineas.push({
       skuId: sku.id,
       nombre: sku.nombre,
-      contenido: sku.contenido,
+      // Copia, no referencia: `calcular` se anuncia como función pura y el
+      // catálogo vive en memoria durante todo el proceso en Next.js. Si el
+      // llamador hace `push` sobre este arreglo, no debe contaminar el SKU
+      // original ni filtrarse a la próxima petición.
+      contenido: sku.contenido ? [...sku.contenido] : undefined,
       cantidad,
       precioLista: sku.precioLista,
       descuentoPct: escalon.pct,
