@@ -1,8 +1,10 @@
 import type { Escala, Escalon, GrupoDescuento } from '@/lib/cotizador/tipos';
 
-// Tasa general de IVA en Costa Rica. Es el valor por defecto, no una constante
-// del cálculo: hay ventas a tasa reducida y `calcular` recibe la tasa como dato.
-export const IVA_GENERAL = 0.13;
+// Re-exportada por compatibilidad: el valor en sí vive en `iva.ts`, sin datos
+// comerciales, para que `lib/validation.ts` (que puede llegar a un componente
+// `'use client'`) no tenga que importar este archivo solo por la tasa. Ver
+// `lib/cotizador/iva.ts`.
+export { IVA_GENERAL } from '@/lib/cotizador/iva';
 
 // Confirmadas por Luxe el 2026-08-26. Los seis grupos usan el mismo algoritmo
 // y solo cambian los números; por eso son datos y no código.

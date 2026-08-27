@@ -19,8 +19,19 @@ import Cotizador from '@/app/cotizador/Cotizador';
 // verde — ver el reporte de la Tarea 8 para el detalle de qué mutante mata
 // cada una.
 
+// El id y la familia de "set de 600 hilos king" deben coincidir con
+// lib/cotizador/catalogo.ts (`set-600-king`, familia "Sets de cama 600
+// hilos") — no son datos inventados libremente: si divergen, esta suite
+// puede seguir en verde mientras la pantalla real manda al servidor un SKU
+// que `calcular()` rechazaría con 400. Ese contrato no lo sostiene esta
+// prueba (usa un mock, no el motor real): lo sostiene
+// tests/api-cotizacion-previsualizar.test.ts, que sí llama a
+// `/api/cotizacion/previsualizar` con este mismo SKU y afirma el `motivo` y
+// el `precioUnitario` reales que produce el motor. Si alguien mueve el
+// escalón de 16 a otro número, esa prueba hermana se pone roja y avisa que
+// hay que actualizar también el mock de acá.
 const SKUS = [
-  { id: 'set-600-hilos-king', nombre: 'set de 600 hilos king', familia: 'Sets de cama' },
+  { id: 'set-600-king', nombre: 'set de 600 hilos king', familia: 'Sets de cama 600 hilos' },
   { id: 'uni-filipina-tradicional-manga-corta', nombre: 'filipina tradicional manga corta', familia: 'Uniformes' },
   { id: 'inserto-duvet-king', nombre: 'inserto de duvet king', familia: 'Edredones' },
 ];
@@ -30,15 +41,18 @@ const SKUS = [
 // descuento" por debajo de 10) y todo lo demás sin descuento. No es el motor
 // real —vive en el servidor y esta prueba no debe reimportarlo, sería volver
 // a arrastrar el catálogo—, solo lo justo para que la pantalla tenga algo
-// coherente que pintar.
+// coherente que pintar. La etiqueta "Sets de cama" en el `motivo` es la de
+// `ESCALAS['sets-cama'].etiqueta` (lib/cotizador/escalas.ts), no la familia
+// del SKU — son dos campos distintos, y confundirlos fue justamente el
+// descuido que esta nota corrige.
 function cotizacionSimulada(lineas: { skuId: string; cantidad: number }[], tasaIva: number, bordadoEspecial: boolean) {
   const totalSetsDeCama = lineas
-    .filter((l) => l.skuId === 'set-600-hilos-king')
+    .filter((l) => l.skuId === 'set-600-king')
     .reduce((acc, l) => acc + l.cantidad, 0);
   const pct = totalSetsDeCama >= 16 ? 10 : totalSetsDeCama >= 10 ? 5 : 0;
 
   const calculadas = lineas.map((l) => {
-    const esSet = l.skuId === 'set-600-hilos-king';
+    const esSet = l.skuId === 'set-600-king';
     const precioLista = 90000;
     const descuentoPct = esSet ? pct : 0;
     const precioUnitario = Math.round(precioLista * (1 - descuentoPct / 100));
@@ -376,7 +390,7 @@ describe('Cotizador', () => {
     expect(cuerpo).toEqual({
       clave: 'correcta',
       cliente: { nombre: 'Ana Pérez', email: 'ana@empresa.com' },
-      lineas: [{ skuId: 'set-600-hilos-king', cantidad: 1 }],
+      lineas: [{ skuId: 'set-600-king', cantidad: 1 }],
       tasaIva: 0.13,
       bordadoEspecial: false,
     });

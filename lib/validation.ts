@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IVA_GENERAL } from '@/lib/cotizador/escalas';
+import { IVA_GENERAL } from '@/lib/cotizador/iva';
 
 export const LINEAS = ['uniformes', 'hogar', 'ambas'] as const;
 
