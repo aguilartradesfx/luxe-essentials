@@ -448,8 +448,13 @@ export default function Cotizador() {
                           <p className="text-xs text-teal">{email}</p>
                           <p className="mt-1 text-xs text-navy">
                             {producto} —{' '}
-                            {/* La cantidad se muestra literal, tal como la dijo el cliente:
-                                "unos 300" no es 300, y convertirlo es criterio del vendedor. */}
+                            {/* No parsear ni redondear esto. "unos 300" no es 300: convertirlo
+                                es criterio del vendedor, no del sistema — el agente capturó
+                                texto libre, no un número, y esta pantalla no interpreta lo que
+                                no puede saber. Ver tests/cotizador-ui.test.tsx, describe
+                                "Borradores pendientes (Tarea 10)": el mutante que pasa esta
+                                variable por `Number.parseInt` antes de pintarla pone esas
+                                pruebas en rojo — no lo "arregles" para que se vea más prolijo. */}
                             <span className="font-medium">«{cantidadTexto}»</span>
                           </p>
                           <p className="mt-1 text-xs text-teal/70">{formatearFecha(borrador.created_at)}</p>

@@ -91,6 +91,10 @@ type OpcionesFetch = {
   // llega a este número de llamadas y sigue existiendo (para probar qué pasa
   // si, pese a todo, se dispara una segunda petición).
   fallarRed?: 'previsualizar' | 'cotizacion';
+  // Lo que devuelve `/api/cotizacion/borradores`. Por defecto, vacío — las
+  // pruebas de armado de la cotización no necesitan borradores; las que sí
+  // los necesitan (la cola del agente) lo pasan explícito.
+  borradores?: unknown[];
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -106,10 +110,9 @@ function mockFetch(opciones: OpcionesFetch = {}) {
     }
 
     if (url.endsWith('/api/cotizacion/borradores')) {
-      // Tarea 10: se llama justo al entrar. Sin borradores reales en estas
-      // pruebas — lo que le interesa a esta suite es el flujo de armado de
-      // la cotización, no la cola del agente.
-      return new Response(JSON.stringify({ ok: true, borradores: [] }), { status: 200 });
+      // Tarea 10: se llama justo al entrar. Vacío salvo que la prueba pida
+      // otra cosa vía `opciones.borradores`.
+      return new Response(JSON.stringify({ ok: true, borradores: opciones.borradores ?? [] }), { status: 200 });
     }
 
     if (url.endsWith('/api/cotizacion/previsualizar')) {
@@ -470,5 +473,93 @@ describe('Cotizador', () => {
       expect(screen.getByText(/fallo de red/i)).toBeInTheDocument();
     });
     expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument();
+  });
+});
+
+// Tarea 10, ronda de corrección 1: el revisor mutó la línea que pinta
+// `cantidadTexto` para pasarla por `Number.parseInt` (convertir "300 aprox"
+// en 300) y las 22 pruebas de este archivo siguieron en verde — nada las
+// ejercitaba. Estas pruebas cierran ese hueco.
+describe('Borradores pendientes (Tarea 10)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function borrador(id: string, cliente: Record<string, unknown>) {
+    return { id, created_at: '2026-08-26T10:00:00Z', contact_id: 'c1', cliente };
+  }
+
+  it('muestra la cantidad del borrador literal, sin interpretarla como número', async () => {
+    // "300 aprox" empieza con dígitos: si alguien "arregla" la pantalla para
+    // que se vea más prolija con `Number.parseInt(cantidadTexto, 10)`, JS
+    // coacciona el número resultante (300) a string al pintarlo y la palabra
+    // "aprox" desaparece en silencio. Esta prueba exige el texto exacto, con
+    // comillas angulares y todo, así que ese cambio la pone en rojo.
+    mockFetch({
+      borradores: [
+        borrador('cot-1', {
+          nombre: 'Ana Pérez',
+          email: 'ana@hotel.com',
+          producto: 'uniformes',
+          cantidadTexto: '300 aprox',
+        }),
+      ],
+    });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await waitFor(() => {
+      expect(screen.getByText('«300 aprox»')).toBeInTheDocument();
+    });
+    // Ni "300" solo ni "NaN" — cualquiera de las dos es la marca de que
+    // alguien pasó el texto por un parseo numérico.
+    expect(screen.queryByText('«300»')).not.toBeInTheDocument();
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+  });
+
+  it('lista el borrador con lo que trajo, y "Usar" rellena los campos del cliente', async () => {
+    mockFetch({
+      borradores: [
+        borrador('cot-2', {
+          nombre: 'Carlos Rojas',
+          empresa: 'Hotel Playa Linda',
+          email: 'carlos@playalinda.com',
+          producto: 'sábanas',
+          cantidadTexto: 'unos 300',
+        }),
+      ],
+    });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await waitFor(() => {
+      expect(screen.getByText(/carlos rojas/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/hotel playa linda/i)).toBeInTheDocument();
+    expect(screen.getByText(/carlos@playalinda\.com/i)).toBeInTheDocument();
+    expect(screen.getByText(/sábanas/i)).toBeInTheDocument();
+    expect(screen.getByText('«unos 300»')).toBeInTheDocument();
+
+    await usuario.click(screen.getByRole('button', { name: /usar/i }));
+
+    expect(screen.getByLabelText(/nombre del cliente/i)).toHaveValue('Carlos Rojas');
+    expect(screen.getByLabelText(/empresa del cliente/i)).toHaveValue('Hotel Playa Linda');
+    expect(screen.getByLabelText(/correo del cliente/i)).toHaveValue('carlos@playalinda.com');
+    // El recordatorio deja el pedido original visible, para elegir SKUs
+    // contra lo que el cliente realmente dijo.
+    expect(screen.getByText(/«unos 300» de sábanas/i)).toBeInTheDocument();
+  });
+
+  it('sin borradores pendientes, muestra el texto neutro en vez de una sección vacía', async () => {
+    mockFetch({ borradores: [] });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await waitFor(() => {
+      expect(screen.getByText('No hay borradores pendientes.')).toBeInTheDocument();
+    });
   });
 });
