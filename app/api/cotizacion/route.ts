@@ -93,6 +93,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'No se pudo guardar.' }, { status: 500 });
   }
 
+  // Ronda de correcciones 2 (hallazgo I1): si esta cotización nació de un
+  // borrador que dejó el agente de IA, esa fila hay que cerrarla ya —
+  // independiente de cómo le vaya a GoHighLevel más abajo. La cotización
+  // real (esta que se acaba de guardar) ya existe: dejar el borrador en
+  // 'borrador' para siempre es lo que hoy nunca vacía la cola del vendedor
+  // y, peor, bloquea `registrarIntencion` (lib/cotizador/borrador.ts) para
+  // este contacto de por vida, porque esa función corta si ya hay un
+  // 'borrador' abierto suyo. Best-effort: un fallo acá se registra pero no
+  // debe tumbar la respuesta, la cotización ya está a salvo.
+  if (datos.borradorId) {
+    const { error: errorBorrador } = await supabaseAdmin()
+      .from('cotizaciones')
+      .update({ estado: 'convertida', updated_at: new Date().toISOString() })
+      .eq('id', datos.borradorId);
+    if (errorBorrador) {
+      console.error('[cotizador] No se pudo cerrar el borrador del agente.', errorBorrador.message);
+    }
+  }
+
   const ghl = await crearEstimate(
     { cotizacion, cliente: datos.cliente, contactId: datos.contactId },
     {
@@ -115,9 +134,14 @@ export async function POST(request: Request) {
       // `updated_at` va explícito: la columna tiene `default now()` pero no hay
       // trigger, así que sin esto se quedaría siempre igual a `created_at` y la
       // auditoría diría que la cotización nunca cambió de estado.
+      // Ronda de correcciones 2 (hallazgo C1): 'creada', no 'enviada'.
+      // `crearEstimate` (lib/cotizador/ghl.ts) nunca llama al endpoint de
+      // envío de GoHighLevel — el Estimate queda en `draft` ahí adentro
+      // hasta que alguien lo abra y lo mande a mano. 'enviada' se queda en
+      // el check de la tabla para cuando ese envío exista de verdad.
       ghl.ok
         ? {
-            estado: 'enviada',
+            estado: 'creada',
             ghl_estimate_id: ghl.estimateId,
             ghl_error: ghl.opportunityError ?? null,
             contact_id: contactId,

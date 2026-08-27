@@ -95,6 +95,13 @@ type OpcionesFetch = {
   // pruebas de armado de la cotización no necesitan borradores; las que sí
   // los necesitan (la cola del agente) lo pasan explícito.
   borradores?: unknown[];
+  // Fuerza la `tasaIva` que devuelve `/api/cotizacion/previsualizar`, sin
+  // importar qué tasa mandó la pantalla. Sirve para probar el rótulo del IVA
+  // con una tasa fraccionaria (2.5%) que el `<select>` de la pantalla no
+  // puede producir hoy (solo ofrece 13% y 0%): lo que se ejercita es que el
+  // rótulo formatea `cotizacion.tasaIva` sin `Math.round`, no el viaje de
+  // ida y vuelta de la tasa.
+  previsualizarTasaIvaForzada?: number;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -119,7 +126,8 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       if (opciones.fallarRed === 'previsualizar') {
         throw new TypeError('Failed to fetch');
       }
-      const cotizacion = cotizacionSimulada(cuerpo.lineas ?? [], cuerpo.tasaIva ?? 0.13, cuerpo.bordadoEspecial ?? false);
+      const tasaIva = opciones.previsualizarTasaIvaForzada ?? cuerpo.tasaIva ?? 0.13;
+      const cotizacion = cotizacionSimulada(cuerpo.lineas ?? [], tasaIva, cuerpo.bordadoEspecial ?? false);
       return new Response(JSON.stringify({ ok: true, cotizacion }), { status: 200 });
     }
 
@@ -256,6 +264,27 @@ describe('Cotizador', () => {
     const posIva = texto.search(/IVA \(/);
     expect(posTotal).toBeGreaterThanOrEqual(0);
     expect(posIva).toBeGreaterThan(posTotal);
+  });
+
+  it('el rótulo del IVA no redondea una tasa fraccionaria (mismo formato que lib/cotizador/ghl.ts)', async () => {
+    // Math.round(0.025 * 100) da 3: "IVA (3%)" miente sobre una tasa real de
+    // 2.5%. Ronda de correcciones 2 (menor, de paso): mismo error que ya se
+    // había corregido en lib/cotizador/ghl.ts con `formatearTasa`, y que acá
+    // se había quedado a medias. Mata el mutante que reintroduce
+    // `Math.round(cotizacion.tasaIva * 100)` en el rótulo.
+    mockFetch({ previsualizarTasaIvaForzada: 0.025 });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await waitFor(
+      () => {
+        expect(screen.getByText(/IVA \(2\.5%\)/)).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
+    expect(screen.queryByText(/IVA \(3%\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/IVA \(2%\)/)).not.toBeInTheDocument();
   });
 
   it('avisa cuando se marca bordado especial', async () => {
@@ -407,6 +436,29 @@ describe('Cotizador', () => {
     expect('total' in cuerpo).toBe(false);
   });
 
+  it('el mensaje de éxito dice la verdad: creada en GoHighLevel, falta enviarla al cliente', async () => {
+    // Ronda de correcciones 2 (hallazgo C1): antes decía "enviada en
+    // GoHighLevel", y crearEstimate (lib/cotizador/ghl.ts) nunca envía nada
+    // — solo crea el Estimate ahí en borrador. El vendedor tiene que abrirlo
+    // en GoHighLevel y mandarlo a mano; la pantalla se lo tiene que decir.
+    mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/falta enviarla al cliente/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/enviada en gohighlevel/i)).not.toBeInTheDocument();
+  });
+
   it('no permite un segundo envío tras uno exitoso (protección contra doble clic)', async () => {
     const fetchEspiado = mockFetch();
     const usuario = userEvent.setup();
@@ -425,7 +477,10 @@ describe('Cotizador', () => {
       expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
     });
 
-    const botonTrasEnvio = screen.getByRole('button', { name: /cotización enviada/i });
+    // Ronda de correcciones 2 (hallazgo C1): el botón decía "Cotización
+    // enviada", pero crearEstimate nunca envía nada — solo la crea en
+    // borrador dentro de GoHighLevel. "Cotización creada" es lo cierto.
+    const botonTrasEnvio = screen.getByRole('button', { name: /cotización creada/i });
     expect(botonTrasEnvio).toBeDisabled();
 
     // Un segundo clic (el "clic nervioso") no debe crear otra fila en
@@ -561,5 +616,114 @@ describe('Borradores pendientes (Tarea 10)', () => {
     await waitFor(() => {
       expect(screen.getByText('No hay borradores pendientes.')).toBeInTheDocument();
     });
+  });
+
+  // --- Ronda de correcciones 2 (hallazgo I1) ---
+
+  it('el envío final manda borradorId y contactId cuando la cotización viene de "Usar" un borrador', async () => {
+    // Antes esto se tiraba: `usarBorrador` solo rellenaba los campos de
+    // cliente, y el envío final no sabía de qué borrador venía. La fila del
+    // agente se quedaba en 'borrador' para siempre (y bloqueaba
+    // `registrarIntencion` para ese contacto), y GoHighLevel daba de alta un
+    // contacto nuevo aunque el borrador ya trajera uno (`contact_id: 'c1'`
+    // en el helper `borrador(...)` de arriba).
+    const fetchEspiado = mockFetch({
+      borradores: [
+        borrador('cot-3', {
+          nombre: 'Carlos Rojas',
+          email: 'carlos@playalinda.com',
+          producto: 'sábanas',
+          cantidadTexto: 'unos 300',
+        }),
+      ],
+    });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await waitFor(() => {
+      expect(screen.getByText(/carlos rojas/i)).toBeInTheDocument();
+    });
+    await usuario.click(screen.getByRole('button', { name: /usar/i }));
+    await agregar(usuario, 'set de 600 hilos king');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamada).toBeDefined();
+    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
+    expect(cuerpo.borradorId).toBe('cot-3');
+    expect(cuerpo.contactId).toBe('c1');
+  });
+
+  it('un envío que no viene de un borrador no manda borradorId ni contactId', async () => {
+    // Mata el mutante "mandar siempre borradorId/contactId, hayan venido de
+    // un borrador o no": una cotización armada desde cero no debe cerrar
+    // ningún borrador ajeno ni reutilizar un contacto que no le corresponde.
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
+    expect('borradorId' in cuerpo).toBe(false);
+    expect('contactId' in cuerpo).toBe(false);
+  });
+
+  it('tras un envío exitoso, el borrador usado desaparece de la lista local (la cola no sigue mostrando lo ya atendido)', async () => {
+    mockFetch({
+      borradores: [
+        borrador('cot-4', {
+          nombre: 'Carlos Rojas',
+          email: 'carlos@playalinda.com',
+          producto: 'sábanas',
+          cantidadTexto: 'unos 300',
+        }),
+      ],
+    });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await waitFor(() => {
+      expect(screen.getByText(/carlos rojas/i)).toBeInTheDocument();
+    });
+    await usuario.click(screen.getByRole('button', { name: /usar/i }));
+    await agregar(usuario, 'set de 600 hilos king');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /enviar cotización/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /enviar cotización/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/carlos rojas/i)).not.toBeInTheDocument();
+    expect(screen.getByText('No hay borradores pendientes.')).toBeInTheDocument();
   });
 });

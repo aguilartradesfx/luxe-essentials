@@ -33,6 +33,17 @@ type Borrador = {
 // contra eso — no contra un número que alguien más interpretó por él.
 type Recordatorio = { producto: string; cantidadTexto: string };
 
+// Ronda de correcciones 2 (hallazgo I1): qué borrador del agente está detrás
+// de la cotización que se está armando, si hay uno. Se manda de vuelta al
+// servidor con el envío final para que:
+// 1. cierre esa fila (estado 'convertida') — si no, se queda en 'borrador'
+//    para siempre, la cola del vendedor nunca se vacía, y peor,
+//    `registrarIntencion` (lib/cotizador/borrador.ts) deja de registrar
+//    intenciones nuevas de ese contacto para siempre.
+// 2. reutilice el `contactId` que el borrador ya trae, en vez de crear un
+//    contacto nuevo en GoHighLevel para alguien que ya existe ahí.
+type BorradorActivo = { id: string; contactId: string | null };
+
 // El jsonb `cliente` de un borrador no tiene forma garantizada: se lee campo
 // por campo, y cualquier cosa que no sea string se trata como ausente en vez
 // de reventar la pantalla.
@@ -98,6 +109,16 @@ function colones(valor: number): string {
   return `₡${Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
+// Mismo formato que `formatearTasa` en lib/cotizador/ghl.ts, duplicado a
+// propósito por la misma razón que `IVA_GENERAL` arriba: esta pantalla no
+// puede importar código del servidor. `Math.round(tasa * 100)` da "IVA 3%"
+// para una tasa reducida de 2.5% — el rótulo miente sobre el monto real
+// (que sí es 2.5%). Hasta dos decimales, sin ceros de más: 13 -> "13",
+// 2.5 -> "2.5".
+function formatearTasa(tasa: number): string {
+  return (tasa * 100).toFixed(2).replace(/\.?0+$/, '');
+}
+
 // Fecha y hora en formato fijo (dd/mm/aaaa hh:mm), sin depender de la
 // configuración regional del navegador del vendedor — mismo motivo que
 // `colones` evita `toLocaleString` para los montos.
@@ -121,6 +142,9 @@ export default function Cotizador() {
   const [cargandoBorradores, setCargandoBorradores] = useState(false);
   const [borradoresError, setBorradoresError] = useState('');
   const [recordatorio, setRecordatorio] = useState<Recordatorio | null>(null);
+  // Ronda de correcciones 2 (hallazgo I1): ver el comentario de
+  // `BorradorActivo` arriba.
+  const [borradorActivo, setBorradorActivo] = useState<BorradorActivo | null>(null);
 
   const [cliente, setCliente] = useState<Cliente>(CLIENTE_VACIO);
   const [busqueda, setBusqueda] = useState('');
@@ -255,6 +279,10 @@ export default function Cotizador() {
     setEnviado(false);
     setCotizacion(COTIZACION_VACIA);
     setPreviaError('');
+    // Sin esto, una cotización nueva y sin relación con ningún borrador
+    // arrastraría el `borradorId`/`contactId` del borrador anterior y
+    // cerraría (o pisaría el contacto de) una fila que no le corresponde.
+    setBorradorActivo(null);
   }
 
   // La cola de borradores del agente: `/api/cotizacion/borradores` es POST
@@ -292,6 +320,12 @@ export default function Cotizador() {
     const c = borrador.cliente ?? {};
     setCliente({ nombre: textoDe(c.nombre), empresa: textoDe(c.empresa), email: textoDe(c.email) });
     setRecordatorio({ producto: textoDe(c.producto), cantidadTexto: textoDe(c.cantidadTexto) });
+    // Ronda de correcciones 2 (hallazgo I1): antes esto se tiraba —
+    // `borrador.id` y `borrador.contact_id` nunca salían de esta función, así
+    // que el envío final creaba una fila nueva sin relación con el borrador
+    // (que se quedaba abierto para siempre) y, cuando el borrador sí traía
+    // contacto, GoHighLevel de todos modos daba de alta uno nuevo.
+    setBorradorActivo({ id: borrador.id, contactId: borrador.contact_id });
   }
 
   const correoValido = cliente.email.trim().length > 0;
@@ -351,6 +385,14 @@ export default function Cotizador() {
           lineas: entradas,
           tasaIva,
           bordadoEspecial,
+          // Ronda de correcciones 2 (hallazgo I1): solo van si esta
+          // cotización nació de un borrador del agente. `borradorId` le dice
+          // al servidor qué fila cerrar; `contactId` evita que se dé de alta
+          // un contacto nuevo en GoHighLevel para alguien que ya existe ahí.
+          // `undefined` desaparece al pasar por `JSON.stringify`, así que una
+          // cotización armada desde cero no manda ninguno de los dos.
+          borradorId: borradorActivo?.id,
+          contactId: borradorActivo?.contactId ?? undefined,
         }),
       });
       const datos = await res.json();
@@ -364,6 +406,13 @@ export default function Cotizador() {
         ghlEstimateId: datos.ghl?.estimateId,
         ghlError: datos.ghl?.error,
       });
+      // El borrador ya quedó cerrado en el servidor (estado 'convertida'):
+      // se saca también de la lista local para que la cola no siga
+      // mostrándolo como pendiente hasta la próxima recarga.
+      if (borradorActivo) {
+        const idCerrado = borradorActivo.id;
+        setBorradores((prev) => prev.filter((b) => b.id !== idCerrado));
+      }
       // A partir de aquí el pedido ya existe en Supabase (y probablemente en
       // GoHighLevel): `puedeEnviar` pasa a false y se queda así hasta que el
       // vendedor pida explícitamente una cotización nueva.
@@ -613,7 +662,7 @@ export default function Cotizador() {
                   <dd className="text-navy">{colones(cotizacion.ahorro)}</dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-teal">IVA ({Math.round(cotizacion.tasaIva * 100)}%)</dt>
+                  <dt className="text-teal">IVA ({formatearTasa(cotizacion.tasaIva)}%)</dt>
                   <dd className="text-navy">{colones(cotizacion.iva)}</dd>
                 </div>
               </dl>
@@ -689,7 +738,12 @@ export default function Cotizador() {
               disabled={!puedeEnviar}
               className="mt-4 w-full rounded-lg bg-navy px-4 py-2.5 text-sm font-medium text-beige hover:bg-teal disabled:opacity-40"
             >
-              {enviando ? 'Enviando…' : enviado ? 'Cotización enviada' : 'Enviar cotización'}
+              {/* Ronda de correcciones 2 (hallazgo C1): "Cotización enviada" era falso
+                  — `crearEstimate` (lib/cotizador/ghl.ts) nunca llama al endpoint de
+                  envío de GoHighLevel, así que nada salió hacia el cliente. "Cotización
+                  creada" es lo que de verdad pasó; el detalle de qué falta hacer va en
+                  el mensaje de abajo. */}
+              {enviando ? 'Enviando…' : enviado ? 'Cotización creada' : 'Enviar cotización'}
             </button>
 
             {enviado && (
@@ -703,14 +757,23 @@ export default function Cotizador() {
             )}
 
             {resultado && resultado.ok && (
-              <p className="mt-3 rounded-lg bg-[color:var(--carta-border)]/30 px-3 py-2 text-xs text-navy">
-                Cotización guardada · {resultado.id}
-                {resultado.ghlEstimateId
-                  ? ` · enviada en GoHighLevel (${resultado.ghlEstimateId})`
-                  : resultado.ghlError
-                    ? ` · GoHighLevel falló: ${resultado.ghlError}`
-                    : ''}
-              </p>
+              <div className="mt-3 rounded-lg bg-[color:var(--carta-border)]/30 px-3 py-2 text-xs text-navy">
+                <p>Cotización guardada · {resultado.id}</p>
+                {/* Ronda de correcciones 2 (hallazgo C1): antes decía "enviada en
+                    GoHighLevel", pero crearEstimate solo la crea ahí en borrador — nunca
+                    la manda. El vendedor tiene que abrirla en GoHighLevel y mandarla él
+                    mismo desde ahí; sin esta línea, nadie se entera de que falta ese
+                    paso y la cotización se queda parada sin que el hotel la reciba. */}
+                {resultado.ghlEstimateId ? (
+                  <p className="mt-1">
+                    Creada en GoHighLevel ({resultado.ghlEstimateId}) — falta enviarla al cliente.
+                    Este cotizador todavía no la manda solo: abrila en GoHighLevel y envíala
+                    vos desde ahí.
+                  </p>
+                ) : resultado.ghlError ? (
+                  <p className="mt-1">GoHighLevel falló: {resultado.ghlError}</p>
+                ) : null}
+              </div>
             )}
             {resultado && !resultado.ok && (
               <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">{resultado.error}</p>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { crearEstimate, ETAPA_PROPUESTA_ID } from '@/lib/cotizador/ghl';
+import { crearEstimate, ETAPA_CALIFICADA_ID, ETAPA_PROPUESTA_ID } from '@/lib/cotizador/ghl';
 import type { Cotizacion } from '@/lib/cotizador/tipos';
 
 const cotizacion: Cotizacion = {
@@ -34,8 +34,10 @@ function respuesta(body: unknown, status = 200) {
 // La respuesta real de `POST /opportunities/` trae la etapa que quedó
 // guardada. La mayoría de las pruebas de este archivo no están probando C3
 // (la detección de una etapa equivocada), así que usan esta variante "sana"
-// por defecto: coincide con lo que `crearEstimate` pidió.
-function respuestaOportunidad(pipelineStageId: string | undefined = ETAPA_PROPUESTA_ID) {
+// por defecto: coincide con lo que `crearEstimate` pide HOY — "Qualified",
+// no "Proposal Sent" (ronda de correcciones 2, hallazgo C1: ver el
+// comentario de `ETAPA_CALIFICADA_ID` en lib/cotizador/ghl.ts).
+function respuestaOportunidad(pipelineStageId: string | undefined = ETAPA_CALIFICADA_ID) {
   return respuesta({ id: 'opp-1', pipelineStageId });
 }
 
@@ -422,14 +424,14 @@ describe('crearEstimate', () => {
       expect(r.ok).toBe(true);
       if (r.ok) {
         expect(r.opportunityError).toBeTruthy();
-        expect(r.opportunityError).toContain(ETAPA_PROPUESTA_ID);
+        expect(r.opportunityError).toContain(ETAPA_CALIFICADA_ID);
       }
     });
 
     it('no reporta error cuando la etapa devuelta sí coincide', async () => {
       const fetchImpl = vi.fn()
         .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
-        .mockResolvedValueOnce(respuestaOportunidad(ETAPA_PROPUESTA_ID));
+        .mockResolvedValueOnce(respuestaOportunidad(ETAPA_CALIFICADA_ID));
       const r = await crearEstimate(params, { ...deps, fetchImpl });
       expect(r.ok).toBe(true);
       if (r.ok) expect(r.opportunityError).toBeUndefined();
@@ -441,10 +443,47 @@ describe('crearEstimate', () => {
       // comparación tiene que cubrir ambas formas.
       const fetchImpl = vi.fn()
         .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
-        .mockResolvedValueOnce(respuesta({ opportunity: { id: 'opp-1', pipelineStageId: ETAPA_PROPUESTA_ID } }));
+        .mockResolvedValueOnce(respuesta({ opportunity: { id: 'opp-1', pipelineStageId: ETAPA_CALIFICADA_ID } }));
       const r = await crearEstimate(params, { ...deps, fetchImpl });
       expect(r.ok).toBe(true);
       if (r.ok) expect(r.opportunityError).toBeUndefined();
+    });
+  });
+
+  describe('Ronda de correcciones 2 (hallazgos C1 e I1 de la revisión final)', () => {
+    it('mueve la oportunidad a "Qualified", no a "Proposal Sent" — el Estimate nunca se envía', async () => {
+      // Hallazgo C1: crearEstimate crea el Estimate en borrador y jamás lo
+      // envía. Decir "Proposal Sent" sería mentir sobre un envío que no
+      // ocurrió. Mutante que esto mata: volver a apuntar `moverOportunidad`
+      // a `ETAPA_PROPUESTA_ID`.
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+        .mockResolvedValueOnce(respuestaOportunidad());
+      await crearEstimate(params, { ...deps, fetchImpl });
+      const cuerpoOportunidad = JSON.parse(fetchImpl.mock.calls[1][1].body);
+      expect(cuerpoOportunidad.pipelineStageId).toBe(ETAPA_CALIFICADA_ID);
+      expect(cuerpoOportunidad.pipelineStageId).not.toBe(ETAPA_PROPUESTA_ID);
+    });
+
+    it('usa la fecha de Costa Rica, no la de UTC, para issueDate/expiryDate', async () => {
+      // 01:30 UTC del 26 de agosto todavía es 25 de agosto, 7:30pm en Costa
+      // Rica (UTC-6). Un servidor con reloj UTC —lo normal en Vercel—
+      // imprimía el día siguiente si `formatearFecha` no formatea con el
+      // huso horario correcto. Mutante que esto mata: volver a
+      // `fecha.toISOString().slice(0, 10)`.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-08-26T01:30:00Z'));
+      try {
+        const fetchImpl = vi.fn()
+          .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+          .mockResolvedValueOnce(respuestaOportunidad());
+        await crearEstimate(params, { ...deps, fetchImpl });
+        const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+        expect(cuerpo.issueDate).toBe('2026-08-25');
+        expect(cuerpo.expiryDate).toBe('2026-09-24');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

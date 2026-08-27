@@ -56,6 +56,12 @@ export const cotizacionSchema = z.object({
     .optional(),
   bordadoEspecial: z.boolean({ message: 'Bordado especial debe ser verdadero o falso.' }).optional(),
   contactId: z.string().min(1).optional(),
+  // Ronda de correcciones 2 (hallazgo I1): cuando la cotización nace de un
+  // borrador que dejó el agente de IA, la pantalla manda el id de esa fila
+  // para que el servidor la cierre (estado 'convertida'). Sin esto, la fila
+  // del agente se queda en 'borrador' para siempre y bloquea
+  // `registrarIntencion` para ese contacto de por vida.
+  borradorId: z.string().min(1).optional(),
 });
 
 export type CotizacionInput = z.infer<typeof cotizacionSchema>;

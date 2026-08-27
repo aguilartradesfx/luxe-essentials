@@ -291,6 +291,22 @@ for (const [id, nombre] of Object.entries(CORRECCIONES_NOMBRE)) {
   sku.nombre = nombre;
 }
 
+// --- Ronda de correcciones 2 (revisor, hallazgo I3): capitaliza el nombre ---
+// `items[].name` sale tal cual del catálogo hacia el documento que recibe el
+// hotel — "filipina tradicional manga corta", "set de 600 hilos king", los
+// 70 sin excepción, en minúscula. Para una empresa que vende textiles de
+// lujo a hoteles, esa cotización es la pieza de venta: no puede leerse como
+// si nadie la hubiera revisado. Se capitaliza solo la primera letra, al
+// final, después de todas las correcciones de arriba — así no hay que tocar
+// `CORRECCIONES_TEXTO_UNIFORMES` ni `CORRECCIONES_NOMBRE` para mantener esto.
+// No toca el resto de la cadena, así que no arriesga los nombres propios que
+// ya vienen bien capitalizados a mitad de frase (Lacoste, Columbia, Oxford,
+// en `CORRECCIONES_TEXTO_UNIFORMES`): ninguno de los 70 nombres empieza con
+// uno de esos, así que esta regla no los toca dos veces.
+for (const sku of skus) {
+  sku.nombre = sku.nombre.charAt(0).toUpperCase() + sku.nombre.slice(1);
+}
+
 if (skus.length !== 70) {
   throw new Error(`Se esperaban 70 SKUs y salieron ${skus.length}`);
 }

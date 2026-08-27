@@ -17,7 +17,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "filipina tradicional manga corta",
+    "nombre": "Filipina tradicional manga corta",
     "precioLista": 15500
   },
   {
@@ -25,7 +25,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "filipina tradicional corte mujer manga corta",
+    "nombre": "Filipina tradicional corte mujer manga corta",
     "precioLista": 15500
   },
   {
@@ -33,7 +33,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "filipina ejecutiva manga corta espalda mesh",
+    "nombre": "Filipina ejecutiva manga corta espalda mesh",
     "precioLista": 18500
   },
   {
@@ -41,7 +41,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalón de cocina tipo baggy",
+    "nombre": "Pantalón de cocina tipo baggy",
     "precioLista": 17500
   },
   {
@@ -49,7 +49,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalón de cocina tipo baggy corte mujer",
+    "nombre": "Pantalón de cocina tipo baggy corte mujer",
     "precioLista": 17500
   },
   {
@@ -57,7 +57,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalón tradicional formal",
+    "nombre": "Pantalón tradicional formal",
     "precioLista": 18000
   },
   {
@@ -65,7 +65,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "pantalón tradicional formal corte mujer",
+    "nombre": "Pantalón tradicional formal corte mujer",
     "precioLista": 18000
   },
   {
@@ -73,7 +73,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "mandil mediano",
+    "nombre": "Mandil mediano",
     "precioLista": 9500
   },
   {
@@ -81,7 +81,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "mandil largo",
+    "nombre": "Mandil largo",
     "precioLista": 10500
   },
   {
@@ -89,7 +89,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "gorro tipo beanie mesh top",
+    "nombre": "Gorro tipo beanie mesh top",
     "precioLista": 6500
   },
   {
@@ -97,7 +97,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "gabacha ajustable",
+    "nombre": "Gabacha ajustable",
     "precioLista": 7000
   },
   {
@@ -105,7 +105,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "mandil corto",
+    "nombre": "Mandil corto",
     "precioLista": 7000
   },
   {
@@ -113,7 +113,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo polo warp piqué (tipo Lacoste)",
+    "nombre": "Camisa tipo polo warp piqué (tipo Lacoste)",
     "precioLista": 12000
   },
   {
@@ -121,7 +121,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo polo warp piqué corte mujer",
+    "nombre": "Camisa tipo polo warp piqué corte mujer",
     "precioLista": 12000
   },
   {
@@ -129,7 +129,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo polo interlock (tipo golf)",
+    "nombre": "Camisa tipo polo interlock (tipo golf)",
     "precioLista": 12000
   },
   {
@@ -137,7 +137,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo polo interlock corte mujer",
+    "nombre": "Camisa tipo polo interlock corte mujer",
     "precioLista": 12000
   },
   {
@@ -145,7 +145,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo Columbia",
+    "nombre": "Camisa tipo Columbia",
     "precioLista": 16500
   },
   {
@@ -153,7 +153,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa tipo Columbia corte mujer",
+    "nombre": "Camisa tipo Columbia corte mujer",
     "precioLista": 16500
   },
   {
@@ -161,7 +161,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa de servicio",
+    "nombre": "Camisa de servicio",
     "precioLista": 17000
   },
   {
@@ -169,7 +169,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa de servicio corte mujer",
+    "nombre": "Camisa de servicio corte mujer",
     "precioLista": 17000
   },
   {
@@ -177,7 +177,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa formal Oxford manga corta",
+    "nombre": "Camisa formal Oxford manga corta",
     "precioLista": 16000
   },
   {
@@ -185,7 +185,7 @@ export const CATALOGO: Sku[] = [
     "linea": "uniformes",
     "grupo": "uniformes",
     "familia": "Uniformes",
-    "nombre": "camisa formal Oxford manga corta corte mujer",
+    "nombre": "Camisa formal Oxford manga corta corte mujer",
     "precioLista": 16000
   },
   {
@@ -193,7 +193,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 600 hilos",
-    "nombre": "set de 600 hilos king",
+    "nombre": "Set de 600 hilos king",
     "talla": "king",
     "precioLista": 90000,
     "contenido": [
@@ -207,7 +207,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 600 hilos",
-    "nombre": "set de 600 hilos queen",
+    "nombre": "Set de 600 hilos queen",
     "talla": "queen",
     "precioLista": 85000,
     "contenido": [
@@ -221,7 +221,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 600 hilos",
-    "nombre": "set de 600 hilos doble",
+    "nombre": "Set de 600 hilos doble",
     "talla": "doble",
     "precioLista": 78000,
     "contenido": [
@@ -235,7 +235,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 600 hilos",
-    "nombre": "set de 600 hilos imperial",
+    "nombre": "Set de 600 hilos imperial",
     "talla": "imperial",
     "precioLista": 70000,
     "contenido": [
@@ -249,7 +249,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 400 hilos",
-    "nombre": "set de 400 hilos king",
+    "nombre": "Set de 400 hilos king",
     "talla": "king",
     "precioLista": 65000,
     "contenido": [
@@ -263,7 +263,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 400 hilos",
-    "nombre": "set de 400 hilos queen",
+    "nombre": "Set de 400 hilos queen",
     "talla": "queen",
     "precioLista": 60000,
     "contenido": [
@@ -277,7 +277,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 400 hilos",
-    "nombre": "set de 400 hilos doble",
+    "nombre": "Set de 400 hilos doble",
     "talla": "doble",
     "precioLista": 55000,
     "contenido": [
@@ -291,7 +291,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 400 hilos",
-    "nombre": "set de 400 hilos imperial",
+    "nombre": "Set de 400 hilos imperial",
     "talla": "imperial",
     "precioLista": 50000,
     "contenido": [
@@ -305,7 +305,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 300 hilos",
-    "nombre": "set de 300 hilos king",
+    "nombre": "Set de 300 hilos king",
     "talla": "king",
     "precioLista": 55000,
     "contenido": [
@@ -319,7 +319,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 300 hilos",
-    "nombre": "set de 300 hilos queen",
+    "nombre": "Set de 300 hilos queen",
     "talla": "queen",
     "precioLista": 50000,
     "contenido": [
@@ -333,7 +333,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 300 hilos",
-    "nombre": "set de 300 hilos doble",
+    "nombre": "Set de 300 hilos doble",
     "talla": "doble",
     "precioLista": 45000,
     "contenido": [
@@ -347,7 +347,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 300 hilos",
-    "nombre": "set de 300 hilos imperial",
+    "nombre": "Set de 300 hilos imperial",
     "talla": "imperial",
     "precioLista": 40000,
     "contenido": [
@@ -361,7 +361,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 200 hilos",
-    "nombre": "set de 200 hilos king",
+    "nombre": "Set de 200 hilos king",
     "talla": "king",
     "precioLista": 48000,
     "contenido": [
@@ -375,7 +375,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 200 hilos",
-    "nombre": "set de 200 hilos queen",
+    "nombre": "Set de 200 hilos queen",
     "talla": "queen",
     "precioLista": 40000,
     "contenido": [
@@ -389,7 +389,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 200 hilos",
-    "nombre": "set de 200 hilos doble",
+    "nombre": "Set de 200 hilos doble",
     "talla": "doble",
     "precioLista": 36000,
     "contenido": [
@@ -403,7 +403,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "sets-cama",
     "familia": "Sets de cama 200 hilos",
-    "nombre": "set de 200 hilos imperial",
+    "nombre": "Set de 200 hilos imperial",
     "talla": "imperial",
     "precioLista": 31000,
     "contenido": [
@@ -417,7 +417,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda de duvet 300 hilos king",
+    "nombre": "Funda de duvet 300 hilos king",
     "talla": "king",
     "precioLista": 55000
   },
@@ -426,7 +426,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda de duvet 300 hilos queen",
+    "nombre": "Funda de duvet 300 hilos queen",
     "talla": "queen",
     "precioLista": 50000
   },
@@ -435,7 +435,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda de duvet 300 hilos doble",
+    "nombre": "Funda de duvet 300 hilos doble",
     "talla": "doble",
     "precioLista": 45000
   },
@@ -444,7 +444,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet 300 hilos",
-    "nombre": "funda de duvet 300 hilos imperial",
+    "nombre": "Funda de duvet 300 hilos imperial",
     "talla": "imperial",
     "precioLista": 40000
   },
@@ -453,7 +453,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet rayadas 200 hilos",
-    "nombre": "funda de duvet rayada king",
+    "nombre": "Funda de duvet rayada king",
     "talla": "king",
     "precioLista": 50000
   },
@@ -462,7 +462,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet rayadas 200 hilos",
-    "nombre": "funda de duvet rayada queen",
+    "nombre": "Funda de duvet rayada queen",
     "talla": "queen",
     "precioLista": 45000
   },
@@ -471,7 +471,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet rayadas 200 hilos",
-    "nombre": "funda de duvet rayada doble",
+    "nombre": "Funda de duvet rayada doble",
     "talla": "doble",
     "precioLista": 40000
   },
@@ -480,7 +480,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Fundas de duvet rayadas 200 hilos",
-    "nombre": "funda de duvet rayada imperial",
+    "nombre": "Funda de duvet rayada imperial",
     "talla": "imperial",
     "precioLista": 35000
   },
@@ -489,7 +489,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Insertos de duvet",
-    "nombre": "inserto de duvet king",
+    "nombre": "Inserto de duvet king",
     "talla": "king",
     "precioLista": 75000
   },
@@ -498,7 +498,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Insertos de duvet",
-    "nombre": "inserto de duvet queen",
+    "nombre": "Inserto de duvet queen",
     "talla": "queen",
     "precioLista": 68000
   },
@@ -507,7 +507,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Insertos de duvet",
-    "nombre": "inserto de duvet doble",
+    "nombre": "Inserto de duvet doble",
     "talla": "doble",
     "precioLista": 60000
   },
@@ -516,7 +516,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Insertos de duvet",
-    "nombre": "inserto de duvet imperial",
+    "nombre": "Inserto de duvet imperial",
     "talla": "imperial",
     "precioLista": 55000
   },
@@ -525,7 +525,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Pillow tops",
-    "nombre": "pillow top king",
+    "nombre": "Pillow top king",
     "talla": "king",
     "precioLista": 70000
   },
@@ -534,7 +534,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Pillow tops",
-    "nombre": "pillow top queen",
+    "nombre": "Pillow top queen",
     "talla": "queen",
     "precioLista": 65000
   },
@@ -543,7 +543,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Pillow tops",
-    "nombre": "pillow top doble",
+    "nombre": "Pillow top doble",
     "talla": "doble",
     "precioLista": 60000
   },
@@ -552,7 +552,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "fundas-insertos",
     "familia": "Pillow tops",
-    "nombre": "pillow top imperial",
+    "nombre": "Pillow top imperial",
     "talla": "imperial",
     "precioLista": 53000
   },
@@ -561,7 +561,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 680 gm",
-    "nombre": "toalla de playa 680 gm",
+    "nombre": "Toalla de playa 680 gm",
     "precioLista": 12500
   },
   {
@@ -569,7 +569,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 680 gm",
-    "nombre": "toalla de baño 680 gm",
+    "nombre": "Toalla de baño 680 gm",
     "precioLista": 10500
   },
   {
@@ -577,7 +577,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 680 gm",
-    "nombre": "toalla facial 680 gm",
+    "nombre": "Toalla facial 680 gm",
     "precioLista": 3000
   },
   {
@@ -585,7 +585,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 680 gm",
-    "nombre": "toalla de mano 680 gm",
+    "nombre": "Toalla de mano 680 gm",
     "precioLista": 3500
   },
   {
@@ -593,7 +593,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 460 gm",
-    "nombre": "toalla de playa 460 gm",
+    "nombre": "Toalla de playa 460 gm",
     "precioLista": 8000
   },
   {
@@ -601,7 +601,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 460 gm",
-    "nombre": "toalla de baño 460 gm",
+    "nombre": "Toalla de baño 460 gm",
     "precioLista": 7500
   },
   {
@@ -609,7 +609,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 460 gm",
-    "nombre": "toalla facial 460 gm",
+    "nombre": "Toalla facial 460 gm",
     "precioLista": 2000
   },
   {
@@ -617,7 +617,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 460 gm",
-    "nombre": "toalla de mano 460 gm",
+    "nombre": "Toalla de mano 460 gm",
     "precioLista": 2500
   },
   {
@@ -625,7 +625,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 360 gm",
-    "nombre": "toalla de playa 360 gm",
+    "nombre": "Toalla de playa 360 gm",
     "precioLista": 6500
   },
   {
@@ -633,7 +633,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 360 gm",
-    "nombre": "toalla de baño 360 gm",
+    "nombre": "Toalla de baño 360 gm",
     "precioLista": 6000
   },
   {
@@ -641,7 +641,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 360 gm",
-    "nombre": "toalla facial 360 gm",
+    "nombre": "Toalla facial 360 gm",
     "precioLista": 1800
   },
   {
@@ -649,7 +649,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas 360 gm",
-    "nombre": "toalla de mano 360 gm",
+    "nombre": "Toalla de mano 360 gm",
     "precioLista": 2000
   },
   {
@@ -657,7 +657,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "toallas",
     "familia": "Toallas",
-    "nombre": "toalla de pie",
+    "nombre": "Toalla de pie",
     "precioLista": 5000
   },
   {
@@ -665,7 +665,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "bata",
     "familia": "Toallas",
-    "nombre": "bata blanca talla única",
+    "nombre": "Bata blanca talla única",
     "precioLista": 25000
   },
   {
@@ -673,7 +673,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "almohadas",
     "familia": "Almohadas",
-    "nombre": "almohada king (paquete de 2 unidades)",
+    "nombre": "Almohada king (paquete de 2 unidades)",
     "precioLista": 25000
   },
   {
@@ -681,7 +681,7 @@ export const CATALOGO: Sku[] = [
     "linea": "hogar",
     "grupo": "almohadas",
     "familia": "Almohadas",
-    "nombre": "almohada queen (paquete de 4 unidades)",
+    "nombre": "Almohada queen (paquete de 4 unidades)",
     "precioLista": 36000
   }
 ];

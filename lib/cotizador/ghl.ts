@@ -4,18 +4,31 @@ import { escribirContactoSinPisar } from '@/lib/ghl-contacto';
 const BASE = 'https://services.leadconnectorhq.com';
 const VERSION = '2021-07-28';
 
-// Pipeline y etapa verificados contra la location el 2026-08-26 y
+// Pipeline y etapas verificados contra la location el 2026-08-26 y
 // re-sondeados en la ronda de correcciones 1 (2026-08-27, ver
 // docs/ghl-estimate-payload.md). El sondeo de la ronda 1 encontró que el DTO
 // de `/opportunities/` usa whitelist estricta: `pipelineStageName` no existe
 // como propiedad válida y la API responde 422 ("property pipelineStageName
 // should not exist") — la etapa se identifica SOLO por `pipelineStageId`.
-// Este id de "Proposal Sent" salió de `GET /opportunities/pipelines`.
+// Ambos ids de acá abajo salieron de `GET /opportunities/pipelines`.
 //
-// Exportado para que la prueba que detecta un id obsoleto (ronda de
+// Exportados para que la prueba que detecta un id obsoleto (ronda de
 // correcciones 2, hallazgo C3) compare contra la misma fuente de verdad en
 // vez de tener el UUID copiado a mano y arriesgarse a que ambos diverjan.
 export const PIPELINE = 'vr8WB783pg2FsTQj6LiG';
+
+// A dónde se mueve la oportunidad HOY. "Qualified", no "Proposal Sent":
+// crearEstimate deja el Estimate en borrador dentro de GoHighLevel (ver el
+// comentario grande más abajo, sobre el envío pendiente) y decir "Proposal
+// Sent" sería anunciar un envío que nunca pasó. Confirmado contra
+// `GET /opportunities/pipelines` el 2026-08-27 (ronda de correcciones 2,
+// hallazgo C1).
+export const ETAPA_CALIFICADA_ID = '95ab829f-202b-47db-a245-20be6aa8eba1'; // "Qualified"
+
+// A dónde debe volver a moverse la oportunidad el día que exista la llamada
+// que de verdad envía el Estimate al cliente (mismo comentario de más abajo).
+// Se deja el id documentado acá, ya sondeado, para no tener que volver a
+// consultar `GET /opportunities/pipelines` cuando llegue ese momento.
 export const ETAPA_PROPUESTA_ID = '26ef30a9-dcc9-4bca-8197-da21ed9135fb'; // "Proposal Sent"
 
 // Nota fija en toda cotización. Luxe: "se incluye un bordado de máximo 10x10 cm
@@ -58,8 +71,22 @@ function cabeceras(apiKey: string) {
 // Sondeado en la ronda 1: `issueDate`/`expiryDate` son obligatorios (422 si
 // se omiten) y la API los interpreta como fecha local, no UTC. Formato
 // exigido: YYYY-MM-DD.
+//
+// Ronda de correcciones 2 (menor, de paso): el servidor corre en UTC (es lo
+// normal en Vercel), así que `fecha.toISOString().slice(0, 10)` da el día
+// calendario en UTC, no en Costa Rica. Una cotización armada a las 7pm hora
+// tica (01:00 UTC del día siguiente) imprimía la fecha de mañana en
+// `issueDate`. Se formatea explícitamente con el huso de Costa Rica; 'en-CA'
+// es un atajo — es el locale cuyo formato corto ya es YYYY-MM-DD.
+const FORMATEADOR_FECHA_CR = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Costa_Rica',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 function formatearFecha(fecha: Date): string {
-  return fecha.toISOString().slice(0, 10);
+  return FORMATEADOR_FECHA_CR.format(fecha);
 }
 
 // Sondeado en la ronda 1: `(0.13*100).toFixed(0)` está bien para 13%, pero
@@ -148,8 +175,8 @@ async function resolverContacto(
 // siquiera tiene forma de UUID — con 201, y en silencio deja la oportunidad
 // en la primera etapa del pipeline ("New Lead"). Sin `opportunityError`, sin
 // `ghl_error`, nada que avise que el seguimiento comercial se apagó. Si
-// alguien en Luxe reordena o recrea la etapa "Proposal Sent" desde la
-// interfaz de GHL, este id hardcodeado queda obsoleto sin que nada lo grite.
+// alguien en Luxe reordena o recrea la etapa objetivo desde la interfaz de
+// GHL, este id hardcodeado queda obsoleto sin que nada lo grite.
 //
 // La defensa: la propia respuesta del POST devuelve el `pipelineStageId` que
 // quedó guardado de verdad. Comparar contra el que se mandó detecta el
@@ -158,15 +185,15 @@ async function resolverContacto(
 //
 // Se decidió NO resolver el id por nombre contra `GET /opportunities/pipelines`
 // en cada cotización. Esa alternativa sí sería inmune a que alguien
-// renombre o reordene la etapa (identificaría "Proposal Sent" por nombre en
-// vez de por id fijo), pero cuesta una petición HTTP extra en el camino
-// caliente de cada cotización, y una etapa de pipeline es algo que casi
-// nunca cambia — el costo recurrente no se justifica para un evento raro.
-// Comparar la respuesta del propio POST logra el objetivo real (que un
-// desajuste no pase en silencio) con petición cero de más: si el id quedó
-// obsoleto, esta cotización concreta lo reporta con `opportunityError`, y
-// alguien lo corrige a mano (o se decide entonces migrar a resolución por
-// nombre) — no hace falta pagar el costo en cada cotización para lograrlo.
+// renombre o reordene la etapa (identificaría la etapa por nombre en vez de
+// por id fijo), pero cuesta una petición HTTP extra en el camino caliente de
+// cada cotización, y una etapa de pipeline es algo que casi nunca cambia —
+// el costo recurrente no se justifica para un evento raro. Comparar la
+// respuesta del propio POST logra el objetivo real (que un desajuste no pase
+// en silencio) con petición cero de más: si el id quedó obsoleto, esta
+// cotización concreta lo reporta con `opportunityError`, y alguien lo
+// corrige a mano (o se decide entonces migrar a resolución por nombre) — no
+// hace falta pagar el costo en cada cotización para lograrlo.
 async function moverOportunidad(
   p: ParamsEstimate, contactId: string, deps: Required<DepsGhl>,
 ): Promise<string | undefined> {
@@ -179,9 +206,10 @@ async function moverOportunidad(
         locationId: deps.locationId,
         name: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
         // Por id, no por nombre: la API rechaza `pipelineStageName` con 422
-        // ("property pipelineStageName should not exist"). Ver el comentario
-        // de `ETAPA_PROPUESTA_ID` arriba.
-        pipelineStageId: ETAPA_PROPUESTA_ID,
+        // ("property pipelineStageName should not exist"). "Qualified", no
+        // "Proposal Sent": ver el comentario de `ETAPA_CALIFICADA_ID` arriba
+        // y el de `crearEstimate` más abajo sobre el envío pendiente.
+        pipelineStageId: ETAPA_CALIFICADA_ID,
         status: 'open',
         contactId,
         monetaryValue: p.cotizacion.total,
@@ -199,11 +227,11 @@ async function moverOportunidad(
       return `GHL oportunidad creada pero con respuesta ilegible, no se pudo confirmar la etapa: ${texto.slice(0, 200)}`;
     }
     const etapaGuardada = datos.opportunity?.pipelineStageId ?? datos.pipelineStageId;
-    if (etapaGuardada !== ETAPA_PROPUESTA_ID) {
+    if (etapaGuardada !== ETAPA_CALIFICADA_ID) {
       return (
         `GHL aceptó la oportunidad con 201 pero quedó en la etapa equivocada: ` +
-        `se pidió "${ETAPA_PROPUESTA_ID}" y GHL guardó "${etapaGuardada ?? '(sin dato)'}". ` +
-        `El id de la etapa "Proposal Sent" puede haber cambiado en GHL.`
+        `se pidió "${ETAPA_CALIFICADA_ID}" y GHL guardó "${etapaGuardada ?? '(sin dato)'}". ` +
+        `El id de la etapa "Qualified" puede haber cambiado en GHL.`
       );
     }
     return undefined;
@@ -212,6 +240,25 @@ async function moverOportunidad(
   }
 }
 
+// IMPORTANTE — esta función NUNCA envía la cotización al cliente (hallazgo
+// C1 de la ronda de correcciones 2). Lo que hace es: resolver el contacto,
+// crear el Estimate vía `POST /invoices/estimate` y mover la Opportunity a
+// "Qualified" (ver `ETAPA_CALIFICADA_ID` arriba). Ninguna de esas tres
+// llamadas envía nada — el Estimate queda en estado `draft` dentro de
+// GoHighLevel hasta que alguien lo abra ahí y lo mande a mano. Por eso la
+// fila en Supabase se marca `estado: 'creada'`, no `'enviada'`
+// (app/api/cotizacion/route.ts), y la Opportunity va a "Qualified", no a
+// "Proposal Sent" — sería mentir sobre un envío que no ocurrió.
+//
+// Falta la llamada de envío (algo como `POST /invoices/estimate/:id/send`,
+// sin confirmar todavía contra la API real). No se implementó en esta ronda
+// a propósito: mandarle un documento a un hotel real es una acción hacia
+// afuera e irreversible, y antes de dispararla en automático hay que
+// verificar a mano, en la interfaz de GoHighLevel, que el Estimate no
+// muestra un botón de pago — el cliente pidió explícitamente que sus
+// clientes no vean esa opción, y eso no se puede comprobar por API, solo
+// mirando la plantilla en la pantalla de GHL. Esa verificación (y la
+// decisión de activar el envío automático) le toca al dueño del proyecto.
 export async function crearEstimate(
   p: ParamsEstimate, deps: DepsGhl,
 ): Promise<ResultadoEstimate> {

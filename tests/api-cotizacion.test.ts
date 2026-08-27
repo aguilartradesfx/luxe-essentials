@@ -153,8 +153,8 @@ describe('POST /api/cotizacion', () => {
     const fila = insertado[0] as Record<string, unknown>;
 
     // Exactamente los valores que el `check` de la tabla permite (origen:
-    // humano/agente, estado: borrador/enviada/error), no cualquier string
-    // parecido.
+    // humano/agente, estado: borrador/creada/enviada/error/convertida), no
+    // cualquier string parecido.
     expect(fila.origen).toBe('humano');
     expect(fila.estado).toBe('borrador');
 
@@ -203,11 +203,14 @@ describe('POST /api/cotizacion', () => {
 
   // --- Ronda de correcciones 1 ---
 
-  it('guarda estado "enviada", el estimateId y el contactId cuando GoHighLevel responde ok', async () => {
+  it('guarda estado "creada" (no "enviada": crearEstimate nunca envía), el estimateId y el contactId cuando GoHighLevel responde ok', async () => {
+    // Ronda de correcciones 2 (hallazgo C1): 'enviada' sería mentir. El
+    // Estimate queda en borrador dentro de GoHighLevel; 'creada' es el
+    // estado real.
     await POST(peticion(valido));
     expect(actualizado).toHaveLength(1);
     expect(actualizado[0]).toMatchObject({
-      estado: 'enviada',
+      estado: 'creada',
       ghl_estimate_id: 'est-1',
       contact_id: 'contacto-ghl-1',
     });
@@ -243,9 +246,9 @@ describe('POST /api/cotizacion', () => {
     expect(actualizado[0]).toMatchObject({ estado: 'error', contact_id: 'nuevo-antes-de-fallar' });
   });
 
-  it('guarda estado "enviada" con el ghl_error de la Opportunity, sin marcar error', async () => {
+  it('guarda estado "creada" con el ghl_error de la Opportunity, sin marcar error', async () => {
     // Un fallo moviendo la Opportunity no invalida un Estimate que ya se creó
-    // bien: la fila debe seguir en 'enviada', con el detalle del fallo en
+    // bien: la fila debe seguir en 'creada', con el detalle del fallo en
     // ghl_error para que alguien lo revise, no como si la cotización entera
     // hubiera fallado.
     vi.mocked(crearEstimate).mockResolvedValueOnce({
@@ -259,7 +262,7 @@ describe('POST /api/cotizacion', () => {
 
     expect(cuerpo.ghl.estimateId).toBe('est-2');
     expect(actualizado[0]).toMatchObject({
-      estado: 'enviada',
+      estado: 'creada',
       ghl_estimate_id: 'est-2',
       ghl_error: expect.stringContaining('pipelineStageName'),
       contact_id: 'contacto-x',
@@ -288,6 +291,47 @@ describe('POST /api/cotizacion', () => {
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining('no se pudo actualizar'),
       'conexión perdida',
+    );
+    consoleError.mockRestore();
+  });
+
+  // --- Ronda de correcciones 2 (hallazgo I1) ---
+
+  it('cierra el borrador del agente ("convertida") cuando el envío llega con borradorId', async () => {
+    // Sin esto, el borrador del agente se queda en 'borrador' para siempre:
+    // la cola del vendedor nunca se vacía y `registrarIntencion`
+    // (lib/cotizador/borrador.ts) no vuelve a registrar una intención de ese
+    // contacto jamás, porque esa función corta si ya hay un 'borrador'
+    // abierto suyo.
+    await POST(peticion({ ...valido, borradorId: 'borrador-9' }));
+    expect(actualizado).toHaveLength(2);
+    expect(actualizado[0]).toMatchObject({ estado: 'convertida' });
+  });
+
+  it('no toca ningún borrador cuando la cotización no viene de uno', async () => {
+    // Mata el mutante "cerrar el borrador siempre, tenga o no borradorId":
+    // sin `borradorId` en el cuerpo, solo debe correr el update final de
+    // GoHighLevel — nunca un segundo update de cierre.
+    await POST(peticion(valido));
+    expect(actualizado).toHaveLength(1);
+  });
+
+  it('cierra el borrador aunque crearEstimate falle después (el cierre no depende de GoHighLevel)', async () => {
+    vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
+    await POST(peticion({ ...valido, borradorId: 'borrador-10' }));
+    expect(actualizado).toHaveLength(2);
+    expect(actualizado[0]).toMatchObject({ estado: 'convertida' });
+    expect(actualizado[1]).toMatchObject({ estado: 'error' });
+  });
+
+  it('registra en consola si falla el cierre del borrador, sin tumbar la respuesta', async () => {
+    errorAlActualizar = { message: 'fila bloqueada' };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await POST(peticion({ ...valido, borradorId: 'borrador-11' }));
+    expect(res.status).toBe(200);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('No se pudo cerrar el borrador'),
+      'fila bloqueada',
     );
     consoleError.mockRestore();
   });
