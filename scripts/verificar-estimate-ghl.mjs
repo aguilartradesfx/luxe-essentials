@@ -11,9 +11,10 @@
 // Este cuerpo es el resultado de iterar contra la API real (ver
 // docs/ghl-estimate-payload.md para el detalle de qué rechazó qué). Puntos
 // que NO son obvios desde la documentación:
-//   - contactDetails.id es obligatorio y debe ser un string no vacío. La API
-//     NO valida que corresponda a un contacto real, así que para la prueba
-//     se usa un ObjectId ficticio (24 ceros) sin tocar contactos reales.
+//   - contactDetails.id es obligatorio y debe ser un string no vacío (probado:
+//     un id de 1 solo caracter también fue aceptado). La API NO valida que
+//     corresponda a un contacto real, así que para la prueba se usa un
+//     ObjectId ficticio (24 ceros) sin tocar contactos reales.
 //   - frequencySettings.enabled (boolean) es obligatorio, aunque el Estimate
 //     no sea recurrente.
 //   - title (además de name) es obligatorio a nivel de esquema de Mongo,
@@ -89,18 +90,48 @@ try {
     console.error('\nNo se pudo crear el Estimate.');
     process.exitCode = 1;
   } else {
-    const creado = JSON.parse(texto);
-    idCreado = creado._id ?? creado.id ?? null;
+    // El POST fue 2xx: el Estimate existe en el servidor pase lo que pase de
+    // acá en adelante. Si el JSON.parse fallara (respuesta 2xx malformada),
+    // NO debe perderse la referencia al id — si eso pasara, idCreado seguiría
+    // en null y el finally diría "nada que borrar" pese a existir el
+    // Estimate. Por eso el parseo va en su propio try/catch, con un intento
+    // de rescate del id por regex sobre el texto crudo como última red.
+    let creado = null;
+    try {
+      creado = JSON.parse(texto);
+    } catch (err) {
+      console.error(
+        `\nATENCIÓN: el POST fue ${res.status} pero la respuesta no es JSON válido: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
 
-    console.log('\n=== Respuesta completa ===');
-    console.log(JSON.stringify(creado, null, 2));
+    if (creado) {
+      idCreado = creado._id ?? creado.id ?? null;
 
-    console.log('\n=== Preguntas clave ===');
-    console.log('1. ¿Hay algún campo de pasarela, paymentMethods, payNow o similar?');
-    console.log('   Claves presentes en la raíz:', Object.keys(creado).join(', '));
-    console.log('2. ¿Qué trae liveMode?', creado.liveMode);
-    console.log('3. ¿El estimateNumber viene asignado?', creado.estimateNumber);
-    console.log('4. ¿Dónde viene el id?', creado._id ? '_id' : creado.id ? 'id' : 'NO ENCONTRADO');
+      console.log('\n=== Respuesta completa ===');
+      console.log(JSON.stringify(creado, null, 2));
+
+      console.log('\n=== Preguntas clave ===');
+      console.log('1. ¿Hay algún campo de pasarela, paymentMethods, payNow o similar?');
+      console.log('   Claves presentes en la raíz:', Object.keys(creado).join(', '));
+      console.log('2. ¿Qué trae liveMode?', creado.liveMode);
+      console.log('3. ¿El estimateNumber viene asignado?', creado.estimateNumber);
+      console.log('4. ¿Dónde viene el id?', creado._id ? '_id' : creado.id ? 'id' : 'NO ENCONTRADO');
+    } else {
+      // Rescate: buscar un _id con forma de ObjectId de Mongo (24 hex) en el
+      // texto crudo, para no dejarlo huérfano aunque el JSON no parseara.
+      const rescate = texto.match(/"_id"\s*:\s*"([a-fA-F0-9]{24})"/);
+      idCreado = rescate ? rescate[1] : null;
+      if (idCreado) {
+        console.error(`Id rescatado por regex desde la respuesta cruda: ${idCreado}`);
+      } else {
+        console.error(
+          `\n*** ATENCIÓN: el POST fue ${res.status} (se creó un Estimate) pero no se pudo extraer ningún id de la respuesta, ni parseando JSON ni por regex. Revisar manualmente en GoHighLevel (GET /invoices/estimate/list) si quedó un Estimate de prueba "PRUEBA — borrar" sin eliminar. ***`,
+        );
+      }
+    }
   }
 } finally {
   if (idCreado) {
