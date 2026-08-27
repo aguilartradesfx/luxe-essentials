@@ -146,6 +146,7 @@ export function resumenParaNota(datos: Datos, canal: CanalEnvio): string {
   const etiquetas: Record<keyof Datos, string> = {
     nombre: 'Nombre', email: 'Correo', telefono: 'Teléfono',
     producto: 'Producto de interés', ubicacion: 'Ubicación',
+    cantidad: 'Cantidad estimada',
   };
 
   const lineas = [`Conversación atendida por el agente automático (canal: ${canal}).`, ''];

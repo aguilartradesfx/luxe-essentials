@@ -37,8 +37,19 @@ vi.mock('@/lib/agente/estado', async (original) => ({
 const { procesar } = await import('@/lib/agente/procesar');
 const { DATOS_VACIOS } = await import('@/lib/agente/estado');
 
+// `registrarIntencion` no está mockeado (no es parte de lib/agente/estado ni
+// lib/agente/acciones), así que llama de verdad a esta cadena cuando el turno
+// trae correo, producto y cantidad. Sin borradores previos por defecto.
+const dbFalso = {
+  from: () => ({
+    select: () => ({
+      eq: () => ({ eq: () => ({ limit: async () => ({ data: [], error: null }) }) }),
+    }),
+  }),
+};
+
 const deps = {
-  db: {} as never, ghlApiKey: 'k', locationId: 'l',
+  db: dbFalso as never, ghlApiKey: 'k', locationId: 'l',
   anthropicKey: 'a', openaiKey: 'o',
 };
 

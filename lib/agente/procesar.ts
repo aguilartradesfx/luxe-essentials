@@ -5,6 +5,7 @@ import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
 import { enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
 import { leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Datos, type Fila } from '@/lib/agente/estado';
+import { registrarIntencion } from '@/lib/cotizador/borrador';
 
 // No hay variante 'agotado': al consumir el último turno el desenlace sigue
 // siendo 'respondido' (el cliente sí recibió respuesta), y es el mensaje
@@ -122,6 +123,13 @@ export async function procesar(
   const datos = fusionarDatos(fila.datos, generado.salida.datos);
   const turnos = fila.turnos + 1;
   const avisar = debeAvisar(fila, datos, turnos);
+
+  // Se registra en cada turno que cumpla las condiciones; `registrarIntencion`
+  // se encarga de no duplicar. Va aquí y no dentro de `debeAvisar` porque las
+  // condiciones son distintas: avisar necesita nombre y un contacto, cotizar
+  // necesita además producto y cantidad.
+  const errorBorrador = await registrarIntencion({ contactId, datos }, db);
+  if (errorBorrador) console.error('[cotizador] borrador del agente:', errorBorrador);
 
   const estado = esCorreo(ultimo.tipo)
     ? 'email_respondido'

@@ -8,10 +8,11 @@ export type Datos = {
   telefono: string | null;
   producto: Producto | null;
   ubicacion: string | null;
+  cantidad: string | null;
 };
 
 export const DATOS_VACIOS: Datos = {
-  nombre: null, email: null, telefono: null, producto: null, ubicacion: null,
+  nombre: null, email: null, telefono: null, producto: null, ubicacion: null, cantidad: null,
 };
 
 export type EstadoAgente = 'activo' | 'humano' | 'agotado' | 'email_respondido';

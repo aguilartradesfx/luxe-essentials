@@ -28,8 +28,9 @@ const ESQUEMA = {
           anyOf: [{ type: 'string', enum: [...PRODUCTOS] }, { type: 'null' }],
         },
         ubicacion: { type: ['string', 'null'] },
+        cantidad: { type: ['string', 'null'] },
       },
-      required: ['nombre', 'email', 'telefono', 'producto', 'ubicacion'],
+      required: ['nombre', 'email', 'telefono', 'producto', 'ubicacion', 'cantidad'],
       additionalProperties: false,
     },
   },
@@ -47,6 +48,7 @@ const salidaSchema = z.object({
     telefono: z.string().nullable(),
     producto: z.enum(PRODUCTOS).nullable(),
     ubicacion: z.string().nullable(),
+    cantidad: z.string().nullable(),
   }),
 });
 
