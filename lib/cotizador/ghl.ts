@@ -1,4 +1,5 @@
 import type { Cotizacion } from '@/lib/cotizador/tipos';
+import { escribirContactoSinPisar } from '@/lib/ghl-contacto';
 
 const BASE = 'https://services.leadconnectorhq.com';
 const VERSION = '2021-07-28';
@@ -10,8 +11,12 @@ const VERSION = '2021-07-28';
 // como propiedad válida y la API responde 422 ("property pipelineStageName
 // should not exist") — la etapa se identifica SOLO por `pipelineStageId`.
 // Este id de "Proposal Sent" salió de `GET /opportunities/pipelines`.
-const PIPELINE = 'vr8WB783pg2FsTQj6LiG';
-const ETAPA_PROPUESTA_ID = '26ef30a9-dcc9-4bca-8197-da21ed9135fb'; // "Proposal Sent"
+//
+// Exportado para que la prueba que detecta un id obsoleto (ronda de
+// correcciones 2, hallazgo C3) compare contra la misma fuente de verdad en
+// vez de tener el UUID copiado a mano y arriesgarse a que ambos diverjan.
+export const PIPELINE = 'vr8WB783pg2FsTQj6LiG';
+export const ETAPA_PROPUESTA_ID = '26ef30a9-dcc9-4bca-8197-da21ed9135fb'; // "Proposal Sent"
 
 // Nota fija en toda cotización. Luxe: "se incluye un bordado de máximo 10x10 cm
 // a un color. más grande o con colores los precios varían según muestra."
@@ -68,40 +73,100 @@ function formatearTasa(tasa: number): string {
 // La API exige `contactDetails.id` no vacío pero NO valida que exista. Un id
 // inventado produciría cotizaciones huérfanas, sin contacto al que hacerle
 // seguimiento — justo lo contrario de lo que buscamos. Así que si no llega un
-// contacto, se da de alta antes de cotizar.
+// contacto, se da de alta (o se reutiliza) antes de cotizar.
+//
+// El 100% de las cotizaciones de la pantalla pasan por acá, porque la
+// pantalla nunca manda un `contactId`. Y un porcentaje real de esos correos
+// pertenece a alguno de los 526 hoteles de la base comercial importada — un
+// contacto que YA tiene tags de zona, nombre comercial y origen del ERP.
+//
+// Por eso el `POST /contacts/upsert` de acá abajo manda el mínimo posible
+// (sólo `locationId` + `email`, la clave con la que GHL empareja contactos
+// existentes): nunca firstName, nunca tags, nunca source en esta llamada.
+// Verificado contra la API real (ver docs/ghl-estimate-payload.md, "Ronda de
+// correcciones 2"): un segundo `POST /contacts/upsert` sobre el mismo email
+// que omite un campo deja ese campo tal como estaba — no lo vacía. Antes de
+// esta corrección (hallazgo C2) esa llamada SÍ mandaba firstName/source/tags
+// y los reemplazaba a ciegas, borrando la segmentación comercial del contacto
+// en la primera cotización real que se le hiciera.
+//
+// Con el contacto ya identificado, `escribirContactoSinPisar` (compartida con
+// el agente conversacional, ver `lib/ghl-contacto.ts`) aplica las mismas
+// reglas de no-pisar: sólo rellena firstName/companyName/source si estaban
+// vacíos, nunca escribe `city`, y suma el tag `cotizacion` a los que ya
+// tuviera en vez de reemplazarlos.
 async function resolverContacto(
   p: ParamsEstimate, deps: Required<DepsGhl>,
 ): Promise<{ ok: true; contactId: string } | { ok: false; error: string }> {
   if (p.contactId) return { ok: true, contactId: p.contactId };
 
-  const partes = p.cliente.nombre.trim().split(/\s+/);
+  let contactId: string;
   try {
     const res = await deps.fetchImpl(`${BASE}/contacts/upsert`, {
       method: 'POST',
       headers: cabeceras(deps.apiKey),
-      body: JSON.stringify({
-        locationId: deps.locationId,
-        firstName: partes[0] ?? '',
-        lastName: partes.slice(1).join(' ') || undefined,
-        email: p.cliente.email,
-        companyName: p.cliente.empresa,
-        source: 'Cotizador Luxe Essentials',
-        tags: ['cotizacion'],
-      }),
+      body: JSON.stringify({ locationId: deps.locationId, email: p.cliente.email }),
     });
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `GHL contacto ${res.status}: ${texto.slice(0, 200)}` };
     const datos = JSON.parse(texto) as { contact?: { id?: string }; id?: string };
     const id = datos.contact?.id ?? datos.id;
     if (!id) return { ok: false, error: `GHL creó el contacto sin devolver id: ${texto.slice(0, 200)}` };
-    return { ok: true, contactId: id };
+    contactId = id;
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+
+  // Best-effort: el contacto ya quedó resuelto (nuevo o existente) y la
+  // cotización puede seguir aunque esto falle. Un fallo acá se registra pero
+  // no debe convertir una cotización que sí se puede emitir en un error para
+  // el vendedor.
+  const errorEscritura = await escribirContactoSinPisar(
+    contactId,
+    {
+      nombre: p.cliente.nombre,
+      email: p.cliente.email,
+      empresa: p.cliente.empresa,
+      source: 'Cotizador Luxe Essentials',
+    },
+    ['cotizacion'],
+    { apiKey: deps.apiKey, fetchImpl: deps.fetchImpl },
+  );
+  if (errorEscritura) {
+    console.error('[cotizador] No se pudieron actualizar los datos del contacto en GHL.', errorEscritura);
+  }
+
+  return { ok: true, contactId };
 }
 
 // Nunca lanza: un fallo moviendo la Opportunity no debe invalidar un Estimate
 // que ya se creó bien. Devuelve el texto del error para registrarlo.
+//
+// Sondeado contra la API real (docs/ghl-estimate-payload.md, "Ronda de
+// correcciones 2", hallazgo C3): `POST /opportunities/` acepta un
+// `pipelineStageId` inventado — un UUID que no existe, o texto que ni
+// siquiera tiene forma de UUID — con 201, y en silencio deja la oportunidad
+// en la primera etapa del pipeline ("New Lead"). Sin `opportunityError`, sin
+// `ghl_error`, nada que avise que el seguimiento comercial se apagó. Si
+// alguien en Luxe reordena o recrea la etapa "Proposal Sent" desde la
+// interfaz de GHL, este id hardcodeado queda obsoleto sin que nada lo grite.
+//
+// La defensa: la propia respuesta del POST devuelve el `pipelineStageId` que
+// quedó guardado de verdad. Comparar contra el que se mandó detecta el
+// desajuste sin ninguna petición adicional — la información ya está en la
+// respuesta que de todos modos hay que leer.
+//
+// Se decidió NO resolver el id por nombre contra `GET /opportunities/pipelines`
+// en cada cotización. Esa alternativa sí sería inmune a que alguien
+// renombre o reordene la etapa (identificaría "Proposal Sent" por nombre en
+// vez de por id fijo), pero cuesta una petición HTTP extra en el camino
+// caliente de cada cotización, y una etapa de pipeline es algo que casi
+// nunca cambia — el costo recurrente no se justifica para un evento raro.
+// Comparar la respuesta del propio POST logra el objetivo real (que un
+// desajuste no pase en silencio) con petición cero de más: si el id quedó
+// obsoleto, esta cotización concreta lo reporta con `opportunityError`, y
+// alguien lo corrige a mano (o se decide entonces migrar a resolución por
+// nombre) — no hace falta pagar el costo en cada cotización para lograrlo.
 async function moverOportunidad(
   p: ParamsEstimate, contactId: string, deps: Required<DepsGhl>,
 ): Promise<string | undefined> {
@@ -122,7 +187,25 @@ async function moverOportunidad(
         monetaryValue: p.cotizacion.total,
       }),
     });
-    if (!res.ok) return `GHL oportunidad ${res.status}: ${(await res.text()).slice(0, 200)}`;
+    const texto = await res.text();
+    if (!res.ok) return `GHL oportunidad ${res.status}: ${texto.slice(0, 200)}`;
+
+    let datos: { opportunity?: { pipelineStageId?: string }; pipelineStageId?: string };
+    try {
+      datos = JSON.parse(texto);
+    } catch {
+      // 2xx con JSON inválido: no se puede confirmar la etapa. Se reporta en
+      // vez de asumir que salió bien.
+      return `GHL oportunidad creada pero con respuesta ilegible, no se pudo confirmar la etapa: ${texto.slice(0, 200)}`;
+    }
+    const etapaGuardada = datos.opportunity?.pipelineStageId ?? datos.pipelineStageId;
+    if (etapaGuardada !== ETAPA_PROPUESTA_ID) {
+      return (
+        `GHL aceptó la oportunidad con 201 pero quedó en la etapa equivocada: ` +
+        `se pidió "${ETAPA_PROPUESTA_ID}" y GHL guardó "${etapaGuardada ?? '(sin dato)'}". ` +
+        `El id de la etapa "Proposal Sent" puede haber cambiado en GHL.`
+      );
+    }
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : String(err);

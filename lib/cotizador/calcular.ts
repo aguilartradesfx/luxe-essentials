@@ -1,3 +1,4 @@
+import 'server-only';
 import { ESCALAS, escalonDe, IVA_GENERAL } from '@/lib/cotizador/escalas';
 import type {
   Cotizacion,

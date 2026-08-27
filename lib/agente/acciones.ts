@@ -1,6 +1,7 @@
 import { config } from '@/lib/agente/config';
 import type { CanalEnvio } from '@/lib/agente/canal';
 import type { Datos } from '@/lib/agente/estado';
+import { escribirContactoSinPisar } from '@/lib/ghl-contacto';
 
 export type DepsEscritura = { apiKey: string; fetchImpl?: typeof fetch };
 
@@ -57,89 +58,28 @@ export async function enviarMensaje(
   }
 }
 
-function partirNombre(completo: string) {
-  const partes = completo.trim().split(/\s+/);
-  return { firstName: partes[0] ?? '', lastName: partes.slice(1).join(' ') || undefined };
-}
-
 // Nunca lanza: un fallo guardando los datos no debe borrar el hecho de que al
 // cliente ya se le respondió. Devuelve el texto del error para el log.
 //
-// LEE el contacto antes de escribirlo. El PUT de GHL sobrescribe, y el asesor
-// pudo haber corregido el correo o el teléfono a mano: el agente no tiene
-// derecho a pisar eso con lo que dedujo de un chat.
+// La lectura-antes-de-escribir, el "sólo rellena vacíos", el nunca-city y el
+// campo de persona viven en `lib/ghl-contacto.ts` — es la misma lógica que
+// usa `resolverContacto` en `lib/cotizador/ghl.ts`, para no duplicarla una
+// tercera vez con reglas distintas (esa duplicación fue justo el hallazgo
+// C2 de la revisión final).
 export async function actualizarContacto(
   contactId: string, datos: Datos, deps: DepsEscritura,
 ): Promise<string | undefined> {
-  const { apiKey, fetchImpl = fetch } = deps;
-
   // Sin ningún dato no hay nada que escribir, y ni siquiera vale la pena leer.
   const hayAlgo = Object.values(datos).some(Boolean);
   if (!hayAlgo) return undefined;
 
-  let actual: Record<string, unknown>;
-  try {
-    const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
-      headers: cabeceras(apiKey, config.VERSION_CONTACTOS),
-    });
-    if (!res.ok) {
-      // Si no sabemos qué hay, no escribimos. Los datos igual quedan en la
-      // nota, así que no se pierde nada y no se arriesga pisar a ciegas.
-      return `GHL lectura de contacto ${res.status}: no se escribieron los campos`;
-    }
-    actual = (JSON.parse(await res.text()) as { contact?: Record<string, unknown> }).contact ?? {};
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
-
-  const vacio = (campo: string) => {
-    const v = actual[campo];
-    return v === undefined || v === null || v === '';
-  };
-
-  const cuerpo: Record<string, unknown> = {};
-  if (datos.nombre && vacio('firstName')) Object.assign(cuerpo, partirNombre(datos.nombre));
-  if (datos.email && vacio('email')) cuerpo.email = datos.email;
-  if (datos.telefono && vacio('phone')) cuerpo.phone = datos.telefono;
-
-  // `city` NO se escribe nunca. La importación de la base comercial 2026 mapea
-  // "Subzona / ruta" a City, así que ese campo es la ruta de visita del cliente,
-  // no su ciudad. Escribir ahí lo que alguien mencione por chat rompería la
-  // segmentación comercial. La ubicación declarada vive sólo en la nota.
-
-  // El nombre de la persona va a un campo propio: en la base importada
-  // firstName lleva el nombre comercial del negocio, no el de nadie.
-  if (datos.nombre) {
-    cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: datos.nombre }];
-  }
-
   const tagProducto = config.tagDeProducto(datos.producto);
-  // Los tags del PUT reemplazan, así que se conservan los que ya tenía.
-  const previos = Array.isArray(actual.tags) ? (actual.tags as string[]) : [];
-  const deseados = [...new Set([...previos, ...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])])];
-  const faltanTags = deseados.length > previos.length;
-
-  // Se escribe si hay algún campo que rellenar O si faltan tags por poner.
-  // La segunda condición no es un detalle: un contacto que viene de la
-  // importación ya trae correo y teléfono del ERP, así que no habrá ningún
-  // campo vacío que justifique el PUT — y sin ella ese contacto nunca
-  // recibiría el tag de interés, que es justo lo que el equipo usa para saber
-  // con quién habló el agente y qué le interesaba.
-  if (Object.keys(cuerpo).length === 0 && !faltanTags) return undefined;
-
-  cuerpo.tags = deseados;
-
-  try {
-    const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
-      method: 'PUT',
-      headers: cabeceras(apiKey, config.VERSION_CONTACTOS),
-      body: JSON.stringify(cuerpo),
-    });
-    if (!res.ok) return `GHL contacto ${res.status}: ${(await res.text()).slice(0, 200)}`;
-    return undefined;
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
+  return escribirContactoSinPisar(
+    contactId,
+    { nombre: datos.nombre, email: datos.email, telefono: datos.telefono },
+    [...config.TAGS_BASE, ...(tagProducto ? [tagProducto] : [])],
+    deps,
+  );
 }
 
 export function resumenParaNota(datos: Datos, canal: CanalEnvio): string {

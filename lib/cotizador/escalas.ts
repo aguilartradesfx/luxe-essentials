@@ -1,3 +1,4 @@
+import 'server-only';
 import type { Escala, Escalon, GrupoDescuento } from '@/lib/cotizador/tipos';
 
 // Re-exportada por compatibilidad: el valor en sí vive en `iva.ts`, sin datos

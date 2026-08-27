@@ -562,3 +562,69 @@ Todas las oportunidades de prueba (`EwFjeoUf8BZUIxL35C2q`,
 Estimate de la prueba B/C/D (`6a8fd59d2d99b8a74e980055`, `estimateNumber`
 13) se borraron dentro de la misma corrida, cada `DELETE` confirmado en
 `200`. No se dejó nada pendiente en el CRM de producción.
+
+## Ronda de correcciones 2 sobre la Tarea 7 (C2/C3, 2026-08-27)
+
+Corrección de dos hallazgos de la revisión final de toda la rama: C2
+(cotizar a un contacto existente le borraba tags, nombre y origen) y C3
+(GoHighLevel acepta un `pipelineStageId` inválido con `201`, en silencio).
+
+### C2 — ¿`POST /contacts/upsert` conserva lo que no se le manda, o lo vacía?
+
+Sondeado con `scripts/verificar-upsert-parcial-ghl.mjs` (crea, inspecciona,
+borra en `try/finally`; cero huérfanos, `DELETE` confirmado en `200`).
+
+Se creó un contacto de prueba con `firstName`, `source` y `tags` puestos
+(simulando uno de la base importada), y se le hizo un **segundo**
+`POST /contacts/upsert` sobre el mismo email que **omitía por completo** esos
+tres campos. Resultado: los tres sobrevivieron intactos —
+
+```
+firstName sobrevivió: true
+source sobrevivió: true
+tags sobrevivieron: true
+```
+
+— y la respuesta del segundo upsert trae `"new": false`, confirmando que
+emparejó el contacto existente en vez de crear uno nuevo. Es decir: el
+upsert de GHL **no reemplaza el documento completo**; sólo toca los campos
+que el payload incluye. (Distinto de `tags` en un **PUT** de
+`/contacts/:id`, que sí reemplaza el array completo — eso ya estaba
+confirmado y es la razón por la que `lib/ghl-contacto.ts` siempre fusiona
+tags a mano.)
+
+**Corrección aplicada:** `resolverContacto` en `lib/cotizador/ghl.ts` ahora
+manda un upsert mínimo — sólo `locationId` + `email` — para identificar o
+crear el contacto, sin arriesgar ningún campo. Después, con el `contactId`
+ya resuelto, aplica las mismas reglas de no-pisar que usaba el agente
+conversacional (ahora compartidas en `lib/ghl-contacto.ts`): sólo rellena
+`firstName`/`companyName`/`source` si estaban vacíos, nunca escribe `city`,
+y suma el tag `cotizacion` a los que el contacto ya tuviera.
+
+### C3 — ¿Se puede detectar un `pipelineStageId` que GHL aceptó pero no aplicó?
+
+Confirmado por quien reportó el hallazgo (ver brief de esta tarea): un
+`pipelineStageId` inventado —un UUID que no existe o texto que ni siquiera
+tiene forma de UUID— responde `201` igual, y GHL deja la oportunidad en la
+primera etapa del pipeline ("New Lead") sin ningún error visible. No se
+repitió ese sondeo en esta ronda porque ya venía verificado; lo que sí se
+hizo fue diseñar la defensa y probarla con mutación (revertirla, confirmar
+que la prueba nueva falla, restaurar).
+
+**Corrección aplicada:** `moverOportunidad` ahora compara el
+`pipelineStageId` que devuelve el propio `POST /opportunities/` contra el
+que se mandó (`ETAPA_PROPUESTA_ID`). Si no coincide, se propaga como
+`opportunityError` aunque el `POST` haya respondido `201`.
+
+**Decisión de diseño — no resolver el id por nombre en cada cotización:**
+la alternativa más robusta sería buscar "Proposal Sent" por nombre contra
+`GET /opportunities/pipelines` en cada `crearEstimate`, para no depender de
+un UUID hardcodeado. Se decidió no hacerlo: agrega una petición HTTP al
+camino caliente de cada cotización, y una etapa de pipeline es algo que
+casi nunca cambia — pagar ese costo en el 100% de las cotizaciones para
+protegerse de un evento raro no compensa. Comparar la respuesta del propio
+`POST` logra el objetivo real (que el desajuste no pase en silencio) sin
+ninguna petición de más: la información ya viene en la respuesta que de
+todos modos hay que leer. Si el id llega a quedar obsoleto, esa cotización
+puntual lo reporta en `ghl_error` y queda para corregir a mano (o para
+entonces sí migrar a resolución por nombre).

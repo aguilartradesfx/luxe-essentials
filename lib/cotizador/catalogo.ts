@@ -4,6 +4,11 @@
 //
 // Incluye las correcciones que Luxe confirmó por escrito y que no están en el
 // archivo. Ver precios/README.md antes de cargar una lista nueva.
+//
+// `server-only` convierte en error de compilación lo que hasta ahora era una
+// regla que había que recordar: que nadie importe la lista de precios desde
+// un componente de cliente. No quitar en la próxima regeneración.
+import 'server-only';
 import type { Sku } from '@/lib/cotizador/tipos';
 
 export const CATALOGO: Sku[] = [
