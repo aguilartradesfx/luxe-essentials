@@ -25,7 +25,7 @@ export const cotizacionSchema = z.object({
     nombre: z.string().trim().min(1, 'Escribe el nombre del cliente.').max(120, 'Escribe un nombre más corto.'),
     empresa: z.string().trim().max(120, 'Escribe un nombre de empresa más corto.').optional(),
     email: z.string().trim().pipe(z.email('Escribe un correo válido.')),
-  }),
+  }, { message: 'Los datos del cliente deben ir en un objeto.' }),
   lineas: z
     .array(
       z.object({
@@ -41,6 +41,7 @@ export const cotizacionSchema = z.object({
           // decisión consciente (subir este número), no una sorpresa.
           .max(10000, 'Revisa la cantidad: no puede superar 10.000 unidades por línea.'),
       }),
+      { message: 'Las líneas deben ir en un arreglo.' },
     )
     .min(1, 'Agrega al menos una línea a la cotización.'),
   // El tope es la tasa general (`IVA_GENERAL`), no un número arbitrario: las
@@ -53,7 +54,7 @@ export const cotizacionSchema = z.object({
     .min(0, 'La tasa de IVA no puede ser negativa.')
     .max(IVA_GENERAL, `La tasa de IVA no puede superar la tasa general (${IVA_GENERAL * 100}%).`)
     .optional(),
-  bordadoEspecial: z.boolean().optional(),
+  bordadoEspecial: z.boolean({ message: 'Bordado especial debe ser verdadero o falso.' }).optional(),
 });
 
 export type CotizacionInput = z.infer<typeof cotizacionSchema>;

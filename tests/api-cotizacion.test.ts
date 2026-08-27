@@ -71,6 +71,33 @@ describe('POST /api/cotizacion', () => {
     expect(res.status).toBe(400);
   });
 
+  it('avisa en español si "cliente" no es un objeto', async () => {
+    // Ronda 2: los mensajes de las reglas (min/max) ya estaban en español,
+    // pero los de tipo (invalid_type) seguían en el inglés por defecto de
+    // Zod. Un vendedor autenticado con un front roto vería ese inglés.
+    const res = await POST(peticion({ ...valido, cliente: 'no soy un objeto' }));
+    expect(res.status).toBe(400);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toMatch(/invalid input|expected/i);
+    expect(cuerpo.error).toMatch(/objeto/i);
+  });
+
+  it('avisa en español si "lineas" no es un arreglo', async () => {
+    const res = await POST(peticion({ ...valido, lineas: 'tampoco un arreglo' }));
+    expect(res.status).toBe(400);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toMatch(/invalid input|expected/i);
+    expect(cuerpo.error).toMatch(/arreglo/i);
+  });
+
+  it('avisa en español si "bordadoEspecial" no es booleano', async () => {
+    const res = await POST(peticion({ ...valido, bordadoEspecial: 'si' }));
+    expect(res.status).toBe(400);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toMatch(/invalid input|expected/i);
+    expect(cuerpo.error).toMatch(/verdadero o falso/i);
+  });
+
   it('rechaza un sku que no existe', async () => {
     const res = await POST(peticion({ ...valido, lineas: [{ skuId: 'fantasma', cantidad: 1 }] }));
     expect(res.status).toBe(400);
