@@ -166,4 +166,132 @@ describe('crearEstimate', () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.opportunityError).toContain('404');
   });
+
+  // --- Ronda de correcciones 1 ---
+
+  it('la suma de todas las líneas más el IVA coincide con el total de la cotización', async () => {
+    // Mutante que esto mata: descartar todas las líneas menos la primera. Con
+    // una sola línea de fixture ese mutante pasaba 27/27; con dos líneas más
+    // el IVA, la suma deja de cuadrar contra el total si falta un renglón.
+    const dosLineas: Cotizacion = {
+      lineas: [
+        {
+          skuId: 'linea-a', nombre: 'Línea A', cantidad: 3, precioLista: 10000,
+          descuentoPct: 0, precioUnitario: 10000, subtotal: 30000, grupo: 'uniformes',
+          motivo: 'sin descuento',
+        },
+        {
+          skuId: 'linea-b', nombre: 'Línea B', cantidad: 5, precioLista: 20000,
+          descuentoPct: 5, precioUnitario: 19000, subtotal: 95000, grupo: 'toallas',
+          motivo: '5%',
+        },
+      ],
+      subtotal: 125000, ahorro: 5000, tasaIva: 0.13, iva: 16250, total: 141250,
+      bordadoEspecial: false,
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate({ ...params, cotizacion: dosLineas }, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+
+    expect(cuerpo.items).toHaveLength(3); // 2 líneas de producto + 1 de IVA
+    const suma = (cuerpo.items as Array<{ amount: number; qty: number }>).reduce(
+      (acc, item) => acc + item.amount * item.qty,
+      0,
+    );
+    expect(suma).toBe(dosLineas.total);
+  });
+
+  it('incluye altId y altType, obligatorios para la API', async () => {
+    // Mutante que esto mata: borrar cualquiera de los dos campos del cuerpo.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate(params, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo.altId).toBe('ubicacion');
+    expect(cuerpo.altType).toBe('location');
+  });
+
+  it('manda liveMode explícito en true', async () => {
+    // Sondeado contra la API real: si se omite, GHL lo pone en `true` por su
+    // cuenta. Se manda explícito para no depender de un default implícito.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate(params, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo.liveMode).toBe(true);
+  });
+
+  it('manda issueDate y expiryDate con 30 días de vigencia', async () => {
+    // Sondeado contra la API real: ambos son obligatorios (422 si se omiten).
+    // Y aunque no lo fueran, una cotización sin fecha de vencimiento es un
+    // precio que el cliente podría reclamar como vigente para siempre.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate(params, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo.issueDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(cuerpo.expiryDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const emision = new Date(`${cuerpo.issueDate}T00:00:00Z`);
+    const vencimiento = new Date(`${cuerpo.expiryDate}T00:00:00Z`);
+    const dias = Math.round((vencimiento.getTime() - emision.getTime()) / (1000 * 60 * 60 * 24));
+    expect(dias).toBe(30);
+  });
+
+  it('etiqueta correctamente una tasa de IVA fraccionaria (no redondea el rótulo)', async () => {
+    // Mutante que esto mata: `(tasa*100).toFixed(0)`, que da "IVA 3%" para
+    // 2.5% — el dinero está bien, pero el rótulo miente.
+    const fraccionaria = { ...cotizacion, tasaIva: 0.025, iva: 32400, total: cotizacion.subtotal + 32400 };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate({ ...params, cotizacion: fraccionaria }, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const iva = cuerpo.items[cuerpo.items.length - 1];
+    expect(iva.name).toBe('IVA 2.5%');
+  });
+
+  it('mueve la oportunidad por pipelineStageId, no por nombre', async () => {
+    // La API real rechaza `pipelineStageName` con 422 ("property
+    // pipelineStageName should not exist"): el DTO usa whitelist estricta y
+    // la etapa se identifica solo por id. Sondeado en la ronda 1
+    // (docs/ghl-estimate-payload.md).
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate(params, { ...deps, fetchImpl });
+    const cuerpoOportunidad = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(cuerpoOportunidad.pipelineStageId).toBeTruthy();
+    expect(cuerpoOportunidad).not.toHaveProperty('pipelineStageName');
+  });
+
+  it('conserva el contactId recibido aunque el estimate falle', async () => {
+    // Antes de esta corrección, un fallo del Estimate perdía el contactId por
+    // completo, incluso cuando ya se sabía cuál era (recibido o recién
+    // creado). Eso deja contactos sin cotización asociada y sin rastro.
+    const fetchImpl = vi.fn().mockResolvedValueOnce(respuesta({ message: 'boom' }, 500));
+    const r = await crearEstimate(params, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.contactId).toBe('contacto-1');
+  });
+
+  it('conserva el contactId del contacto recién creado aunque el estimate falle después', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ contact: { id: 'nuevo-2' } }))
+      .mockResolvedValueOnce(respuesta({ message: 'boom' }, 500));
+    const r = await crearEstimate({ ...params, contactId: undefined }, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.contactId).toBe('nuevo-2');
+  });
+
+  it('no manda contactId cuando ni siquiera se pudo resolver el contacto', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ message: 'duplicado' }, 400));
+    const r = await crearEstimate({ ...params, contactId: undefined }, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.contactId).toBeUndefined();
+  });
 });

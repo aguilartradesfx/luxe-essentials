@@ -3,15 +3,26 @@ import type { Cotizacion } from '@/lib/cotizador/tipos';
 const BASE = 'https://services.leadconnectorhq.com';
 const VERSION = '2021-07-28';
 
-// Pipeline y etapa verificados contra la location el 2026-08-26.
+// Pipeline y etapa verificados contra la location el 2026-08-26 y
+// re-sondeados en la ronda de correcciones 1 (2026-08-27, ver
+// docs/ghl-estimate-payload.md). El sondeo de la ronda 1 encontró que el DTO
+// de `/opportunities/` usa whitelist estricta: `pipelineStageName` no existe
+// como propiedad válida y la API responde 422 ("property pipelineStageName
+// should not exist") — la etapa se identifica SOLO por `pipelineStageId`.
+// Este id de "Proposal Sent" salió de `GET /opportunities/pipelines`.
 const PIPELINE = 'vr8WB783pg2FsTQj6LiG';
-const ETAPA_PROPUESTA = 'Proposal Sent';
+const ETAPA_PROPUESTA_ID = '26ef30a9-dcc9-4bca-8197-da21ed9135fb'; // "Proposal Sent"
 
 // Nota fija en toda cotización. Luxe: "se incluye un bordado de máximo 10x10 cm
 // a un color. más grande o con colores los precios varían según muestra."
 const NOTA_BORDADO =
   'Incluye bordado de hasta 10x10 cm a un color. Bordados de mayor tamaño o a varios colores se cotizan por separado según muestra.';
 const NOTA_PRECIOS = 'Precios en colones. El IVA se detalla por separado.';
+
+// Cuántos días queda vigente el precio cotizado. Sin esto, la cotización no
+// dice hasta cuándo corre el precio, y un cliente podría reclamar un precio
+// de hace un año como si siguiera en pie.
+const DIAS_VIGENCIA = 30;
 
 export type ParamsEstimate = {
   cotizacion: Cotizacion;
@@ -23,7 +34,12 @@ export type DepsGhl = { apiKey: string; locationId: string; fetchImpl?: typeof f
 
 export type ResultadoEstimate =
   | { ok: true; estimateId: string; contactId: string; opportunityError?: string }
-  | { ok: false; error: string };
+  // `contactId` va también en el camino de fallo, cuando se llegó a resolver
+  // (recibido o recién creado) antes de que algo posterior fallara. Sin esto,
+  // un Estimate que falla después de dar de alta un contacto nuevo pierde ese
+  // id sin dejar rastro: el contacto queda huérfano en GHL y nadie en Luxe
+  // sabe que existe.
+  | { ok: false; error: string; contactId?: string };
 
 function cabeceras(apiKey: string) {
   return {
@@ -32,6 +48,21 @@ function cabeceras(apiKey: string) {
     'Content-Type': 'application/json',
     Accept: 'application/json',
   };
+}
+
+// Sondeado en la ronda 1: `issueDate`/`expiryDate` son obligatorios (422 si
+// se omiten) y la API los interpreta como fecha local, no UTC. Formato
+// exigido: YYYY-MM-DD.
+function formatearFecha(fecha: Date): string {
+  return fecha.toISOString().slice(0, 10);
+}
+
+// Sondeado en la ronda 1: `(0.13*100).toFixed(0)` está bien para 13%, pero
+// una tasa reducida como 2.5% da "IVA 3%" — el rótulo miente sobre un monto
+// que en realidad es el 2.5%. Se muestran hasta dos decimales, sin ceros de
+// más: 13 -> "13", 2.5 -> "2.5".
+function formatearTasa(tasa: number): string {
+  return (tasa * 100).toFixed(2).replace(/\.?0+$/, '');
 }
 
 // La API exige `contactDetails.id` no vacío pero NO valida que exista. Un id
@@ -82,7 +113,10 @@ async function moverOportunidad(
         pipelineId: PIPELINE,
         locationId: deps.locationId,
         name: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
-        pipelineStageName: ETAPA_PROPUESTA,
+        // Por id, no por nombre: la API rechaza `pipelineStageName` con 422
+        // ("property pipelineStageName should not exist"). Ver el comentario
+        // de `ETAPA_PROPUESTA_ID` arriba.
+        pipelineStageId: ETAPA_PROPUESTA_ID,
         status: 'open',
         contactId,
         monetaryValue: p.cotizacion.total,
@@ -110,6 +144,10 @@ export async function crearEstimate(
     notas.push('El bordado solicitado excede el estándar: el precio final se confirma contra muestra.');
   }
 
+  const hoy = new Date();
+  const vencimiento = new Date(hoy);
+  vencimiento.setDate(vencimiento.getDate() + DIAS_VIGENCIA);
+
   const cuerpo = {
     altId: locationId,
     altType: 'location',
@@ -117,6 +155,12 @@ export async function crearEstimate(
     title: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
     name: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
     currency: 'CRC',
+    // Sondeado en la ronda 1: si se omite, la API lo pone en `true` por su
+    // cuenta. Se manda explícito para que quede documentado a propósito, no
+    // como un default implícito que podría cambiar sin avisar. `true` es lo
+    // correcto acá: son cotizaciones reales para clientes reales, no de
+    // prueba.
+    liveMode: true,
     businessDetails: { name: 'Luxe Essentials' },
     contactDetails: {
       id: contactId,
@@ -148,7 +192,7 @@ export async function crearEstimate(
       ...(p.cotizacion.iva > 0
         ? [
             {
-              name: `IVA ${(p.cotizacion.tasaIva * 100).toFixed(0)}%`,
+              name: `IVA ${formatearTasa(p.cotizacion.tasaIva)}%`,
               description: 'Impuesto al valor agregado sobre el subtotal ya descontado.',
               currency: 'CRC',
               amount: p.cotizacion.iva,
@@ -162,6 +206,11 @@ export async function crearEstimate(
     // TODAS las líneas, incluida la del IVA, así que usarlo descuadraría el
     // total. Los descuentos ya están dentro de cada `amount`.
     discount: { type: 'percentage' as const, value: 0 },
+    // Obligatorios (422 si faltan). Emisión hoy, vencimiento a
+    // `DIAS_VIGENCIA` días: sin esto, la cotización no dice hasta cuándo
+    // corre el precio.
+    issueDate: formatearFecha(hoy),
+    expiryDate: formatearFecha(vencimiento),
     // Obligatorio. Esta cotización no se repite.
     frequencySettings: { enabled: false },
     termsNotes: notas.join(' '),
@@ -175,14 +224,14 @@ export async function crearEstimate(
       body: JSON.stringify(cuerpo),
     });
     const texto = await res.text();
-    if (!res.ok) return { ok: false, error: `GHL estimate ${res.status}: ${texto.slice(0, 300)}` };
+    if (!res.ok) return { ok: false, error: `GHL estimate ${res.status}: ${texto.slice(0, 300)}`, contactId };
 
     const datos = JSON.parse(texto) as { _id?: string; id?: string };
     const id = datos._id ?? datos.id;
-    if (!id) return { ok: false, error: `GHL respondió sin id: ${texto.slice(0, 300)}` };
+    if (!id) return { ok: false, error: `GHL respondió sin id: ${texto.slice(0, 300)}`, contactId };
     estimateId = id;
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: err instanceof Error ? err.message : String(err), contactId };
   }
 
   const opportunityError = await moverOportunidad(p, contactId, completas);

@@ -410,3 +410,155 @@ Ajustes de diseño concretos para la Tarea 7:
   unitarios ya descontados, IVA como línea aparte, y `discount: { type:
   "percentage", value: 0 }` fijo. Ver la sección de impuestos arriba para el
   detalle completo y el porqué.
+
+## Ronda de correcciones 1 sobre la Tarea 7 (2026-08-27)
+
+Sondeado con el mismo cuidado que las secciones anteriores:
+`scripts/verificar-estimate-ghl-ronda2.mjs` (`node --env-file=.env.local
+scripts/verificar-estimate-ghl-ronda2.mjs`), más un script ad hoc auxiliar
+para cerrar C y D con fechas válidas. Cada recurso creado se inspeccionó y se
+borró en el mismo `try/finally`; no se envió nada a nadie. Confirmado al
+final de cada corrida: cero huérfanos (todos los `DELETE` de Estimates,
+Opportunities y del contacto desechable devolvieron `200`).
+
+### A. El endpoint de oportunidades: ¿`pipelineStageName` mueve la etapa de verdad?
+
+**No — la API lo rechaza de plano.** `POST /opportunities/` con
+`pipelineStageName: "Proposal Sent"` (el cuerpo que usaba
+`lib/cotizador/ghl.ts` hasta esta ronda) responde:
+
+```
+422 {"message":["property pipelineStageName should not exist"],"error":"Unprocessable Entity","statusCode":422}
+```
+
+El DTO usa **whitelist estricta**: cualquier propiedad que no reconoce la
+tira con 422, no la ignora en silencio. Esto es a la vez mejor y peor que la
+hipótesis original: peor, porque significa que **hasta ahora
+`moverOportunidad` fallaba siempre, en el 100% de las cotizaciones**, no solo
+"probablemente"; mejor, porque el fallo es un 422 explícito que `crearEstimate`
+ya capturaba como `opportunityError` — no era un fallo silencioso sin rastro,
+quedaba anotado en `ghl_error` de cada fila. Aun así, el efecto de negocio es
+el mismo que describía el hallazgo: **ninguna Opportunity se movió jamás a
+"Proposal Sent"** desde que existe este código, así que el seguimiento
+comercial no ocurría.
+
+La etapa se identifica **solo por `pipelineStageId`**. Se obtuvo con
+`GET /opportunities/pipelines?locationId=...` (200, ya confirmado que
+funciona desde la Tarea 1). El pipeline `vr8WB783pg2FsTQj6LiG` ("Marketing
+Pipeline") tiene estas etapas:
+
+| Etapa | id |
+|---|---|
+| New Lead | `a2ab07da-6539-4b88-83c2-877279de872c` |
+| Contacted | `63543b3e-97f4-45a1-9021-1e38064d6620` |
+| Qualified | `95ab829f-202b-47db-a245-20be6aa8eba1` |
+| **Proposal Sent** | **`26ef30a9-dcc9-4bca-8197-da21ed9135fb`** |
+| Negotiation | `2bd02508-081c-470b-ad22-36db96b7a493` |
+| Closed | `abb0c045-ce92-473a-b2c9-aba1ae682d2b` |
+
+Se probó `POST /opportunities/` con `pipelineStageId` de "Proposal Sent":
+`201`, y tanto la respuesta del `POST` como un `GET /opportunities/:id`
+posterior (para descartar inconsistencia eventual) confirman
+`pipelineStageId` guardado exactamente ese id. Se probó también sin mandar
+ninguna etapa: la oportunidad cae por default en la **primera** etapa del
+pipeline ("New Lead"), no en un estado sin etapa — dato relevante si algún
+día se decide no fijarla.
+
+**Corrección aplicada en `lib/cotizador/ghl.ts`:** `moverOportunidad` ahora
+manda `pipelineStageId: '26ef30a9-dcc9-4bca-8197-da21ed9135fb'` (constante
+`ETAPA_PROPUESTA_ID`), no `pipelineStageName`.
+
+### B. `items[].description` y `contactDetails.companyName`
+
+**Se aceptan tal cual, sin whitelist que los tire.** Probado en el mismo
+`POST` que cerró C y D (ver el cuerpo completo abajo): la respuesta trae
+`items[0].description` y `contactDetails.companyName` idénticos a lo
+mandado, carácter por carácter (incluida puntuación: dos puntos, punto y
+coma, comas). No hizo falta ningún cambio en `lib/cotizador/ghl.ts`, que ya
+los mandaba.
+
+### C. `issueDate` y `expiryDate`
+
+**Son obligatorios — 422 si se omiten, no un default silencioso.** Sin
+ellos:
+
+```
+422 {"message":["issueDate must be in YYYY-MM-DD format","issueDate must be a string","expiryDate must be in YYYY-MM-DD format","expiryDate must be a string"],...}
+```
+
+Con `issueDate: "2026-08-27"` y `expiryDate: "2026-09-26"` (30 días
+después), la respuesta trae `issueDate: "2026-08-27T06:00:00.000Z"` y
+`expiryDate: "2026-09-27T05:59:59.999Z"` — GHL interpreta el `YYYY-MM-DD`
+como **el día calendario completo en la zona horaria de Costa Rica
+(UTC-6)**, no como medianoche UTC: por eso `expiryDate` "26" aparece como
+`...09-27T05:59:59.999Z`, que es exactamente `2026-09-26 23:59:59.999`
+hora de Costa Rica. Mandar la fecha calendario correcta (sin ajustar por
+huso horario a mano) es lo que hay que hacer; GHL ya hace la conversión.
+
+**Corrección aplicada:** `crearEstimate` ahora manda siempre `issueDate`
+(hoy) y `expiryDate` (hoy + 30 días, constante `DIAS_VIGENCIA`), en formato
+`YYYY-MM-DD`.
+
+### D. `liveMode`
+
+**Si se omite, la API lo pone en `true` por su cuenta** (confirmado: el
+mismo `POST` de la prueba de B/C, sin mandar `liveMode`, devolvió
+`"liveMode":true`). Esto es lo correcto para el uso en producción de Luxe
+(son cotizaciones reales, no de prueba), pero quedaba implícito. Los
+Estimates de prueba de la Tarea 1 y de esta ronda mandaron `liveMode: false`
+a propósito, para dejarlos marcados como no-reales mientras se sondeaba —
+ese `false` no debe copiarse al código de producción.
+
+**Corrección aplicada:** `crearEstimate` ahora manda `liveMode: true`
+explícito, documentado como intencional y no como un default implícito que
+podría cambiar.
+
+### Cuerpo de la prueba que cerró B, C y D (201, sin huérfanos)
+
+```json
+{
+  "altId": "<LUXE_GHL_LOCATION_ID>",
+  "altType": "location",
+  "name": "PRUEBA RONDA 2b — borrar",
+  "title": "Cotización de prueba ronda 2b",
+  "currency": "CRC",
+  "businessDetails": { "name": "Luxe Essentials" },
+  "contactDetails": {
+    "id": "000000000000000000000000",
+    "name": "Prueba Automatizada Ronda 2b",
+    "email": "prueba-ronda2b@example.invalid",
+    "companyName": "Hotel de Prueba S.A."
+  },
+  "items": [
+    {
+      "name": "Filipina tradicional manga corta",
+      "description": "Incluye: prueba de descripción con dos puntos y coma; y una lista, de items.",
+      "currency": "CRC",
+      "amount": 15500,
+      "qty": 24,
+      "type": "one_time"
+    }
+  ],
+  "discount": { "type": "percentage", "value": 0 },
+  "issueDate": "2026-08-27",
+  "expiryDate": "2026-09-26",
+  "termsNotes": "Cotización de prueba ronda 2b. No representa un pedido real.",
+  "frequencySettings": { "enabled": false }
+}
+```
+
+### Hallazgo adicional, no pedido pero relevante para el futuro
+
+El DTO de `/opportunities/` usa `forbidNonWhitelisted` (rechaza cualquier
+propiedad extra con 422, no la ignora). Si en el futuro se agrega algún
+campo a `moverOportunidad` copiando algún ejemplo de la documentación
+oficial sin sondearlo primero, el riesgo de 422 es real y ya se demostró que
+no es teórico — es exactamente lo que le pasaba a `pipelineStageName`.
+
+### Sin huérfanos
+
+Todas las oportunidades de prueba (`EwFjeoUf8BZUIxL35C2q`,
+`yGWcbVX8O6XmS844cuUN`), el contacto desechable (`DoIf5WVV38JbCd4MQm2n`) y el
+Estimate de la prueba B/C/D (`6a8fd59d2d99b8a74e980055`, `estimateNumber`
+13) se borraron dentro de la misma corrida, cada `DELETE` confirmado en
+`200`. No se dejó nada pendiente en el CRM de producción.

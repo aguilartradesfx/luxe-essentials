@@ -101,9 +101,15 @@ export async function POST(request: Request) {
     },
   );
 
+  // El contactId se guarda aunque GoHighLevel haya fallado después: si el
+  // contacto se llegó a resolver (recibido del vendedor, o recién creado por
+  // `crearEstimate`), es un dato gratis que ya tenemos en la mano y que de
+  // otro modo se pierde sin dejar rastro en la fila.
+  const contactId = ghl.contactId ?? datos.contactId ?? null;
+
   // El registro ya existe pase lo que pase. Aquí solo se anota cómo le fue al
   // CRM: una cotización con ghl_error es recuperable, igual que un lead.
-  await supabaseAdmin()
+  const { error: errorActualizacion } = await supabaseAdmin()
     .from('cotizaciones')
     .update(
       // `updated_at` va explícito: la columna tiene `default now()` pero no hay
@@ -114,11 +120,30 @@ export async function POST(request: Request) {
             estado: 'enviada',
             ghl_estimate_id: ghl.estimateId,
             ghl_error: ghl.opportunityError ?? null,
+            contact_id: contactId,
             updated_at: new Date().toISOString(),
           }
-        : { estado: 'error', ghl_error: ghl.error, updated_at: new Date().toISOString() },
+        : {
+            estado: 'error',
+            ghl_error: ghl.error,
+            contact_id: contactId,
+            updated_at: new Date().toISOString(),
+          },
     )
     .eq('id', data.id);
+
+  if (errorActualizacion) {
+    // El Estimate (y la Opportunity) ya se gestionaron en GoHighLevel en este
+    // punto — esto no invalida ese resultado. Pero si esto falla en
+    // silencio, la fila queda parada en 'borrador' sin `ghl_estimate_id`
+    // pese a que el Estimate sí existe: el mismo huérfano que "primero
+    // Supabase" evita, corrido un paso más adelante. Se registra para que
+    // sea recuperable a mano.
+    console.error(
+      '[cotizador] El Estimate se gestionó en GoHighLevel pero no se pudo actualizar la fila.',
+      errorActualizacion.message,
+    );
+  }
 
   return NextResponse.json({
     ok: true,

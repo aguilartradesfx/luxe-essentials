@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@/lib/cotizador/ghl', () => ({
-  crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1' }),
+  crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' }),
 }));
 
 const insertado: unknown[] = [];
+const actualizado: unknown[] = [];
+let errorAlActualizar: { message: string } | null = null;
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
     from: () => ({
@@ -16,12 +18,16 @@ vi.mock('@/lib/supabase/server', () => ({
           }),
         };
       },
-      update: () => ({ eq: async () => ({ error: null }) }),
+      update: (cambios: unknown) => {
+        actualizado.push(cambios);
+        return { eq: async () => ({ error: errorAlActualizar }) };
+      },
     }),
   }),
 }));
 
 const { POST } = await import('@/app/api/cotizacion/route');
+const { crearEstimate } = await import('@/lib/cotizador/ghl');
 
 function peticion(cuerpo: unknown) {
   return new Request('http://localhost/api/cotizacion', {
@@ -39,7 +45,10 @@ const valido = {
 describe('POST /api/cotizacion', () => {
   beforeEach(() => {
     insertado.length = 0;
+    actualizado.length = 0;
+    errorAlActualizar = null;
     process.env.LUXE_TALLER_CLAVE = 'secreta';
+    vi.mocked(crearEstimate).mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' });
   });
 
   it('rechaza sin clave', async () => {
@@ -190,5 +199,96 @@ describe('POST /api/cotizacion', () => {
     const res = await POST(peticion(valido));
     const cuerpo = await res.json();
     expect(cuerpo.ghl.estimateId).toBe('est-1');
+  });
+
+  // --- Ronda de correcciones 1 ---
+
+  it('guarda estado "enviada", el estimateId y el contactId cuando GoHighLevel responde ok', async () => {
+    await POST(peticion(valido));
+    expect(actualizado).toHaveLength(1);
+    expect(actualizado[0]).toMatchObject({
+      estado: 'enviada',
+      ghl_estimate_id: 'est-1',
+      contact_id: 'contacto-ghl-1',
+    });
+  });
+
+  it('guarda estado "error" y ghl_error cuando crearEstimate falla (camino de fallo antes no probado)', async () => {
+    // Antes de esta ronda, `crearEstimate` estaba mockeado siempre en
+    // `ok: true`, así que `estado: 'error'` — el contrato de recuperabilidad
+    // completo — nunca se ejercitaba. Un mutante que escribiera 'enviado' en
+    // vez de 'enviada' (rechazado por el `check` de la tabla) sobrevivía.
+    vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+
+    expect(cuerpo.ghl.error).toContain('boom');
+    expect(actualizado).toHaveLength(1);
+    expect(actualizado[0]).toMatchObject({
+      estado: 'error',
+      ghl_error: expect.stringContaining('boom'),
+    });
+    // El estado que el check de la tabla realmente acepta, no un string
+    // parecido: mata el mutante 'enviado' vs 'enviada'.
+    expect((actualizado[0] as { estado: string }).estado).toBe('error');
+  });
+
+  it('guarda el contactId aunque crearEstimate falle, si se llegó a resolver uno', async () => {
+    vi.mocked(crearEstimate).mockResolvedValueOnce({
+      ok: false,
+      error: 'GHL estimate 500: boom',
+      contactId: 'nuevo-antes-de-fallar',
+    });
+    await POST(peticion(valido));
+    expect(actualizado[0]).toMatchObject({ estado: 'error', contact_id: 'nuevo-antes-de-fallar' });
+  });
+
+  it('guarda estado "enviada" con el ghl_error de la Opportunity, sin marcar error', async () => {
+    // Un fallo moviendo la Opportunity no invalida un Estimate que ya se creó
+    // bien: la fila debe seguir en 'enviada', con el detalle del fallo en
+    // ghl_error para que alguien lo revise, no como si la cotización entera
+    // hubiera fallado.
+    vi.mocked(crearEstimate).mockResolvedValueOnce({
+      ok: true,
+      estimateId: 'est-2',
+      contactId: 'contacto-x',
+      opportunityError: 'GHL oportunidad 422: property pipelineStageName should not exist',
+    });
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+
+    expect(cuerpo.ghl.estimateId).toBe('est-2');
+    expect(actualizado[0]).toMatchObject({
+      estado: 'enviada',
+      ghl_estimate_id: 'est-2',
+      ghl_error: expect.stringContaining('pipelineStageName'),
+      contact_id: 'contacto-x',
+    });
+  });
+
+  it('usa el contactId recibido del vendedor si GoHighLevel no devuelve uno', async () => {
+    // El dato ya está en la mano en el momento del insert: no debería
+    // perderse si `crearEstimate` no lo repite en su resultado.
+    vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: true, estimateId: 'est-3' } as never);
+    await POST(peticion({ ...valido, contactId: 'contacto-del-vendedor' }));
+    expect(actualizado[0]).toMatchObject({ contact_id: 'contacto-del-vendedor' });
+  });
+
+  it('registra en consola si falla el update de Supabase, sin tumbar la respuesta', async () => {
+    // El Estimate ya se gestionó en GoHighLevel en este punto: que el update
+    // falle no debe convertirse en un 500 para el vendedor, que ya tiene su
+    // cotización creada. Pero el fallo debe quedar registrado, no descartado
+    // en silencio.
+    errorAlActualizar = { message: 'conexión perdida' };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await POST(peticion(valido));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.ghl.estimateId).toBe('est-1');
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('no se pudo actualizar'),
+      'conexión perdida',
+    );
+    consoleError.mockRestore();
   });
 });
