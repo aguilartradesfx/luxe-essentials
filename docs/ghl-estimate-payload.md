@@ -466,7 +466,7 @@ día se decide no fijarla.
 
 **Corrección aplicada en `lib/cotizador/ghl.ts`:** `moverOportunidad` ahora
 manda `pipelineStageId: '26ef30a9-dcc9-4bca-8197-da21ed9135fb'` (constante
-`ETAPA_PROPUESTA_ID`), no `pipelineStageName`.
+`ETAPA_CALIFICADA_ID`), no `pipelineStageName`.
 
 ### B. `items[].description` y `contactDetails.companyName`
 
@@ -613,7 +613,7 @@ que la prueba nueva falla, restaurar).
 
 **Corrección aplicada:** `moverOportunidad` ahora compara el
 `pipelineStageId` que devuelve el propio `POST /opportunities/` contra el
-que se mandó (`ETAPA_PROPUESTA_ID`). Si no coincide, se propaga como
+que se mandó (`ETAPA_CALIFICADA_ID`). Si no coincide, se propaga como
 `opportunityError` aunque el `POST` haya respondido `201`.
 
 **Decisión de diseño — no resolver el id por nombre en cada cotización:**
@@ -628,3 +628,17 @@ ninguna petición de más: la información ya viene en la respuesta que de
 todos modos hay que leer. Si el id llega a quedar obsoleto, esa cotización
 puntual lo reporta en `ghl_error` y queda para corregir a mano (o para
 entonces sí migrar a resolución por nombre).
+
+
+## Nota de sincronización (revisión final de la rama)
+
+Este documento se escribió sondeando la API mientras se construía la integración, así que
+algunas secciones describen decisiones que después cambiaron. Lo vigente:
+
+- **La Opportunity va a la etapa `Qualified`, no a `Proposal Sent`.** El sistema crea la
+  cotización pero no la envía, así que ninguna propuesta salió todavía. Cuando se implemente
+  el envío, ahí vuelve a moverse a `Proposal Sent`.
+- **No hay ninguna llamada de envío.** El Estimate queda en `draft` y el vendedor lo manda
+  desde la interfaz de GoHighLevel. Ver el spec, sección "Lo que falta: el envío".
+- La verificación manual del botón de pago —abajo, "Lo que falta verificar a mano"— sigue
+  pendiente, y es la precondición para implementar el envío automático.

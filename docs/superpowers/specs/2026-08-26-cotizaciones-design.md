@@ -31,8 +31,8 @@ Sondeado el 2026-08-26 contra la location de producción:
 | `GET /products/` | 200 · catálogo vacío |
 
 El pipeline existente tiene las etapas `New Lead → Contacted → Qualified →
-**Proposal Sent** → Negotiation → Closed`. La cotización enviada mueve la Opportunity a
-*Proposal Sent*.
+Proposal Sent → Negotiation → Closed`. **La cotización creada mueve la Opportunity a
+*Qualified*, no a *Proposal Sent*** — ver la sección "Lo que falta: el envío".
 
 GoHighLevel lleva la numeración correlativa: el primer Estimate será el número 1.
 
@@ -234,9 +234,11 @@ Agente IA deja borrador     ─┘                        │
                                                       ↓
                               Supabase (registro)  →  GHL Estimate
                                                       ↓
-                                        GHL manda el correo con el PDF
+                              Queda en GoHighLevel como borrador
                                                       ↓
-                                     Opportunity → etapa "Proposal Sent"
+                                       Opportunity → etapa "Qualified"
+                                                      ↓
+                          El vendedor la abre en el CRM y la envía a mano
 ```
 
 **Primero Supabase, después GoHighLevel.** Si GoHighLevel falla, la fila queda con
@@ -284,6 +286,28 @@ aplicó el descuento es lo que permite detectar una regla mal configurada antes 
 salga una cotización con el precio equivocado.
 
 Una sección aparte lista los borradores que dejó el agente, pendientes de aprobación.
+
+## Lo que falta: el envío
+
+**El sistema crea la cotización en GoHighLevel, pero no la envía.** El Estimate queda en
+estado `draft` y el vendedor tiene que abrirlo en el CRM y mandarlo desde ahí.
+
+No es un descuido: es una decisión tomada durante la ejecución. Mandarle una cotización a un
+hotel real es una acción irreversible hacia afuera, y hay una precondición sin verificar —si
+la vista que abre el cliente muestra un botón de pagar, que Luxe prohibió expresamente—. Esa
+comprobación solo se puede hacer a mano dentro de la interfaz de GoHighLevel, y está descrita
+en `docs/ghl-estimate-payload.md`, sección "Lo que falta verificar a mano".
+
+**Antes de implementar el envío automático hay que:**
+
+1. Hacer esa verificación manual del botón de pago.
+2. Agregar la llamada al endpoint de envío en `lib/cotizador/ghl.ts`.
+3. Cambiar el estado de `creada` a `enviada` — ya está en el `check` de la tabla.
+4. Mover la Opportunity de `Qualified` a `Proposal Sent`.
+
+Una versión anterior de este documento decía que GoHighLevel mandaba el correo. Nunca fue
+cierto: no había ninguna llamada de envío, y el sistema afirmaba haber enviado algo que
+seguía en borrador. Lo encontró la revisión final de la rama.
 
 ## El agente
 
