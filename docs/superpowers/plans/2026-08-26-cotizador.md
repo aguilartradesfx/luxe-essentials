@@ -1852,6 +1852,13 @@ El cálculo de la vista previa corre **en el cliente**, con la misma función pu
 servidor. El servidor recalcula al recibir: nunca se confía en un total que llegó del
 navegador.
 
+**Cuidado con la tasa de IVA.** `calcular` lanza si la tasa no es un número finito entre 0
+y 1 — se endureció al revisar la Tarea 3. Aquí no hay Zod de por medio, y un campo de
+texto vacío da `parseFloat('') === NaN`. Si le pasás eso a `calcular`, la pantalla se cae
+entera. El selector debe ofrecer valores fijos (13% y 0%) en vez de texto libre, y el
+estado nunca debe contener algo que `calcular` rechace. Si algún día se acepta texto
+libre, se normaliza antes de llamar: número inválido o vacío vuelve al 13% por defecto.
+
 - [ ] **Paso 1: Escribir la prueba que falla**
 
 ```typescript
@@ -1891,6 +1898,19 @@ describe('Cotizador', () => {
     render(<Cotizador />);
     await usuario.click(screen.getByLabelText(/bordado especial/i));
     expect(screen.getByText(/se confirma contra muestra/i)).toBeInTheDocument();
+  });
+
+  it('nunca le pasa al motor una tasa que lo haga lanzar', async () => {
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await usuario.type(screen.getByLabelText(/buscar/i), 'set de 600 hilos king');
+    await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+    // El selector ofrece valores fijos: no hay forma de escribir una tasa
+    // inválida. Si esto se convierte en texto libre, esta prueba debe cambiar
+    // a comprobar la normalización — no borrarse.
+    const iva = screen.getByLabelText(/iva/i);
+    expect(iva.tagName).toBe('SELECT');
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
   it('no deja enviar sin correo del cliente', async () => {
@@ -1948,7 +1968,7 @@ Usar Tailwind, siguiendo el estilo de `app/q7m4/Taller.tsx`.
 - [ ] **Paso 4: Ejecutar y ver que pasa**
 
 Ejecutar: `npx vitest run tests/cotizador-ui.test.tsx`
-Esperado: PASA, 5 pruebas.
+Esperado: PASA, 6 pruebas.
 
 - [ ] **Paso 5: Probar a mano**
 
