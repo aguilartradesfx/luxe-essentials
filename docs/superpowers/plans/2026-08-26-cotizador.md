@@ -1355,10 +1355,22 @@ git commit -m "feat(cotizador): endpoint de calculo y registro"
 **Interfaces:**
 - Consume: `Cotizacion` (Tarea 2), `docs/ghl-estimate-payload.md` (Tarea 1).
 - Produce: `crearEstimate(p: ParamsEstimate, deps: DepsGhl): Promise<ResultadoEstimate>`
-  con `ResultadoEstimate = { ok: true; estimateId: string; opportunityError?: string } | { ok: false; error: string }`.
+  con `ResultadoEstimate = { ok: true; estimateId: string; contactId: string; opportunityError?: string } | { ok: false; error: string }`.
 
-> **Antes de escribir código, leer `docs/ghl-estimate-payload.md`.** Si el cuerpo que
-> aceptó GoHighLevel en la Tarea 1 no coincide con el de aquí, manda el documento.
+> **Leer `docs/ghl-estimate-payload.md` antes de empezar.** La Tarea 1 sondeó la API real y
+> encontró tres cosas que cambian este diseño:
+>
+> 1. **GoHighLevel recalcula los totales** a partir de `amount`, `qty`, `discount` y
+>    `taxes`, y produce decimales (`333 × 1,13 = 376,29`). Delegarle el IVA o el descuento
+>    haría que el total que ve el cliente no coincida con el de nuestro motor.
+>    **Por eso el descuento va siempre en cero y el IVA viaja como una línea más**, con el
+>    monto entero que ya calculó `calcular`. GoHighLevel solo suma; no decide nada.
+> 2. **`contactDetails.id` es obligatorio** y la API no valida que el contacto exista. Usar
+>    un id inventado crearía cotizaciones huérfanas, sin contacto al que hacerle
+>    seguimiento — que es justo lo que este proyecto existe para lograr. Por eso, cuando no
+>    llega un `contactId`, se resuelve dando de alta el contacto primero.
+> 3. `title`, `frequencySettings.enabled` e `items[].type` son obligatorios, y el único
+>    valor válido de `type` es `one_time` (`service` da 422).
 
 - [ ] **Paso 1: Escribir la prueba que falla**
 
@@ -1398,12 +1410,75 @@ function respuesta(body: unknown, status = 200) {
 }
 
 describe('crearEstimate', () => {
+  it('deja el descuento en cero y manda el IVA como línea aparte', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate(params, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+
+    // GoHighLevel recalcula: si le delegáramos el descuento o el IVA, el total
+    // que ve el cliente no coincidiría con el que calculó nuestro motor.
+    expect(cuerpo.discount).toEqual({ type: 'percentage', value: 0 });
+    expect(cuerpo.items.some((i: { taxes?: unknown }) => i.taxes)).toBe(false);
+
+    const iva = cuerpo.items[cuerpo.items.length - 1];
+    expect(iva.name).toBe('IVA 13%');
+    expect(iva.amount).toBe(168480);
+    expect(iva.qty).toBe(1);
+  });
+
+  it('omite la línea de IVA cuando el cliente está exento', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    const exento = { ...cotizacion, tasaIva: 0, iva: 0, total: cotizacion.subtotal };
+    await crearEstimate({ ...params, cotizacion: exento }, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo.items).toHaveLength(1);
+    expect(cuerpo.items[0].name).not.toMatch(/IVA/);
+  });
+
+  it('manda los campos que la API exige', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    await crearEstimate(params, { ...deps, fetchImpl });
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo.title).toBeTruthy();
+    expect(cuerpo.frequencySettings).toEqual({ enabled: false });
+    expect(cuerpo.contactDetails.id).toBe('contacto-1');
+    for (const item of cuerpo.items) expect(item.type).toBe('one_time');
+  });
+
+  it('da de alta el contacto cuando no llega uno', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(respuesta({ contact: { id: 'nuevo-1' } }))
+      .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
+      .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
+    const r = await crearEstimate({ ...params, contactId: undefined }, { ...deps, fetchImpl });
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/contacts/upsert');
+    const cuerpoEstimate = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    // Un id inventado crearía una cotización huérfana, sin contacto al que
+    // hacerle seguimiento.
+    expect(cuerpoEstimate.contactDetails.id).toBe('nuevo-1');
+    expect(r).toEqual({ ok: true, estimateId: 'est-1', contactId: 'nuevo-1' });
+  });
+
+  it('no crea el estimate si falla el alta del contacto', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ message: 'duplicado' }, 400));
+    const r = await crearEstimate({ ...params, contactId: undefined }, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('devuelve el id del estimate creado', async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(respuesta({ _id: 'est-1' }))
       .mockResolvedValueOnce(respuesta({ id: 'opp-1' }));
     const r = await crearEstimate(params, { ...deps, fetchImpl });
-    expect(r).toEqual({ ok: true, estimateId: 'est-1' });
+    expect(r).toEqual({ ok: true, estimateId: 'est-1', contactId: 'contacto-1' });
   });
 
   it('manda los montos en colones enteros', async () => {
@@ -1425,6 +1500,7 @@ describe('crearEstimate', () => {
     await crearEstimate(params, { ...deps, fetchImpl });
     const cuerpo = fetchImpl.mock.calls[0][1].body as string;
     expect(cuerpo).not.toMatch(/paymentMethod|pasarela|payNow/i);
+    // `discount` sí aparece, pero en cero: se comprueba en su propia prueba.
   });
 
   it('desglosa el contenido del set en la descripción', async () => {
@@ -1504,7 +1580,7 @@ export type ParamsEstimate = {
 export type DepsGhl = { apiKey: string; locationId: string; fetchImpl?: typeof fetch };
 
 export type ResultadoEstimate =
-  | { ok: true; estimateId: string; opportunityError?: string }
+  | { ok: true; estimateId: string; contactId: string; opportunityError?: string }
   | { ok: false; error: string };
 
 function cabeceras(apiKey: string) {
@@ -1516,12 +1592,46 @@ function cabeceras(apiKey: string) {
   };
 }
 
+// La API exige `contactDetails.id` no vacío pero NO valida que exista. Un id
+// inventado produciría cotizaciones huérfanas, sin contacto al que hacerle
+// seguimiento — justo lo contrario de lo que buscamos. Así que si no llega un
+// contacto, se da de alta antes de cotizar.
+async function resolverContacto(
+  p: ParamsEstimate, deps: Required<DepsGhl>,
+): Promise<{ ok: true; contactId: string } | { ok: false; error: string }> {
+  if (p.contactId) return { ok: true, contactId: p.contactId };
+
+  const partes = p.cliente.nombre.trim().split(/\s+/);
+  try {
+    const res = await deps.fetchImpl(`${BASE}/contacts/upsert`, {
+      method: 'POST',
+      headers: cabeceras(deps.apiKey),
+      body: JSON.stringify({
+        locationId: deps.locationId,
+        firstName: partes[0] ?? '',
+        lastName: partes.slice(1).join(' ') || undefined,
+        email: p.cliente.email,
+        companyName: p.cliente.empresa,
+        source: 'Cotizador Luxe Essentials',
+        tags: ['cotizacion'],
+      }),
+    });
+    const texto = await res.text();
+    if (!res.ok) return { ok: false, error: `GHL contacto ${res.status}: ${texto.slice(0, 200)}` };
+    const datos = JSON.parse(texto) as { contact?: { id?: string }; id?: string };
+    const id = datos.contact?.id ?? datos.id;
+    if (!id) return { ok: false, error: `GHL creó el contacto sin devolver id: ${texto.slice(0, 200)}` };
+    return { ok: true, contactId: id };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // Nunca lanza: un fallo moviendo la Opportunity no debe invalidar un Estimate
 // que ya se creó bien. Devuelve el texto del error para registrarlo.
 async function moverOportunidad(
-  p: ParamsEstimate, deps: Required<DepsGhl>,
+  p: ParamsEstimate, contactId: string, deps: Required<DepsGhl>,
 ): Promise<string | undefined> {
-  if (!p.contactId) return undefined;
   try {
     const res = await deps.fetchImpl(`${BASE}/opportunities/`, {
       method: 'POST',
@@ -1532,7 +1642,7 @@ async function moverOportunidad(
         name: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
         pipelineStageName: ETAPA_PROPUESTA,
         status: 'open',
-        contactId: p.contactId,
+        contactId,
         monetaryValue: p.cotizacion.total,
       }),
     });
@@ -1547,6 +1657,11 @@ export async function crearEstimate(
   p: ParamsEstimate, deps: DepsGhl,
 ): Promise<ResultadoEstimate> {
   const { apiKey, locationId, fetchImpl = fetch } = deps;
+  const completas = { apiKey, locationId, fetchImpl };
+
+  const contacto = await resolverContacto(p, completas);
+  if (!contacto.ok) return { ok: false, error: contacto.error };
+  const contactId = contacto.contactId;
 
   const notas = [NOTA_PRECIOS, NOTA_BORDADO];
   if (p.cotizacion.bordadoEspecial) {
@@ -1556,29 +1671,57 @@ export async function crearEstimate(
   const cuerpo = {
     altId: locationId,
     altType: 'location',
+    // Obligatorio a nivel de esquema: sin `title` la API responde 500.
+    title: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
     name: `Cotización — ${p.cliente.empresa ?? p.cliente.nombre}`,
     currency: 'CRC',
     businessDetails: { name: 'Luxe Essentials' },
     contactDetails: {
-      id: p.contactId ?? null,
+      id: contactId,
       name: p.cliente.nombre,
       email: p.cliente.email,
       companyName: p.cliente.empresa,
     },
-    items: p.cotizacion.lineas.map((l) => ({
-      name: l.nombre,
-      // El desglose del set va aquí: sin él, un hotel lee "set de 600 hilos
-      // king ₡90.000" y no sabe qué recibe por ese dinero.
-      description: [
-        l.contenido?.length ? `Incluye: ${l.contenido.join(', ')}.` : null,
-        l.descuentoPct > 0 ? `Descuento aplicado: ${l.descuentoPct}%.` : null,
-      ]
-        .filter(Boolean)
-        .join(' '),
-      currency: 'CRC',
-      amount: l.precioUnitario,
-      qty: l.cantidad,
-    })),
+    items: [
+      ...p.cotizacion.lineas.map((l) => ({
+        name: l.nombre,
+        // El desglose del set va aquí: sin él, un hotel lee "set de 600 hilos
+        // king ₡90.000" y no sabe qué recibe por ese dinero.
+        description: [
+          l.contenido?.length ? `Incluye: ${l.contenido.join(', ')}.` : null,
+          l.descuentoPct > 0 ? `Descuento aplicado: ${l.descuentoPct}%.` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
+        currency: 'CRC',
+        // Ya descontado y redondeado por `calcular`. GoHighLevel no descuenta.
+        amount: l.precioUnitario,
+        qty: l.cantidad,
+        type: 'one_time' as const,
+      })),
+      // El IVA viaja como una línea más, con el entero que calculó nuestro
+      // motor. Si se declarara con `taxes`, GoHighLevel lo recalcularía y
+      // produciría decimales: 333 x 1,13 da 376,29, y entonces el total que ve
+      // el cliente deja de coincidir con el que Luxe cotizó.
+      ...(p.cotizacion.iva > 0
+        ? [
+            {
+              name: `IVA ${(p.cotizacion.tasaIva * 100).toFixed(0)}%`,
+              description: 'Impuesto al valor agregado sobre el subtotal ya descontado.',
+              currency: 'CRC',
+              amount: p.cotizacion.iva,
+              qty: 1,
+              type: 'one_time' as const,
+            },
+          ]
+        : []),
+    ],
+    // Fijo en cero a propósito. El descuento global de GoHighLevel se aplica a
+    // TODAS las líneas, incluida la del IVA, así que usarlo descuadraría el
+    // total. Los descuentos ya están dentro de cada `amount`.
+    discount: { type: 'percentage' as const, value: 0 },
+    // Obligatorio. Esta cotización no se repite.
+    frequencySettings: { enabled: false },
     termsNotes: notas.join(' '),
   };
 
@@ -1600,15 +1743,17 @@ export async function crearEstimate(
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
-  const opportunityError = await moverOportunidad(p, { apiKey, locationId, fetchImpl });
-  return opportunityError ? { ok: true, estimateId, opportunityError } : { ok: true, estimateId };
+  const opportunityError = await moverOportunidad(p, contactId, completas);
+  return opportunityError
+    ? { ok: true, estimateId, contactId, opportunityError }
+    : { ok: true, estimateId, contactId };
 }
 ```
 
 - [ ] **Paso 4: Ejecutar y ver que pasa**
 
 Ejecutar: `npx vitest run tests/cotizador-ghl.test.ts`
-Esperado: PASA, 8 pruebas.
+Esperado: PASA, 13 pruebas.
 
 - [ ] **Paso 5: Conectar el endpoint**
 
