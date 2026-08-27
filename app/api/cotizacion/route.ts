@@ -76,6 +76,12 @@ export async function POST(request: Request) {
         tasaIva: cotizacion.tasaIva,
         iva: cotizacion.iva,
         total: cotizacion.total,
+        // Sin columna propia: viaja dentro del jsonb para que la Tarea 7 sepa
+        // si el Estimate debe llevar la nota de "precio a confirmar contra
+        // muestra". Sin esto, reimprimir la cotización meses después perdería
+        // esa condición y el documento parecería un precio en firme que
+        // nunca lo fue.
+        bordadoEspecial: cotizacion.bordadoEspecial,
       },
     })
     .select()

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { IVA_GENERAL } from '@/lib/cotizador/escalas';
 
 export const LINEAS = ['uniformes', 'hogar', 'ambas'] as const;
 
@@ -19,23 +20,39 @@ export const leadSchema = z.object({
 export type LeadInput = z.infer<typeof leadSchema>;
 
 export const cotizacionSchema = z.object({
-  clave: z.string().min(1),
+  clave: z.string().min(1, 'Falta la clave.'),
   cliente: z.object({
-    nombre: z.string().trim().min(1).max(120),
-    empresa: z.string().trim().max(120).optional(),
+    nombre: z.string().trim().min(1, 'Escribe el nombre del cliente.').max(120, 'Escribe un nombre más corto.'),
+    empresa: z.string().trim().max(120, 'Escribe un nombre de empresa más corto.').optional(),
     email: z.string().trim().pipe(z.email('Escribe un correo válido.')),
   }),
   lineas: z
     .array(
       z.object({
-        skuId: z.string().min(1),
-        cantidad: z.number().int().positive(),
+        skuId: z.string().min(1, 'Falta el SKU de la línea.'),
+        cantidad: z
+          .number()
+          .int('La cantidad debe ser un número entero.')
+          .positive('La cantidad debe ser mayor que cero.')
+          // Tope de cordura, no una regla de negocio: 10.000 unidades de un
+          // mismo SKU ya es un pedido descomunal, y números mucho mayores
+          // rompen `Number.isSafeInteger` en el total sin que nada lo avise.
+          // Si algún día Luxe recibe un pedido más grande, que sea una
+          // decisión consciente (subir este número), no una sorpresa.
+          .max(10000, 'Revisa la cantidad: no puede superar 10.000 unidades por línea.'),
       }),
     )
-    .min(1),
-  // Por defecto la tasa general. Se permite cualquier tasa entre 0 y 13%:
-  // Costa Rica tiene reducidas, y Luxe todavía confirma cuáles le aplican.
-  tasaIva: z.number().min(0).max(0.13).optional(),
+    .min(1, 'Agrega al menos una línea a la cotización.'),
+  // El tope es la tasa general (`IVA_GENERAL`), no un número arbitrario: las
+  // tasas reducidas de Costa Rica (1%, 2%, 4%) están todas por debajo de
+  // ella, así que ninguna tasa real puede superarla. Luxe todavía confirma
+  // cuáles reducidas le aplican, por eso se acepta cualquier valor en el
+  // rango en vez de una lista fija de tasas.
+  tasaIva: z
+    .number()
+    .min(0, 'La tasa de IVA no puede ser negativa.')
+    .max(IVA_GENERAL, `La tasa de IVA no puede superar la tasa general (${IVA_GENERAL * 100}%).`)
+    .optional(),
   bordadoEspecial: z.boolean().optional(),
 });
 
