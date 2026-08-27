@@ -18,6 +18,10 @@ node_modules/
 .next/
 tsconfig.tsbuildinfo
 
+# --- Listas de precios de Luxe. Información comercial: no sube al despliegue. ---
+precios/
+*.xlsx
+
 # --- Material fuente pesado, ya optimizado a public/images/. ---
 IMÁGENES/
 IMAGENES-GENERADAS/
