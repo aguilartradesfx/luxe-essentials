@@ -62,4 +62,10 @@ describe('enlaceFirmado', () => {
     const r = await enlaceFirmado('no/existe.pdf', a.cliente);
     expect(r.ok).toBe(false);
   });
+
+  it('no lanza si el almacenamiento explota', async () => {
+    const cliente = { storage: { from: () => { throw new Error('sin red'); } } };
+    const r = await enlaceFirmado('2026/abc.pdf', cliente);
+    expect(r).toEqual({ ok: false, error: expect.stringContaining('sin red') });
+  });
 });
