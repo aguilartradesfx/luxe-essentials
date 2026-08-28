@@ -5,8 +5,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Supabase simulado, `Request` armado a mano, sin red.
 //
 // Ronda de correcciones 1: sumó, además de los casos obligatorios del
-// brief, las pruebas que un mutante barato sobrevivía (ver comentarios en
-// cada `it`).
+// brief, las pruebas que un mutante barato sobrevivía.
+// Ronda de correcciones 2: el mock ahora registra los filtros de `.in()` y
+// `.order()` (antes solo los de `.eq()`/`.limit()`), porque borrar la
+// guarda de estados de `/cerrar` o el `.order()` de `/metricas` dejaba toda
+// la suite en verde — nada comprobaba que esos filtros llegaran de verdad a
+// la consulta, solo que el código reaccionara bien cuando el mock ya
+// devolvía el resultado "correcto" a mano.
 
 vi.mock('@/lib/cotizador/almacen', () => ({
   BUCKET: 'cotizaciones',
@@ -22,25 +27,37 @@ vi.mock('@/lib/cotizador/correo', () => ({
 const ID_VALIDO = 'a1b2c3d4-0000-4000-8000-000000000001';
 const ID_INEXISTENTE = 'b2c3d4e5-0000-4000-8000-000000000002';
 
+type Filtro = [string, string, string];
+
 // Estado mutable que cada prueba configura antes de llamar a la ruta. Vive
 // fuera del módulo mockeado (es del propio archivo de prueba), igual que
 // `filtros` en tests/api-borradores.test.ts.
 let resultadoLista: { data: unknown; error: { message: string } | null } = { data: [], error: null };
 let resultadoFila: { data: unknown; error: { message: string } | null } = { data: null, error: null };
 let resultadoActualizacion: { error: { message: string } | null } = { error: null };
+// Resultado por defecto de cualquier `update(...).select(...)`. La mayoría
+// de las pruebas solo necesitan esto. `/cerrar` hace DOS intentos de
+// `update` en algunos casos (cierre inicial y, si no coincide, corrección);
+// las pruebas que necesitan una respuesta distinta para cada intento
+// reemplazan `resolverActualizacionConSelect` directamente (ver más abajo).
 let resultadoActualizacionConSelect: { data: unknown; error: { message: string } | null } = {
   data: [{ id: ID_VALIDO }],
   error: null,
 };
+let resolverActualizacionConSelect: (filtrosDeEsteUpdate: Filtro[]) => {
+  data: unknown;
+  error: { message: string } | null;
+} = () => resultadoActualizacionConSelect;
 let resultadoDescarga: { data: unknown; error: { message: string } | null } = {
   data: { arrayBuffer: async () => new TextEncoder().encode('%PDF-1.7 falso').buffer },
   error: null,
 };
 
 const columnasSeleccionadas: string[] = [];
-const filtrosSelect: [string, string, string][] = [];
+const filtrosSelect: Filtro[] = [];
+const ordenesSeleccionados: [string, boolean][] = [];
 const limitesSeleccionados: number[] = [];
-const filtrosUpdate: [string, string, string][] = [];
+const filtrosUpdate: Filtro[] = [];
 const actualizaciones: unknown[] = [];
 
 // Cadena de lectura: `select().eq()?.in()?.order()?.limit()`, o `.single()`/
@@ -57,7 +74,10 @@ function construirLectura(): any {
       filtrosSelect.push(['in', columna, valores.join(',')]);
       return construirLectura();
     },
-    order: () => construirLectura(),
+    order: (columna: string, opciones?: { ascending?: boolean }) => {
+      ordenesSeleccionados.push([columna, opciones?.ascending ?? true]);
+      return construirLectura();
+    },
     limit: async (n: number) => {
       limitesSeleccionados.push(n);
       return resultadoLista;
@@ -72,20 +92,28 @@ function construirLectura(): any {
 
 // Cadena de escritura: `update(cambios).eq()?.in()?.select()`. Sin
 // `.select()`, se resuelve directo con `resultadoActualizacion` (lo que
-// espera /reenviar); con `.select()`, con `resultadoActualizacionConSelect`
-// (lo que espera /cerrar, que necesita saber si el `update` tocó alguna fila).
+// espera /reenviar); con `.select()`, con lo que devuelva
+// `resolverActualizacionConSelect` para LOS FILTROS DE ESTE `update` en
+// particular (lo que espera /cerrar, que necesita saber si el `update` tocó
+// alguna fila, y a veces hace dos intentos con respuestas distintas cada
+// uno).
 function construirEscritura(cambios: unknown): any {
   actualizaciones.push(cambios);
+  const filtrosLocales: Filtro[] = [];
   const nodo: any = {
     eq: (columna: string, valor: string) => {
-      filtrosUpdate.push(['eq', columna, String(valor)]);
+      const entrada: Filtro = ['eq', columna, String(valor)];
+      filtrosUpdate.push(entrada);
+      filtrosLocales.push(entrada);
       return nodo;
     },
     in: (columna: string, valores: readonly string[]) => {
-      filtrosUpdate.push(['in', columna, valores.join(',')]);
+      const entrada: Filtro = ['in', columna, valores.join(',')];
+      filtrosUpdate.push(entrada);
+      filtrosLocales.push(entrada);
       return nodo;
     },
-    select: () => Promise.resolve(resultadoActualizacionConSelect),
+    select: () => Promise.resolve(resolverActualizacionConSelect(filtrosLocales)),
     then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
       Promise.resolve(resultadoActualizacion).then(resolve, reject),
   };
@@ -132,6 +160,7 @@ beforeEach(() => {
   resultadoFila = { data: null, error: null };
   resultadoActualizacion = { error: null };
   resultadoActualizacionConSelect = { data: [{ id: ID_VALIDO }], error: null };
+  resolverActualizacionConSelect = () => resultadoActualizacionConSelect;
   resultadoDescarga = {
     data: { arrayBuffer: async () => new TextEncoder().encode('%PDF-1.7 falso').buffer },
     error: null,
@@ -139,6 +168,7 @@ beforeEach(() => {
 
   columnasSeleccionadas.length = 0;
   filtrosSelect.length = 0;
+  ordenesSeleccionados.length = 0;
   limitesSeleccionados.length = 0;
   filtrosUpdate.length = 0;
   actualizaciones.length = 0;
@@ -209,18 +239,21 @@ describe('POST /api/cotizacion/listado', () => {
     expect(cuerpo.cotizaciones[0].contact_id).toBe('contacto-ghl-1');
   });
 
-  // Ronda de correcciones 1 (mutante sobreviviente): nada probaba el tope.
   it('nunca pide más de 200 filas, aunque se pida un límite mayor', async () => {
     resultadoLista = { data: [], error: null };
     await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta', limite: 500 }));
     expect(limitesSeleccionados).toEqual([200]);
   });
 
-  // Ronda de correcciones 1 (mutante sobreviviente): las pruebas anteriores
-  // entraban todas con clave en el cuerpo, nunca por cookie — así el panel,
-  // que vive en un iframe de GoHighLevel y entra por cookie, nunca quedaba
-  // cubierto. Si alguien pone `requiereCsrf: true` "por las dudas" en esta
-  // ruta de lectura, esta prueba (y no una de clave) es la que lo nota.
+  // Ronda de correcciones 2: sin esto, quitar el `.order()` del código
+  // dejaba la suite en verde igual — nada comprobaba que las más recientes
+  // fueran las que se piden primero.
+  it('pide las filas más recientes primero', async () => {
+    resultadoLista = { data: [], error: null };
+    await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    expect(ordenesSeleccionados).toEqual([['created_at', false]]);
+  });
+
   it('funciona por cookie de sesión, sin exigir el token anti-CSRF', async () => {
     resultadoLista = { data: [filaListado], error: null };
     const { cookie } = emitirSesion();
@@ -275,24 +308,27 @@ describe('POST /api/cotizacion/metricas', () => {
     }
   });
 
-  // Ronda de correcciones 1 (mutante sobreviviente): que /metricas NO filtre
-  // por estado es su decisión central —el criterio de qué cuenta vive en
-  // `calcularMetricas`, no acá, para que los dos no se desalineen— y no
-  // había ninguna prueba que lo protegiera.
   it('no filtra por estado en la consulta: el criterio es de calcularMetricas, no de la ruta', async () => {
     resultadoLista = { data: [], error: null };
     await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
     expect(filtrosSelect).toEqual([]);
   });
 
-  // Ronda de correcciones 1 (hallazgo importante): sin un tope explícito,
-  // PostgREST trunca en silencio y sin `order` el corte cae en orden
-  // arbitrario.
   it('pide un tope explícito de filas', async () => {
     resultadoLista = { data: [], error: null };
     await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
     expect(limitesSeleccionados).toHaveLength(1);
     expect(limitesSeleccionados[0]).toBeGreaterThanOrEqual(1000);
+  });
+
+  // Ronda de correcciones 2 (hallazgo importante): quitar el `.order()` del
+  // código dejaba la prueba del tope de arriba en verde igual — el tope
+  // solo protege a las filas más recientes si de verdad son las primeras
+  // en la respuesta.
+  it('ordena por created_at descendente antes de aplicar el tope', async () => {
+    resultadoLista = { data: [], error: null };
+    await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
+    expect(ordenesSeleccionados).toEqual([['created_at', false]]);
   });
 
   it('funciona por cookie de sesión, sin exigir el token anti-CSRF', async () => {
@@ -320,8 +356,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     expect(res.status).toBe(401);
   });
 
-  it('marca ganada con cerrada_at', async () => {
-    resultadoActualizacionConSelect = { data: [{ id: ID_VALIDO }], error: null };
+  it('marca ganada con cerrada_at, filtrando por los estados de cierre inicial', async () => {
     const res = await postCerrar(
       peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
     );
@@ -331,10 +366,15 @@ describe('POST /api/cotizacion/cerrar', () => {
     expect(cambios.estado).toBe('ganada');
     expect(typeof cambios.cerrada_at).toBe('string');
     expect(filtrosUpdate).toContainEqual(['eq', 'id', ID_VALIDO]);
+    // Ronda de correcciones 2 (hallazgo importante): esta es la aserción
+    // que faltaba. Borrar el `.in('estado', ESTADOS_CIERRE_INICIAL)` del
+    // código dejaba las 37 pruebas de la ronda anterior en verde, porque
+    // todas asumían el filtro ya aplicado a través del mock en vez de
+    // comprobar que de verdad llegara a la consulta.
+    expect(filtrosUpdate).toContainEqual(['in', 'estado', 'creada,enviada,error']);
   });
 
   it('marca perdida guardando el motivo_cierre', async () => {
-    resultadoActualizacionConSelect = { data: [{ id: ID_VALIDO }], error: null };
     const res = await postCerrar(
       peticion('http://localhost/api/cotizacion/cerrar', {
         clave: 'secreta',
@@ -350,10 +390,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     expect(typeof cambios.cerrada_at).toBe('string');
   });
 
-  // Ronda de correcciones 1 (mutante sobreviviente): que 'ganada' NO escriba
-  // motivo no estaba probado.
   it('ganada no escribe motivo_cierre', async () => {
-    resultadoActualizacionConSelect = { data: [{ id: ID_VALIDO }], error: null };
     await postCerrar(
       peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
     );
@@ -388,7 +425,6 @@ describe('POST /api/cotizacion/cerrar', () => {
   });
 
   it('con cookie y el token anti-CSRF correcto, pasa', async () => {
-    resultadoActualizacionConSelect = { data: [{ id: ID_VALIDO }], error: null };
     const { cookie, csrf } = emitirSesion();
     const valor = cookie.split(';')[0];
     const res = await postCerrar(
@@ -401,10 +437,60 @@ describe('POST /api/cotizacion/cerrar', () => {
     expect(res.status).toBe(200);
   });
 
-  // Hallazgo crítico de esta ronda: cerrar un borrador del agente (o
-  // cualquier fila fuera de creada/enviada/error) rompe las métricas porque
-  // `totales.total` no existe en un borrador.
-  it('rechaza cerrar una cotización que no está en un estado cerrable (ej. un borrador)', async () => {
+  // Ronda de correcciones 2 (decisión de producto): corregir un cierre
+  // equivocado (ganada → perdida o viceversa) ahora es posible, sin tocar
+  // la base a mano. `resolverActualizacionConSelect` distingue el intento 1
+  // (cierre inicial, no coincide porque la fila ya está 'ganada') del
+  // intento 2 (corrección, sí coincide).
+  it('corrige de ganada a perdida', async () => {
+    resolverActualizacionConSelect = (filtrosDeEsteUpdate) => {
+      const filtroEstados = filtrosDeEsteUpdate.find(([tipo, columna]) => tipo === 'in' && columna === 'estado');
+      const valores = filtroEstados ? filtroEstados[2].split(',') : [];
+      if (valores.includes('ganada')) {
+        // Intento 2 (corrección): la fila está 'ganada', coincide.
+        return { data: [{ id: ID_VALIDO }], error: null };
+      }
+      // Intento 1 (cierre inicial): la fila no está en creada/enviada/error.
+      return { data: [], error: null };
+    };
+
+    const res = await postCerrar(
+      peticion('http://localhost/api/cotizacion/cerrar', {
+        clave: 'secreta',
+        id: ID_VALIDO,
+        estado: 'perdida',
+        motivo: 'Se fue con otro proveedor.',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(actualizaciones).toHaveLength(2);
+    const cambiosCorreccion = actualizaciones[1] as Record<string, unknown>;
+    expect(cambiosCorreccion.estado).toBe('perdida');
+    expect(cambiosCorreccion.motivo_cierre).toBe('Se fue con otro proveedor.');
+    expect(filtrosUpdate).toContainEqual(['in', 'estado', 'ganada,perdida']);
+  });
+
+  // La fecha del cierre original es la que le importa a "días promedio
+  // hasta cerrar" (lib/cotizador/metricas.ts); una corrección no la mueve.
+  it('la corrección conserva la cerrada_at original: no la vuelve a escribir', async () => {
+    resolverActualizacionConSelect = (filtrosDeEsteUpdate) => {
+      const filtroEstados = filtrosDeEsteUpdate.find(([tipo, columna]) => tipo === 'in' && columna === 'estado');
+      const valores = filtroEstados ? filtroEstados[2].split(',') : [];
+      return valores.includes('ganada')
+        ? { data: [{ id: ID_VALIDO }], error: null }
+        : { data: [], error: null };
+    };
+
+    await postCerrar(
+      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'perdida' }),
+    );
+
+    const cambiosCorreccion = actualizaciones[1] as Record<string, unknown>;
+    expect(cambiosCorreccion).not.toHaveProperty('cerrada_at');
+  });
+
+  it('rechaza cerrar un borrador (sin totales confiables)', async () => {
     resultadoActualizacionConSelect = { data: [], error: null };
     resultadoFila = { data: { estado: 'borrador' }, error: null };
     const res = await postCerrar(
@@ -416,19 +502,15 @@ describe('POST /api/cotizacion/cerrar', () => {
     expect(cuerpo.error).toContain('borrador');
   });
 
-  // Mismo mecanismo que arriba: recerrar una cotización ya 'ganada'/'perdida'
-  // ya no encuentra fila que actualizar (esos estados no están en
-  // `ESTADOS_CERRABLES`), así que `cerrada_at` no se puede volver a pisar
-  // con la fecha de un reclic.
-  it('rechaza recerrar una cotización que ya está ganada o perdida', async () => {
+  it('rechaza cerrar una fila convertida', async () => {
     resultadoActualizacionConSelect = { data: [], error: null };
-    resultadoFila = { data: { estado: 'ganada' }, error: null };
+    resultadoFila = { data: { estado: 'convertida' }, error: null };
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'perdida' }),
+      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
     );
     expect(res.status).toBe(409);
     const cuerpo = await res.json();
-    expect(cuerpo.error).toContain('ganada');
+    expect(cuerpo.error).toContain('convertida');
   });
 
   it('devuelve 404 si el id no existe', async () => {
@@ -451,14 +533,18 @@ describe('POST /api/cotizacion/cerrar', () => {
   });
 });
 
-const filaReenviable = {
-  id: ID_VALIDO,
-  numero: 'COT-2026-0001',
-  cliente: { nombre: 'Ana Pérez', empresa: 'Hotel Papagayo', email: 'ana@hotel.com' },
-  totales: { subtotal: 500000, ahorro: 0, iva: 65000, total: 565000 },
-  created_at: new Date().toISOString(),
-  pdf_ruta: '2026/COT-2026-0001-cot-1.pdf',
-};
+function filaReenviable(extra: Record<string, unknown> = {}) {
+  return {
+    id: ID_VALIDO,
+    numero: 'COT-2026-0001',
+    estado: 'error',
+    cliente: { nombre: 'Ana Pérez', empresa: 'Hotel Papagayo', email: 'ana@hotel.com' },
+    totales: { subtotal: 500000, ahorro: 0, iva: 65000, total: 565000 },
+    created_at: new Date().toISOString(),
+    pdf_ruta: '2026/COT-2026-0001-cot-1.pdf',
+    ...extra,
+  };
+}
 
 describe('POST /api/cotizacion/reenviar', () => {
   it('rechaza sin credencial', async () => {
@@ -477,12 +563,12 @@ describe('POST /api/cotizacion/reenviar', () => {
   });
 
   it('vuelve a firmar el enlace y a mandar el correo', async () => {
-    resultadoFila = { data: filaReenviable, error: null };
+    resultadoFila = { data: filaReenviable(), error: null };
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
-    expect(enlaceFirmado).toHaveBeenCalledWith(filaReenviable.pdf_ruta, expect.anything());
+    expect(enlaceFirmado).toHaveBeenCalledWith('2026/COT-2026-0001-cot-1.pdf', expect.anything());
     expect(enviarCotizacion).toHaveBeenCalledTimes(1);
     const [params] = vi.mocked(enviarCotizacion).mock.calls[0];
     expect(params.numero).toBe('COT-2026-0001');
@@ -490,8 +576,8 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(params.enlace).toBe('https://firmada');
   });
 
-  it('actualiza resend_id y estado a enviada, pero nunca pisa enviado_at', async () => {
-    resultadoFila = { data: filaReenviable, error: null };
+  it('sana el estado a enviada cuando la fila venía de un envío fallido (error)', async () => {
+    resultadoFila = { data: filaReenviable({ estado: 'error' }), error: null };
     await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
     expect(actualizaciones).toHaveLength(1);
     const cambios = actualizaciones[0] as Record<string, unknown>;
@@ -504,8 +590,38 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(filtrosUpdate).toContainEqual(['eq', 'id', ID_VALIDO]);
   });
 
+  // Ronda de correcciones 2 (hallazgo importante): antes `estado` pasaba a
+  // 'enviada' sin condición. Si ya estaba 'enviada' no hacía daño real, pero
+  // tampoco había ninguna prueba que dijera qué se esperaba.
+  it('si ya estaba enviada, no vuelve a escribir el estado', async () => {
+    resultadoFila = { data: filaReenviable({ estado: 'enviada' }), error: null };
+    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    const cambios = actualizaciones[0] as Record<string, unknown>;
+    expect(cambios).not.toHaveProperty('estado');
+  });
+
+  // Ronda de correcciones 2 (hallazgo importante): antes reenviar una
+  // cotización ya cerrada la devolvía a 'enviada' — reabría un trato que ya
+  // estaba ganado o perdido con solo apretar "Reenviar".
+  it('si la cotización ya está ganada, reenviar no la reabre', async () => {
+    resultadoFila = { data: filaReenviable({ estado: 'ganada' }), error: null };
+    const res = await postReenviar(
+      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(200);
+    const cambios = actualizaciones[0] as Record<string, unknown>;
+    expect(cambios).not.toHaveProperty('estado');
+  });
+
+  it('si la cotización ya está perdida, reenviar no la reabre', async () => {
+    resultadoFila = { data: filaReenviable({ estado: 'perdida' }), error: null };
+    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    const cambios = actualizaciones[0] as Record<string, unknown>;
+    expect(cambios).not.toHaveProperty('estado');
+  });
+
   it('falla claro si la fila no tiene pdf_ruta: no hay nada que reenviar', async () => {
-    resultadoFila = { data: { ...filaReenviable, pdf_ruta: null }, error: null };
+    resultadoFila = { data: filaReenviable({ pdf_ruta: null }), error: null };
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
     );
@@ -518,7 +634,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   });
 
   it('rechaza sin token anti-CSRF cuando se entra por cookie', async () => {
-    resultadoFila = { data: filaReenviable, error: null };
+    resultadoFila = { data: filaReenviable(), error: null };
     const { cookie } = emitirSesion();
     const valor = cookie.split(';')[0];
     const res = await postReenviar(
@@ -528,7 +644,7 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(enviarCotizacion).not.toHaveBeenCalled();
   });
 
-  it('cotización no encontrada da un error, no una excepción', async () => {
+  it('cotización no encontrada da 404, no una excepción', async () => {
     resultadoFila = { data: null, error: null };
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_INEXISTENTE }),
@@ -536,13 +652,24 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(res.status).toBe(404);
   });
 
-  // Ronda de correcciones 1 (mutante sobreviviente): borrar la rama entera
-  // del fallo de Resend dejaba las pruebas en verde. `/reenviar` no es
-  // idempotente-a-medias como `POST /api/cotizacion` (que ya dejó la
-  // cotización creada aunque el correo falle): acá, si el correo falla, no
-  // pasó nada — por eso es un error HTTP real y la fila no se toca.
+  // Ronda de correcciones 2 (hallazgo importante): `.single()` respondía
+  // `error` tanto para "no hay fila" como para una caída real de la base, y
+  // las dos ramas caían en el mismo 404 — una caída de la base le aparecía
+  // al vendedor como "cotización no encontrada". `.maybeSingle()` separa
+  // los dos casos.
+  it('un error de base en la consulta inicial da 500, no 404', async () => {
+    resultadoFila = { data: null, error: { message: 'la base está caída' } };
+    const res = await postReenviar(
+      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(500);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toContain('la base está caída');
+    expect(enviarCotizacion).not.toHaveBeenCalled();
+  });
+
   it('si Resend falla, responde 502 y no actualiza la fila', async () => {
-    resultadoFila = { data: filaReenviable, error: null };
+    resultadoFila = { data: filaReenviable(), error: null };
     vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'Resend 500: caído' });
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
@@ -554,10 +681,38 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(actualizaciones).toHaveLength(0);
   });
 
+  // Ronda de correcciones 2 (hallazgo importante): antes, si el `update`
+  // final fallaba, se registraba en el log y la respuesta decía `ok: true`
+  // sin avisar nada — el vendedor no tenía forma de saber que el panel
+  // podía estar desactualizado.
+  it('si el update final falla, la respuesta avisa que el correo salió pero el registro no se actualizó', async () => {
+    resultadoFila = { data: filaReenviable(), error: null };
+    resultadoActualizacion = { error: { message: 'la base está caída' } };
+    const res = await postReenviar(
+      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.ok).toBe(true);
+    expect(cuerpo.actualizado).toBe(false);
+    expect(typeof cuerpo.avisoActualizacion).toBe('string');
+    expect(cuerpo.avisoActualizacion.length).toBeGreaterThan(0);
+    expect(cuerpo.avisoActualizacion).not.toContain('la base está caída');
+  });
+
+  it('cuando todo sale bien, la respuesta confirma que sí se actualizó', async () => {
+    resultadoFila = { data: filaReenviable(), error: null };
+    const res = await postReenviar(
+      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+    );
+    const cuerpo = await res.json();
+    expect(cuerpo.actualizado).toBe(true);
+  });
+
   it('avisa vencida: true cuando el precio del PDF ya no corre', async () => {
     const haceCuarentaDias = new Date();
     haceCuarentaDias.setDate(haceCuarentaDias.getDate() - 40);
-    resultadoFila = { data: { ...filaReenviable, created_at: haceCuarentaDias.toISOString() }, error: null };
+    resultadoFila = { data: filaReenviable({ created_at: haceCuarentaDias.toISOString() }), error: null };
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
     );
@@ -567,7 +722,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   });
 
   it('avisa vencida: false cuando el precio todavía corre', async () => {
-    resultadoFila = { data: { ...filaReenviable, created_at: new Date().toISOString() }, error: null };
+    resultadoFila = { data: filaReenviable({ created_at: new Date().toISOString() }), error: null };
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
     );

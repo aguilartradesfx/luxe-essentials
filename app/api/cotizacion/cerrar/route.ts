@@ -5,18 +5,31 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 
-// Ronda de correcciones 1 (Tarea 8, hallazgo crítico): solo estas tres son
-// filas de verdad, con `totales` confiables (mismo criterio que
-// `ESTADOS_REALES` en lib/cotizador/metricas.ts, pero acá se llama distinto
-// porque el conjunto no es idéntico — 'ganada'/'perdida' quedan afuera
-// porque cerrar una fila YA cerrada es el otro bug de esta ronda, ver más
-// abajo). Sin esta guarda, cerrar un `borrador` del agente (que se guarda
-// con `lineas: []` y `totales: {}`) mete una fila sin monto en las métricas
-// de ganado/perdido: `totales.total` es `undefined`, la suma da `NaN`, y al
-// serializarse por JSON llega al panel como `null` — se caen tres números a
-// la vez. `/listado` no filtra por estado, así que un borrador aparece ahí
-// con el botón de cerrar a un clic; esta es la única puerta que lo evita.
-const ESTADOS_CERRABLES = ['creada', 'enviada', 'error'] as const;
+// Ronda de correcciones 1 (Tarea 8, hallazgo crítico): solo filas con
+// `totales` confiables se pueden cerrar. Un `borrador` del agente se guarda
+// con `lineas: []` y `totales: {}` — cerrarlo mete una fila sin monto en las
+// métricas de ganado/perdido (`totales.total` es `undefined`, la suma da
+// `NaN`, y al serializarse por JSON llega al panel como `null`). `/listado`
+// no filtra por estado, así que un borrador aparece ahí con el botón de
+// cerrar a un clic; esta guarda es la única puerta que lo evita.
+//
+// Ronda de correcciones 2 (decisión de producto): un vendedor que marca
+// "Ganada" en la fila equivocada necesita poder corregirlo sin que alguien
+// le toque la base a mano — eso no es aceptable en una herramienta de uso
+// diario. Por eso el cierre se separa en dos casos, cada uno con su propio
+// conjunto de estados de origen permitidos:
+//
+//   - Cierre inicial: desde 'creada', 'enviada' o 'error'. Fija `cerrada_at`.
+//   - Corrección: desde 'ganada' o 'perdida' —la fila ya está cerrada, y
+//     tiene montos confiables, así que corregirla no reabre el agujero
+//     crítico—. NO toca `cerrada_at`: esa fecha es la del cierre original,
+//     y pisarla con la de la corrección infla los días promedio cada vez
+//     que alguien corrige un clic.
+//
+// 'borrador' y 'convertida' nunca están en ninguno de los dos conjuntos:
+// ésa es la parte que sí importaba proteger.
+const ESTADOS_CIERRE_INICIAL = ['creada', 'enviada', 'error'] as const;
+const ESTADOS_CORRECCION = ['ganada', 'perdida'] as const;
 
 const cerrarSchema = z.object({
   clave: z.string().optional(),
@@ -59,61 +72,76 @@ export async function POST(request: Request) {
   }
   const datos = parseado.data;
 
-  const cambios: Record<string, unknown> = {
+  const cambiosBase: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     estado: datos.estado,
-    cerrada_at: new Date().toISOString(),
   };
   // Solo 'perdida' guarda el motivo: cerrar 'ganada' no lo pide, y no vale
   // la pena escribir `motivo_cierre: null` encima de algo que el vendedor
-  // pudo haber tecleado y luego cambió de botón antes de mandar.
+  // pudo haber tecleado y luego cambió de botón antes de mandar. Aplica
+  // igual en un cierre inicial que en una corrección.
   if (datos.estado === 'perdida') {
-    cambios.motivo_cierre = datos.motivo ?? null;
+    cambiosBase.motivo_cierre = datos.motivo ?? null;
   }
 
-  // El filtro por estado va DENTRO del `update`, no en una lectura previa:
-  // así la guarda es atómica (sin ventana entre "leo el estado" y "escribo")
-  // y de paso resuelve el otro bug de esta ronda —recerrar una cotización ya
-  // 'ganada'/'perdida' pisaba `cerrada_at` con la fecha del reclic, inflando
-  // los días promedio de cierre cada vez—: como esos dos estados no están en
-  // `ESTADOS_CERRABLES`, un segundo cierre ya no encuentra fila que
-  // actualizar y cae en la rama de abajo. `.select('id')` es lo que permite
-  // distinguir "sí actualizó algo" de "no coincidió con nada" — sin esto,
-  // Supabase no avisa cuando un `update` no toca ninguna fila, y un id
-  // inexistente respondía 200 "listo" sin haber cerrado nada.
-  const { data: actualizadas, error } = await supabaseAdmin()
+  // Intento 1: cierre inicial. El filtro por estado va DENTRO del `update`,
+  // no en una lectura previa: así la guarda es atómica (sin ventana entre
+  // "leo el estado" y "escribo"). `.select('id')` es lo que permite saber
+  // si el `update` tocó alguna fila — sin esto, Supabase no avisa cuando un
+  // `update` no coincide con nada, y un id inexistente (o un estado no
+  // cerrable) respondía 200 "listo" sin haber cerrado nada.
+  const { data: cerradaInicial, error: errorInicial } = await supabaseAdmin()
     .from('cotizaciones')
-    .update(cambios)
+    .update({ ...cambiosBase, cerrada_at: new Date().toISOString() })
     .eq('id', datos.id)
-    .in('estado', ESTADOS_CERRABLES)
+    .in('estado', ESTADOS_CIERRE_INICIAL)
     .select('id');
 
-  if (error) {
-    console.error('[cotizador] No se pudo cerrar la cotización.', error.message);
+  if (errorInicial) {
+    console.error('[cotizador] No se pudo cerrar la cotización.', errorInicial.message);
     return NextResponse.json({ ok: false, error: 'No se pudo actualizar.' }, { status: 500 });
   }
 
-  if (!actualizadas || actualizadas.length === 0) {
-    // No coincidió: o el id no existe, o la fila no está en un estado
-    // cerrable (ya cerrada, o un borrador/convertida sin totales
-    // confiables). Postgres no distingue los dos casos en el resultado del
-    // `update`, así que se pregunta aparte —solo en este camino, nunca en
-    // un cierre exitoso— para devolverle al vendedor un mensaje que diga
-    // qué pasó de verdad, en vez de un 404 genérico cuando la fila sí existe.
-    const { data: filaActual } = await supabaseAdmin()
-      .from('cotizaciones')
-      .select('estado')
-      .eq('id', datos.id)
-      .maybeSingle();
-
-    if (!filaActual) {
-      return NextResponse.json({ ok: false, error: 'Cotización no encontrada.' }, { status: 404 });
-    }
-    return NextResponse.json(
-      { ok: false, error: `No se puede cerrar una cotización en estado "${filaActual.estado}".` },
-      { status: 409 },
-    );
+  if (cerradaInicial && cerradaInicial.length > 0) {
+    return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ ok: true });
+  // Intento 2: corrección. No coincidió como cierre inicial — puede ser
+  // porque la fila ya está 'ganada'/'perdida' (una corrección legítima) o
+  // porque no existe o está en 'borrador'/'convertida' (se resuelve abajo).
+  // Sin `cerrada_at` en el payload: se conserva la fecha del cierre original.
+  const { data: corregida, error: errorCorreccion } = await supabaseAdmin()
+    .from('cotizaciones')
+    .update(cambiosBase)
+    .eq('id', datos.id)
+    .in('estado', ESTADOS_CORRECCION)
+    .select('id');
+
+  if (errorCorreccion) {
+    console.error('[cotizador] No se pudo corregir el cierre de la cotización.', errorCorreccion.message);
+    return NextResponse.json({ ok: false, error: 'No se pudo actualizar.' }, { status: 500 });
+  }
+
+  if (corregida && corregida.length > 0) {
+    return NextResponse.json({ ok: true });
+  }
+
+  // Ninguno de los dos intentos coincidió: o el id no existe, o la fila
+  // está en 'borrador'/'convertida' (sin totales confiables). Se pregunta
+  // aparte —solo en este camino, nunca en un cierre exitoso— para
+  // devolverle al vendedor un mensaje que diga qué pasó de verdad, en vez
+  // de un 404 genérico cuando la fila sí existe.
+  const { data: filaActual } = await supabaseAdmin()
+    .from('cotizaciones')
+    .select('estado')
+    .eq('id', datos.id)
+    .maybeSingle();
+
+  if (!filaActual) {
+    return NextResponse.json({ ok: false, error: 'Cotización no encontrada.' }, { status: 404 });
+  }
+  return NextResponse.json(
+    { ok: false, error: `No se puede cerrar una cotización en estado "${filaActual.estado}".` },
+    { status: 409 },
+  );
 }

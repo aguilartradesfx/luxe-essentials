@@ -23,6 +23,7 @@ const reenviarSchema = z.object({
 type FilaReenviar = {
   id: string;
   numero: string;
+  estado: string;
   cliente: { nombre: string; empresa?: string; email: string };
   totales: { total: number };
   created_at: string;
@@ -56,17 +57,25 @@ export async function POST(request: Request) {
 
   const db = supabaseAdmin();
 
+  // Ronda de correcciones 2 (hallazgo importante): antes esto usaba
+  // `.single()`, que Postgres/PostgREST responde con un `error` tanto para
+  // "no hay ninguna fila" como para una caída real de la base — las dos
+  // ramas caían en el mismo `if` de abajo y una caída de la base le
+  // aparecía al vendedor como "cotización no encontrada". `.maybeSingle()`
+  // separa los dos casos: sin filas, `error` es `null` y `data` es `null`;
+  // con una falla real, `error` viene poblado.
   const { data: fila, error: errorConsulta } = await db
     .from('cotizaciones')
-    .select('id, numero, cliente, totales, created_at, pdf_ruta')
+    .select('id, numero, estado, cliente, totales, created_at, pdf_ruta')
     .eq('id', datos.id)
-    .single();
+    .maybeSingle();
 
-  if (errorConsulta || !fila) {
-    console.error(
-      '[cotizador] No se encontró la cotización a reenviar.',
-      errorConsulta?.message ?? 'sin fila',
-    );
+  if (errorConsulta) {
+    console.error('[cotizador] No se pudo consultar la cotización a reenviar.', errorConsulta.message);
+    return NextResponse.json({ ok: false, error: 'No se pudo consultar.' }, { status: 500 });
+  }
+
+  if (!fila) {
     return NextResponse.json({ ok: false, error: 'Cotización no encontrada.' }, { status: 404 });
   }
 
@@ -134,40 +143,44 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'No se pudo reenviar el correo.' }, { status: 502 });
   }
 
-  // Ronda de correcciones 1 (Tarea 8, hallazgo importante): antes este
-  // `update` pisaba `enviado_at` con la fecha del reenvío. `enviado_at` es
-  // "cuándo salió por primera vez", y es lo que usan las métricas
-  // (lib/cotizador/metricas.ts) para calcular vigencia y "por vencer"/
-  // "vencidas" — pisarlo con "ahora" hacía que reenviar una cotización de
-  // hace 40 días la sacara de "vencidas" con 30 días frescos en el panel,
-  // mientras el correo que el cliente acaba de recibir anuncia una fecha ya
-  // pasada. Dos métricas falseadas por un clic. `resend_id` sí se
-  // actualiza: es la última entrega, y es lo único que cambió de verdad.
-  // `estado` pasa a 'enviada': el caso de uso principal de este endpoint es
-  // sanar una fila que quedó en 'error' porque el primer envío falló — sin
-  // esto, el panel seguía mostrándola como fallida (y las métricas
-  // contándola en `fallidas`) después de un reenvío exitoso.
-  const { error: errorActualizacion } = await db
-    .from('cotizaciones')
-    .update({
-      updated_at: new Date().toISOString(),
-      estado: 'enviada',
-      resend_id: correoResultado.resendId,
-    })
-    .eq('id', datos.id);
+  // Ronda de correcciones 2 (hallazgo importante): antes `estado` pasaba a
+  // 'enviada' sin condición — eso sanaba el caso que importaba (una fila en
+  // 'error' por un primer envío fallido) pero también reabría una
+  // cotización ya 'ganada'/'perdida' con solo reenviarla. Ahora solo sana
+  // cuando venía de 'error'; si ya estaba 'enviada' se deja como está (sin
+  // escritura de más), y si está cerrada no se toca en absoluto.
+  const cambios: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    resend_id: correoResultado.resendId,
+  };
+  if (filaTipada.estado === 'error') {
+    cambios.estado = 'enviada';
+  }
+
+  const { error: errorActualizacion } = await db.from('cotizaciones').update(cambios).eq('id', datos.id);
 
   if (errorActualizacion) {
-    // El correo ya salió: esto no invalida ese envío, pero si falla en
-    // silencio la fila no refleja el reenvío. Se registra para que sea
-    // recuperable a mano, sin tumbar la respuesta.
+    // Ronda de correcciones 2 (hallazgo importante): antes esto se
+    // registraba en el log y la respuesta decía `ok: true` igual, sin
+    // avisar que el registro se quedó desactualizado. El correo ya salió
+    // —eso no se revierte, y no vale la pena tumbar la respuesta por
+    // esto— pero el vendedor tiene que enterarse de que el estado que ve en
+    // el panel puede no reflejar este reenvío todavía.
     console.error(
       '[cotizador] El reenvío se procesó pero no se pudo actualizar la fila.',
       errorActualizacion.message,
     );
+    return NextResponse.json({
+      ok: true,
+      resendId: correoResultado.resendId,
+      vencida,
+      actualizado: false,
+      avisoActualizacion: 'El correo se reenvió, pero no se pudo actualizar el registro. Actualizá la página para ver el estado real.',
+    });
   }
 
   // `vencida`: para que la pantalla le diga al vendedor que el precio que
   // se acaba de reenviar ya no corre, y que conviene duplicar la cotización
   // y cotizar de nuevo en vez de reenviar un PDF con una fecha vencida.
-  return NextResponse.json({ ok: true, resendId: correoResultado.resendId, vencida });
+  return NextResponse.json({ ok: true, resendId: correoResultado.resendId, vencida, actualizado: true });
 }
