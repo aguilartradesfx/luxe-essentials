@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { Cotizacion, LineaEntrada } from '@/lib/cotizador/tipos';
-import type { SkuUI } from './Panel';
+import type { PrefillCotizacion, SkuUI } from './Panel';
 import { formatearColones, formatearTasa } from './formato';
 
 // Tasa general de IVA en Costa Rica. Duplicada a propósito: es un dato
@@ -154,13 +154,27 @@ type Props = {
   // vista dejaría al vendedor con una pantalla que lee pero nunca puede
   // volver a escribir. `Panel` limpia la sesión y vuelve a pedir la clave.
   onSesionInvalida: () => void;
+  // Tarea 10 ("Duplicar"): lo que dejó `VistaListado` para arrancar esta
+  // vista ya cargada, en vez de en blanco. `null`/`undefined` cuando se
+  // entra a "Crear" sin duplicar nada — el caso de siempre.
+  plantilla?: PrefillCotizacion | null;
+  // Se llama una sola vez, al montar, si `plantilla` no era nula — para que
+  // `Panel` la limpie y un futuro remonte de esta pestaña no la reaplique.
+  onPlantillaConsumida?: () => void;
 };
 
 // Todo lo que antes vivía en `Cotizador.tsx` después de la pantalla de
 // clave: buscador, líneas, totales, envío y la cola de borradores del
 // agente. Extraído en la Tarea 9 — el comportamiento es el mismo, solo
 // cambia de dónde saca la clave y de dónde consigue el catálogo.
-export function VistaCrear({ skus, clave, obtenerCsrf, onSesionInvalida }: Props) {
+export function VistaCrear({
+  skus,
+  clave,
+  obtenerCsrf,
+  onSesionInvalida,
+  plantilla,
+  onPlantillaConsumida,
+}: Props) {
   // La cola de borradores del agente (Tarea 10): se pide una sola vez, al
   // montar esta vista — que es exactamente cuando antes se pedía, justo
   // después de validar la clave.
@@ -172,9 +186,20 @@ export function VistaCrear({ skus, clave, obtenerCsrf, onSesionInvalida }: Props
   // `BorradorActivo` arriba.
   const [borradorActivo, setBorradorActivo] = useState<BorradorActivo | null>(null);
 
-  const [cliente, setCliente] = useState<Cliente>(CLIENTE_VACIO);
+  // Tarea 10 ("Duplicar"): si esta vista arrancó con una plantilla, el
+  // cliente y las líneas iniciales salen de ahí en vez de empezar en
+  // blanco. Solo importa el valor que había en el primer render —
+  // `useState` con función perezosa, nunca se vuelve a evaluar— porque
+  // `Panel` desmonta y remonta esta vista cada vez que se cambia de
+  // pestaña (ver el `nav` de Panel.tsx), así que un cambio posterior de
+  // `plantilla` ya le llega a un componente nuevo, no a este.
+  const [cliente, setCliente] = useState<Cliente>(() =>
+    plantilla ? { ...CLIENTE_VACIO, ...plantilla.cliente } : CLIENTE_VACIO,
+  );
   const [busqueda, setBusqueda] = useState('');
-  const [lineas, setLineas] = useState<LineaUI[]>([]);
+  const [lineas, setLineas] = useState<LineaUI[]>(() =>
+    (plantilla?.lineas ?? []).map((l) => ({ skuId: l.skuId, cantidadTexto: String(l.cantidad) })),
+  );
   const [tasaIva, setTasaIva] = useState(IVA_GENERAL);
   const [bordadoEspecial, setBordadoEspecial] = useState(false);
   // Nombres de variable sin cambiar desde la ronda "final-fix-C" (cuando el
@@ -229,6 +254,14 @@ export function VistaCrear({ skus, clave, obtenerCsrf, onSesionInvalida }: Props
     () => lineas.some((l) => !validarCantidad(l.cantidadTexto).ok),
     [lineas],
   );
+
+  // Avisa a `Panel` que ya usó la plantilla, una sola vez, al montar — así
+  // `Panel` la limpia y un remonte posterior de esta vista (volver a
+  // "Crear" sin haber duplicado de nuevo) no la vuelve a aplicar.
+  useEffect(() => {
+    if (plantilla) onPlantillaConsumida?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- se avisa una sola vez, al montar.
+  }, []);
 
   // La cola de borradores: `/api/cotizacion/borradores` es POST (la clave
   // puede viajar en el cuerpo, o la sesión por cookie basta) y devuelve solo

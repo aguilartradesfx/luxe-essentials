@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import { PantallaClave } from './PantallaClave';
 import { VistaCrear } from './VistaCrear';
+import { VistaListado } from './VistaListado';
 
 // Lo único que el vendedor necesita para buscar y elegir un SKU. Nada de
 // `precioLista` ni `grupo`: eso es la lista de precios de Luxe, y esta forma
@@ -10,6 +12,17 @@ import { VistaCrear } from './VistaCrear';
 // tras clave). Ver Tarea 8. Exportado: `VistaCrear` lo necesita para tipar el
 // catálogo que recibe por props.
 export type SkuUI = { id: string; nombre: string; familia: string };
+
+// Tarea 10: lo que deja "Duplicar" en `VistaListado` para que `VistaCrear`
+// arranque con eso precargado, en vez de en blanco. `lineas` son solo
+// `skuId`/`cantidad` —nunca precios: los recalcula el servidor de nuevo,
+// con la lista vigente hoy (ver app/api/cotizacion/duplicar/route.ts)—.
+// Exportado: lo usan tanto `VistaListado` (quien lo arma) como `VistaCrear`
+// (quien lo consume).
+export type PrefillCotizacion = {
+  cliente: { nombre: string; empresa: string; email: string; telefono: string; direccion: string };
+  lineas: LineaEntrada[];
+};
 
 type Pestana = 'crear' | 'cotizaciones' | 'metricas';
 
@@ -83,6 +96,15 @@ export default function Panel() {
   // vacía cuando se entra por la sonda de sesión (sin clave conocida).
   const [clave, setClave] = useState('');
   const [pestana, setPestana] = useState<Pestana>('crear');
+  // Tarea 10 ("Duplicar"): lo que precarga la próxima vez que `VistaCrear`
+  // se monte en la pestaña "Crear". `VistaListado` cambia de pestaña no
+  // decide nada más — arma el dato, lo manda para acá, y es `Panel` quien
+  // decide qué hacer con él (cambiar de pestaña). `VistaCrear` ya se
+  // desmonta y remonta al cambiar de pestaña (ver el `nav` más abajo: cada
+  // pestaña solo renderiza su contenido cuando está activa), así que basta
+  // con pasarle este valor como estado inicial — no hace falta una `key`
+  // aparte para forzar el remonte.
+  const [plantilla, setPlantilla] = useState<PrefillCotizacion | null>(null);
 
   // Requisito 3 (Tarea 9): si la sesión ya está viva al montar —cookie
   // válida de una entrada anterior—, no hay que pedir la clave otra vez. Se
@@ -187,6 +209,21 @@ export default function Panel() {
     setPidiendoClave(true);
   }
 
+  // "Duplicar" (Tarea 10): `VistaListado` ya resolvió el dato (cliente +
+  // líneas, sin precios); acá solo se guarda para el próximo montaje de
+  // `VistaCrear` y se salta a la pestaña "Crear".
+  function onDuplicar(datos: PrefillCotizacion) {
+    setPlantilla(datos);
+    setPestana('crear');
+  }
+
+  // `VistaCrear` llama a esto una sola vez, al montar, si arrancó con una
+  // plantilla — para que un futuro remonte de la pestaña "Crear" (volver
+  // sin haber duplicado de nuevo) no reaplique una plantilla vieja.
+  function onPlantillaConsumida() {
+    setPlantilla(null);
+  }
+
   // La pantalla de clave: sin ella no hay catálogo. `/api/cotizacion/catalogo`
   // es quien valida la clave y quien decide qué SKUs bajan al navegador (sin
   // precios). Al estilo de app/q7m4/Taller.tsx.
@@ -277,10 +314,17 @@ export default function Panel() {
                 clave={clave}
                 obtenerCsrf={obtenerCsrf}
                 onSesionInvalida={onSesionInvalida}
+                plantilla={plantilla}
+                onPlantillaConsumida={onPlantillaConsumida}
               />
             )}
             {pestana === 'cotizaciones' && (
-              <p className="text-sm text-teal">Cotizaciones — disponible en la próxima tarea.</p>
+              <VistaListado
+                clave={clave}
+                obtenerCsrf={obtenerCsrf}
+                onSesionInvalida={onSesionInvalida}
+                onDuplicar={onDuplicar}
+              />
             )}
             {pestana === 'metricas' && (
               <p className="text-sm text-teal">Métricas — disponible en la próxima tarea.</p>

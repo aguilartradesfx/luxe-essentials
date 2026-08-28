@@ -61,5 +61,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'No se pudo consultar.' }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, cotizaciones: data ?? [] });
+  // Tarea 10: la pantalla arma el enlace a la ficha del contacto en
+  // GoHighLevel (`.../location/<locationId>/contacts/detail/<contactId>`).
+  // El `locationId` viaja desde acá — nunca desde una variable pública ni
+  // desde el catálogo — porque es la única fuente que el navegador tiene
+  // permitido leer sin que un env var termine expuesto en el bundle de
+  // cliente. Mismo env var que ya usan las rutas que hablan con GoHighLevel
+  // (app/api/cotizacion/route.ts, app/api/ghl/webhook/route.ts).
+  return NextResponse.json({
+    ok: true,
+    cotizaciones: data ?? [],
+    locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
+  });
 }

@@ -139,6 +139,7 @@ const { POST: postListado } = await import('@/app/api/cotizacion/listado/route')
 const { POST: postMetricas } = await import('@/app/api/cotizacion/metricas/route');
 const { POST: postCerrar } = await import('@/app/api/cotizacion/cerrar/route');
 const { POST: postReenviar } = await import('@/app/api/cotizacion/reenviar/route');
+const { POST: postDuplicar } = await import('@/app/api/cotizacion/duplicar/route');
 const { enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
 const { emitirSesion } = await import('@/lib/sesion');
@@ -155,6 +156,7 @@ beforeEach(() => {
   process.env.LUXE_TALLER_CLAVE = 'secreta';
   process.env.RESEND_API_KEY = 'llave';
   process.env.LUXE_CORREO_REMITENTE = 'Luxe Essentials <cotizaciones@luxe.cr>';
+  process.env.LUXE_GHL_LOCATION_ID = 'location-de-prueba';
 
   resultadoLista = { data: [], error: null };
   resultadoFila = { data: null, error: null };
@@ -237,6 +239,18 @@ describe('POST /api/cotizacion/listado', () => {
     const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
     const cuerpo = await res.json();
     expect(cuerpo.cotizaciones[0].contact_id).toBe('contacto-ghl-1');
+  });
+
+  // Tarea 10: el enlace a GoHighLevel se arma como
+  // `.../location/<locationId>/contacts/detail/<contactId>` — el
+  // `locationId` tiene que venir del servidor (nunca de una variable
+  // pública ni del catálogo), y esta es la única ruta que la pantalla
+  // consulta con la frecuencia suficiente como para llevarlo.
+  it('incluye el locationId de GoHighLevel, leído del servidor', async () => {
+    resultadoLista = { data: [filaListado], error: null };
+    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    const cuerpo = await res.json();
+    expect(cuerpo.locationId).toBe('location-de-prueba');
   });
 
   it('nunca pide más de 200 filas, aunque se pida un límite mayor', async () => {
@@ -729,5 +743,78 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.vencida).toBe(false);
+  });
+});
+
+// Tarea 10: ruta dedicada para "Duplicar". `/listado` deja `lineas` afuera
+// a propósito (ver su describe más arriba) — esta ruta las trae, pero solo
+// para una fila puntual y despojadas de todo precio.
+describe('POST /api/cotizacion/duplicar', () => {
+  it('rechaza sin credencial', async () => {
+    const res = await postDuplicar(
+      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'otra', id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('rechaza un id que no es UUID', async () => {
+    const res = await postDuplicar(
+      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: 'cot-1' }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('devuelve solo skuId y cantidad por línea, nunca los precios', async () => {
+    resultadoFila = {
+      data: {
+        lineas: [
+          {
+            skuId: 'set-600-king',
+            nombre: 'Set 600 hilos king',
+            cantidad: 12,
+            precioLista: 90000,
+            descuentoPct: 5,
+            precioUnitario: 85500,
+            subtotal: 1026000,
+            grupo: 'sets-cama',
+            motivo: '12 sets en Sets de cama → 5%',
+          },
+        ],
+      },
+      error: null,
+    };
+    const res = await postDuplicar(
+      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.lineas).toEqual([{ skuId: 'set-600-king', cantidad: 12 }]);
+    expect(Object.keys(cuerpo.lineas[0])).toEqual(['skuId', 'cantidad']);
+  });
+
+  it('404 si la cotización no existe', async () => {
+    resultadoFila = { data: null, error: null };
+    const res = await postDuplicar(
+      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: ID_INEXISTENTE }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('errores de base dan 500 con mensaje genérico', async () => {
+    resultadoFila = { data: null, error: { message: 'la base está caída' } };
+    const res = await postDuplicar(
+      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(500);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toContain('la base está caída');
+  });
+
+  it('funciona por cookie de sesión, sin exigir el token anti-CSRF: es de solo lectura', async () => {
+    resultadoFila = { data: { lineas: [] }, error: null };
+    const { cookie } = emitirSesion();
+    const valor = cookie.split(';')[0];
+    const res = await postDuplicar(peticion('http://localhost/api/cotizacion/duplicar', { id: ID_VALIDO }, { cookie: valor }));
+    expect(res.status).toBe(200);
   });
 });
