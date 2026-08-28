@@ -20,7 +20,7 @@ describe('calcularMetricas', () => {
     const m = calcularMetricas([], HOY);
     expect(m.sinRespuesta.monto).toBe(0);
     expect(m.sinRespuesta.cotizaciones).toEqual([]);
-    expect(m.ganado.monto).toBe(0);
+    expect(m.ganado.mesActual.monto).toBe(0);
   });
 
   it('cuenta lo enviado y sin cerrar como sin respuesta', () => {
@@ -45,16 +45,16 @@ describe('calcularMetricas', () => {
       fila({ estado: 'ganada', cerrada_at: '2026-08-25T12:00:00Z' }),
       fila({ id: 'y', estado: 'perdida', cerrada_at: '2026-08-26T12:00:00Z' }),
     ], HOY);
-    expect(m.ganado.cantidad).toBe(1);
-    expect(m.ganado.monto).toBe(1464480);
-    expect(m.perdido.cantidad).toBe(1);
+    expect(m.ganado.mesActual.cantidad).toBe(1);
+    expect(m.ganado.mesActual.monto).toBe(1464480);
+    expect(m.perdido.mesActual.cantidad).toBe(1);
   });
 
   it('calcula los días promedio entre enviar y cerrar', () => {
     const m = calcularMetricas([
       fila({ estado: 'ganada', enviado_at: '2026-08-01T12:00:00Z', cerrada_at: '2026-08-11T12:00:00Z' }),
     ], HOY);
-    expect(m.ganado.diasPromedio).toBe(10);
+    expect(m.ganado.mesActual.diasPromedio).toBe(10);
   });
 
   it('suma el descuento otorgado y su promedio', () => {
@@ -91,7 +91,7 @@ describe('calcularMetricas', () => {
 
   it('devuelve montos enteros', () => {
     const m = calcularMetricas([fila(), fila({ id: 'y' })], HOY);
-    for (const v of [m.sinRespuesta.monto, m.ganado.monto, m.descuento.monto]) {
+    for (const v of [m.sinRespuesta.monto, m.ganado.mesActual.monto, m.descuento.monto]) {
       expect(Number.isInteger(v)).toBe(true);
     }
   });
@@ -115,8 +115,8 @@ describe('calcularMetricas', () => {
     ];
     const m = calcularMetricas(filas, HOY);
     expect(m.sinRespuesta.cantidad).toBe(2);
-    expect(m.ganado.cantidad).toBe(1);
-    expect(m.perdido.cantidad).toBe(1);
+    expect(m.ganado.mesActual.cantidad).toBe(1);
+    expect(m.perdido.mesActual.cantidad).toBe(1);
     expect(m.fallidas).toBe(1);
     // Las 5 filas reales aportan a origen; borrador y convertida no cuentan.
     expect(m.porOrigen).toEqual({ humano: 5 });
@@ -153,6 +153,59 @@ describe('calcularMetricas', () => {
     ], HOY);
     // Promedio real: (0.4+1.4+0.4)/3 = 0.7333 -> redondeado una vez da 1.
     // Redondear por fila primero (0+1+0)/3=0.333 daria 0, que es el bug.
-    expect(m.ganado.diasPromedio).toBe(1);
+    expect(m.ganado.mesActual.diasPromedio).toBe(1);
+  });
+
+  // Ronda de correcciones 1 (Tarea 11): "ganado y perdido" pasa a acotarse
+  // al mes calendario en que se CERRÓ la cotización (`cerrada_at`), con el
+  // mes anterior como línea base de comparación. HOY es 2026-08-27, así que
+  // "este mes" es agosto de 2026 y "el mes pasado" es julio de 2026.
+  describe('ganado y perdido por mes calendario', () => {
+    it('separa el mes en curso del mes anterior', () => {
+      const m = calcularMetricas(
+        [
+          fila({ id: 'actual', estado: 'ganada', enviado_at: '2026-08-01T12:00:00Z', cerrada_at: '2026-08-10T12:00:00Z' }),
+          fila({ id: 'anterior', estado: 'ganada', enviado_at: '2026-07-01T12:00:00Z', cerrada_at: '2026-07-15T12:00:00Z' }),
+        ],
+        HOY,
+      );
+      expect(m.ganado.mesActual).toMatchObject({ cantidad: 1, monto: 1464480, diasPromedio: 9 });
+      expect(m.ganado.mesAnterior).toMatchObject({ cantidad: 1, monto: 1464480, diasPromedio: 14 });
+    });
+
+    it('una cotizacion cerrada el mes pasado no cuenta en el mes en curso', () => {
+      const m = calcularMetricas(
+        [fila({ id: 'y', estado: 'perdida', enviado_at: '2026-07-01T12:00:00Z', cerrada_at: '2026-07-20T12:00:00Z' })],
+        HOY,
+      );
+      expect(m.perdido.mesActual.cantidad).toBe(0);
+      expect(m.perdido.mesActual.monto).toBe(0);
+      expect(m.perdido.mesAnterior.cantidad).toBe(1);
+      expect(m.perdido.mesAnterior.monto).toBe(1464480);
+    });
+
+    it('una cotizacion cerrada hace mas de un mes no cuenta ni en el actual ni en el anterior', () => {
+      const m = calcularMetricas(
+        [fila({ id: 'y', estado: 'ganada', enviado_at: '2026-06-01T12:00:00Z', cerrada_at: '2026-06-15T12:00:00Z' })],
+        HOY,
+      );
+      expect(m.ganado.mesActual.cantidad).toBe(0);
+      expect(m.ganado.mesAnterior.cantidad).toBe(0);
+      // Pero sigue contando para lo que no depende del mes de cierre: sigue
+      // siendo negocio real, guardado y cerrado.
+      expect(m.porOrigen).toEqual({ humano: 1 });
+    });
+
+    it('los cierres fuera de rango no inflan los montos del mes en curso ni del anterior', () => {
+      const m = calcularMetricas(
+        [
+          fila({ id: 'actual', estado: 'ganada', enviado_at: '2026-08-01T12:00:00Z', cerrada_at: '2026-08-05T12:00:00Z' }),
+          fila({ id: 'viejo', estado: 'ganada', enviado_at: '2026-05-01T12:00:00Z', cerrada_at: '2026-05-05T12:00:00Z' }),
+        ],
+        HOY,
+      );
+      expect(m.ganado.mesActual.cantidad).toBe(1);
+      expect(m.ganado.mesActual.monto).toBe(1464480);
+    });
   });
 });

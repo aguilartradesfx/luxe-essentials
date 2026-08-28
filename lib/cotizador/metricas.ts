@@ -28,6 +28,17 @@ const AVISO_DIAS = 7;
 // las métricas de dinero o producto, un mismo negocio se contaría dos veces.
 const ESTADOS_REALES = new Set(['creada', 'enviada', 'error', 'ganada', 'perdida']);
 
+// Ronda de correcciones 1 (Tarea 11): "ganado y perdido" acotado al mes
+// calendario, con el mes anterior de comparación. Un acumulado desde el
+// origen de los tiempos no le dice a nadie qué hacer hoy —el criterio de
+// esta vista— porque no tiene con qué compararse: "ganamos ₡3,6 millones"
+// no significa nada sin saber si es más o menos que el mes pasado.
+export type ResumenMes = {
+  cantidad: number;
+  monto: number;
+  diasPromedio: number;
+};
+
 export type Metricas = {
   sinRespuesta: {
     cantidad: number;
@@ -40,15 +51,17 @@ export type Metricas = {
     vencidas: number;
     cotizaciones: FilaCotizacion[];
   };
+  // Ambos, agrupados por el mes calendario en que se CERRÓ la cotización
+  // (`cerrada_at`), en la zona horaria UTC (ver `claveMes`) — no por cuándo
+  // se creó ni se envió. Una cotización sin `cerrada_at` no puede ubicarse
+  // en ningún mes y no entra en ninguno de los dos.
   ganado: {
-    cantidad: number;
-    monto: number;
-    diasPromedio: number;
+    mesActual: ResumenMes;
+    mesAnterior: ResumenMes;
   };
   perdido: {
-    cantidad: number;
-    monto: number;
-    diasPromedio: number;
+    mesActual: ResumenMes;
+    mesAnterior: ResumenMes;
   };
   descuento: {
     monto: number;
@@ -71,19 +84,61 @@ function diasEntre(desde: string, hasta: string): number {
   return (new Date(hasta).getTime() - new Date(desde).getTime()) / DIA_MS;
 }
 
+// "2026-08": el mes calendario de una fecha, en UTC -- no en la zona
+// horaria local de donde corra el proceso. Los `timestamptz` de Supabase
+// llegan en ISO con offset; comparar por este identificador en vez de por
+// rango de fechas evita que el mismo cierre caiga en meses distintos según
+// dónde se ejecute el servidor (o la prueba).
+function claveMes(fecha: Date): string {
+  return `${fecha.getUTCFullYear()}-${String(fecha.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// El mes calendario inmediatamente anterior al de `hoy`, como el mismo tipo
+// de identificador que devuelve `claveMes` -- para comparar cierres contra
+// él sin tener que reconstruir un rango de fechas cada vez.
+function claveMesAnterior(hoy: Date): string {
+  return claveMes(new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - 1, 1)));
+}
+
+// Un acumulador de cierres (ganados o perdidos) para un mes: se llena fila a
+// fila con `sumarCierre` y se cierra una sola vez, al final, con
+// `resumenDe` -- mismo motivo que `diasEntre`: redondear el promedio una
+// sola vez, no fila por fila.
+type AcumuladorCierre = { cantidad: number; monto: number; diasSuma: number };
+
+function acumuladorVacio(): AcumuladorCierre {
+  return { cantidad: 0, monto: 0, diasSuma: 0 };
+}
+
+function sumarCierre(acc: AcumuladorCierre, fila: FilaCotizacion): void {
+  acc.cantidad += 1;
+  acc.monto += fila.totales.total;
+  if (fila.enviado_at !== null && fila.cerrada_at !== null) {
+    acc.diasSuma += diasEntre(fila.enviado_at, fila.cerrada_at);
+  }
+}
+
+function resumenDe(acc: AcumuladorCierre): ResumenMes {
+  return {
+    cantidad: acc.cantidad,
+    monto: Math.round(acc.monto),
+    diasPromedio: acc.cantidad > 0 ? Math.round(acc.diasSuma / acc.cantidad) : 0,
+  };
+}
+
 export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
   const sinRespuestaFilas: FilaCotizacion[] = [];
   let sinRespuestaMonto = 0;
   let porVencer = 0;
   let vencidas = 0;
 
-  let ganadoCantidad = 0;
-  let ganadoMonto = 0;
-  let ganadoDiasSuma = 0;
+  const claveActual = claveMes(hoy);
+  const claveAnterior = claveMesAnterior(hoy);
 
-  let perdidoCantidad = 0;
-  let perdidoMonto = 0;
-  let perdidoDiasSuma = 0;
+  const ganadoMesActual = acumuladorVacio();
+  const ganadoMesAnterior = acumuladorVacio();
+  const perdidoMesActual = acumuladorVacio();
+  const perdidoMesAnterior = acumuladorVacio();
 
   let descuentoMonto = 0;
   let brutoMonto = 0;
@@ -119,21 +174,26 @@ export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
         }
       }
     } else if (fila.estado === 'ganada') {
-      ganadoCantidad += 1;
-      ganadoMonto += fila.totales.total;
-      if (fila.enviado_at !== null && fila.cerrada_at !== null) {
-        ganadoDiasSuma += diasEntre(fila.enviado_at, fila.cerrada_at);
+      // Sin `cerrada_at` no hay mes al que asignarla -- no debería pasar
+      // para una fila 'ganada' (se marca al cerrar), pero no hay dato del
+      // que fiarse ciegamente en este archivo (ver el resto de guardas de
+      // `null` acá arriba).
+      if (fila.cerrada_at !== null) {
+        const clave = claveMes(new Date(fila.cerrada_at));
+        if (clave === claveActual) sumarCierre(ganadoMesActual, fila);
+        else if (clave === claveAnterior) sumarCierre(ganadoMesAnterior, fila);
       }
     } else if (fila.estado === 'perdida') {
-      perdidoCantidad += 1;
-      perdidoMonto += fila.totales.total;
-      if (fila.enviado_at !== null && fila.cerrada_at !== null) {
-        perdidoDiasSuma += diasEntre(fila.enviado_at, fila.cerrada_at);
+      if (fila.cerrada_at !== null) {
+        const clave = claveMes(new Date(fila.cerrada_at));
+        if (clave === claveActual) sumarCierre(perdidoMesActual, fila);
+        else if (clave === claveAnterior) sumarCierre(perdidoMesAnterior, fila);
       }
     }
 
-    // Productos, reparto y origen sí incluyen las fallidas: la cotización
-    // se armó y se guardó, lo único que falló fue la entrega (el PDF o el
+    // Productos, reparto y origen sí incluyen las fallidas (y los cierres de
+    // cualquier mes, no solo el actual y el anterior): la cotización se
+    // armó y se guardó, lo único que falló fue la entrega (el PDF o el
     // correo). Los números están intactos y le sirven a producción y a la
     // pregunta de si el agente aporta cotizaciones reales.
     for (const linea of fila.lineas) {
@@ -174,14 +234,12 @@ export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
       cotizaciones: sinRespuestaFilas,
     },
     ganado: {
-      cantidad: ganadoCantidad,
-      monto: Math.round(ganadoMonto),
-      diasPromedio: ganadoCantidad > 0 ? Math.round(ganadoDiasSuma / ganadoCantidad) : 0,
+      mesActual: resumenDe(ganadoMesActual),
+      mesAnterior: resumenDe(ganadoMesAnterior),
     },
     perdido: {
-      cantidad: perdidoCantidad,
-      monto: Math.round(perdidoMonto),
-      diasPromedio: perdidoCantidad > 0 ? Math.round(perdidoDiasSuma / perdidoCantidad) : 0,
+      mesActual: resumenDe(perdidoMesActual),
+      mesAnterior: resumenDe(perdidoMesAnterior),
     },
     descuento: {
       monto: Math.round(descuentoMonto),

@@ -17,10 +17,17 @@ import { formatearColones, formatearTasa } from './formato';
 // esta vista solo los pinta, en la respuesta de `POST
 // /api/cotizacion/metricas` (ruta de lectura, sin token anti-CSRF).
 
+// Ronda de correcciones 1: "ganado" y "perdido" pasaron a acotarse al mes
+// calendario en `lib/cotizador/metricas.ts` (`calcularMetricas`), con el
+// mes anterior como línea base de comparación -- un acumulado sin fecha no
+// tiene con qué compararse, y "ganamos ₡3,6 millones" no le dice a nadie si
+// eso es bueno o malo.
+type ResumenMes = { cantidad: number; monto: number; diasPromedio: number };
+
 type Metricas = {
   sinRespuesta: { cantidad: number; monto: number; porVencer: number; vencidas: number };
-  ganado: { cantidad: number; monto: number; diasPromedio: number };
-  perdido: { cantidad: number; monto: number; diasPromedio: number };
+  ganado: { mesActual: ResumenMes; mesAnterior: ResumenMes };
+  perdido: { mesActual: ResumenMes; mesAnterior: ResumenMes };
   descuento: { monto: number; promedioPct: number };
   productos: Array<{ nombre: string; unidades: number; monto: number }>;
   porLinea: { uniformes: { monto: number }; hogar: { monto: number } };
@@ -34,6 +41,23 @@ type Metricas = {
 // hay credencial que mandar de más.
 function conClave(clave: string, resto: Record<string, unknown>): Record<string, unknown> {
   return clave ? { clave, ...resto } : resto;
+}
+
+// Concordancia de número: "1 vence" / "2 vencen", no "1 vencen". Sin esto el
+// caso más común -- una sola cotización por vencer -- lee mal justo en el
+// bloque más accionable de los seis.
+function plural(n: number, singular: string, pluralForm: string): string {
+  return n === 1 ? singular : pluralForm;
+}
+
+// La diferencia contra el mes anterior, con signo: "+₡500.000" si se ganó
+// más que el mes pasado, "-₡200.000" si se ganó menos. Es la respuesta a
+// "¿esto es bueno o malo?", que un monto suelto no contesta por sí solo.
+function formatearDiferencia(actual: number, anterior: number): string {
+  const delta = actual - anterior;
+  if (delta === 0) return 'igual que el mes pasado';
+  const signo = delta > 0 ? '+' : '-';
+  return `${signo}${formatearColones(Math.abs(delta))} vs. el mes pasado`;
 }
 
 // Cuántos productos listar en "Qué se cotiza": los primeros bastan para
@@ -112,27 +136,31 @@ export function VistaMetricas({ clave, onSesionInvalida, onVerFallidas }: Props)
         <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Cotizado, sin respuesta</h2>
         <p className="mt-1 font-display text-2xl text-navy">{formatearColones(sinRespuesta.monto)}</p>
         <p className="mt-1 text-xs text-teal">
-          Cotizaciones enviadas que todavía no tienen respuesta: {sinRespuesta.cantidad}.{' '}
-          {sinRespuesta.porVencer} vencen esta semana — a esas llamá primero.
+          Cotizaciones sin respuesta todavía: {sinRespuesta.cantidad}. {sinRespuesta.porVencer}{' '}
+          {plural(sinRespuesta.porVencer, 'vence', 'vencen')} esta semana — a esas llamá primero.
           {sinRespuesta.vencidas > 0 &&
-            ` ${sinRespuesta.vencidas} ya vencieron: a esas no se les llama, se les vuelve a cotizar.`}
+            ` ${sinRespuesta.vencidas} ya ${plural(sinRespuesta.vencidas, 'venció', 'vencieron')}: a esas no se les llama, se les vuelve a cotizar.`}
         </p>
       </section>
 
-      {/* 2. Ganado y perdido: cuánto se cerró y cuánto tarda en cerrarse. */}
+      {/* 2. Ganado y perdido: cuánto se cerró este mes contra el anterior. */}
       <section className="rounded-xl border border-[var(--carta-border)] p-4">
         <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Ganado y perdido</h2>
         <div className="mt-1 flex gap-6">
           <div>
-            <p className="font-display text-2xl text-navy">{formatearColones(ganado.monto)}</p>
+            <p className="font-display text-2xl text-navy">{formatearColones(ganado.mesActual.monto)}</p>
             <p className="text-xs text-teal">
-              Ganado — {ganado.cantidad} cotizaciones, {ganado.diasPromedio} día(s) en promedio hasta cerrarse.
+              Ganado este mes — {ganado.mesActual.cantidad} cotizaciones, {ganado.mesActual.diasPromedio} día(s) en
+              promedio hasta cerrarse. Mes pasado: {formatearColones(ganado.mesAnterior.monto)} (
+              {formatearDiferencia(ganado.mesActual.monto, ganado.mesAnterior.monto)}).
             </p>
           </div>
           <div>
-            <p className="font-display text-2xl text-navy">{formatearColones(perdido.monto)}</p>
+            <p className="font-display text-2xl text-navy">{formatearColones(perdido.mesActual.monto)}</p>
             <p className="text-xs text-teal">
-              Perdido — {perdido.cantidad} cotizaciones, {perdido.diasPromedio} día(s) en promedio hasta cerrarse.
+              Perdido este mes — {perdido.mesActual.cantidad} cotizaciones, {perdido.mesActual.diasPromedio} día(s)
+              en promedio hasta cerrarse. Mes pasado: {formatearColones(perdido.mesAnterior.monto)} (
+              {formatearDiferencia(perdido.mesActual.monto, perdido.mesAnterior.monto)}).
             </p>
           </div>
         </div>
