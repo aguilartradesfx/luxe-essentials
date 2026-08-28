@@ -6,6 +6,14 @@
 // difíciles de diagnosticar. Ésta es JavaScript puro, corre en Node sin
 // navegador, y usa su propio motor de layout (flexbox, no HTML/CSS real) —
 // se diseña para la herramienta, no se convierte desde una página web.
+//
+// Misma protección que catalogo.ts/escalas.ts/calcular.ts (ronda de
+// correcciones 1): sin esto, nada impide que alguien importe este módulo
+// desde un componente de cliente y arrastre 652 KB de fuentes embebidas al
+// navegador. Este módulo no lee precios de lista ni escalas — recibe una
+// `Cotizacion` ya calculada — pero igual solo tiene sentido correr en el
+// servidor (usa `node:fs`/`node:path` para leer las fuentes del disco).
+import 'server-only';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
@@ -49,10 +57,23 @@ Font.register({
 });
 
 // El hifenador por defecto de react-pdf no conoce reglas del español y corta
-// palabras en lugares que no son un guion válido en este idioma. Se apaga:
-// mejor una línea que se envuelve entera que una palabra mal partida en un
-// documento que ve el cliente.
-Font.registerHyphenationCallback((palabra) => [palabra]);
+// palabras en lugares que no son un guion válido en este idioma — por eso NO
+// se usa tal cual. Pero apagarlo del todo (devolver la palabra entera
+// siempre) tiene un costo que se descubrió en la ronda de correcciones 1: un
+// token sin espacios más largo que la columna (un SKU o código pegado, por
+// ejemplo) no tiene entonces NINGÚN punto de corte, y el motor de layout lo
+// deja desbordar por encima de las columnas vecinas — en la tabla de
+// productos, tapando las cifras de cantidad y precio. Ningún nombre real del
+// catálogo (ver lib/cotizador/catalogo.ts) se acerca a los
+// `LARGO_MAX_SIN_CORTE` caracteres, así que esto nunca hifena una palabra
+// real: sólo actúa como corte de emergencia para el caso patológico.
+const LARGO_MAX_SIN_CORTE = 30;
+Font.registerHyphenationCallback((palabra) => {
+  if (palabra.length <= LARGO_MAX_SIN_CORTE) return [palabra];
+  const trozos: string[] = [];
+  for (let i = 0; i < palabra.length; i += 15) trozos.push(palabra.slice(i, i + 15));
+  return trozos;
+});
 
 export type ClienteDocumento = {
   nombre: string;
@@ -316,6 +337,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter',
     color: TINTA,
   },
+  // El ahorro frente al precio de lista es el argumento de venta más directo
+  // que hay — decirle al hotel cuánto no pagó — así que se destaca en el
+  // color de acento en vez de quedar mezclado con el resto del resumen.
+  ahorroEtiqueta: {
+    fontSize: 9.5,
+    fontFamily: 'Inter',
+    fontWeight: 600,
+    color: ACENTO,
+  },
+  ahorroValor: {
+    fontSize: 9.5,
+    fontFamily: 'Inter',
+    fontWeight: 600,
+    color: ACENTO,
+  },
 
   // ---- Notas al pie ----
   notas: {
@@ -364,7 +400,7 @@ function FilaProducto({ linea }: { linea: LineaCalculada }) {
 }
 
 function Documento({ numero, cotizacion, cliente, emitida, vence }: DatosDocumento) {
-  const { lineas, subtotal, tasaIva, iva, total, bordadoEspecial } = cotizacion;
+  const { lineas, subtotal, ahorro, tasaIva, iva, total, bordadoEspecial } = cotizacion;
 
   return (
     <Document>
@@ -415,8 +451,15 @@ function Documento({ numero, cotizacion, cliente, emitida, vence }: DatosDocumen
         ))}
 
         {/* El total va primero, destacado; el IVA se suma abajo como parte
-            del desglose. Requisito explícito del cliente. */}
-        <View style={styles.bloqueTotales}>
+            del desglose. Requisito explícito del cliente.
+            `wrap={false}`: sin esto (ronda de correcciones 1, hallazgo
+            crítico), el bloque puede partirse justo entre la caja del Total
+            y las filas de Subtotal/IVA cuando cae cerca del borde de una
+            página — la caja queda sola en una página y "Subtotal"/"+ IVA"
+            flotando solas en la siguiente, sin encabezado de tabla ni
+            productos alrededor. Con `wrap={false}` el bloque entero salta a
+            la página siguiente si no cabe completo, en vez de partirse. */}
+        <View style={styles.bloqueTotales} wrap={false}>
           <View style={styles.totalDestacado}>
             <Text style={styles.totalEtiqueta}>Total</Text>
             <Text style={styles.totalValor}>{colones(total)}</Text>
@@ -425,12 +468,24 @@ function Documento({ numero, cotizacion, cliente, emitida, vence }: DatosDocumen
             <Text style={styles.resumenEtiqueta}>Subtotal</Text>
             <Text style={styles.resumenValor}>{colones(subtotal)}</Text>
           </View>
-          <View style={styles.filaResumen}>
-            <Text style={styles.resumenEtiqueta}>
-              {tasaIva > 0 ? `+ IVA (${formatearTasa(tasaIva)}%)` : 'IVA (cliente exento)'}
-            </Text>
-            <Text style={styles.resumenValor}>{colones(iva)}</Text>
-          </View>
+          {ahorro > 0 && (
+            <View style={styles.filaResumen}>
+              <Text style={styles.ahorroEtiqueta}>Ahorro vs. precio de lista</Text>
+              <Text style={styles.ahorroValor}>{colones(ahorro)}</Text>
+            </View>
+          )}
+          {tasaIva > 0 ? (
+            <View style={styles.filaResumen}>
+              <Text style={styles.resumenEtiqueta}>{`+ IVA (${formatearTasa(tasaIva)}%)`}</Text>
+              <Text style={styles.resumenValor}>{colones(iva)}</Text>
+            </View>
+          ) : (
+            // Sin monto al lado: un "₡0" ahí es ruido, no información — el
+            // punto es decir que no aplica, no cuantificar un cero.
+            <View style={styles.filaResumen}>
+              <Text style={styles.resumenEtiqueta}>Exento de IVA</Text>
+            </View>
+          )}
         </View>
 
         {/* Nada sobre métodos de pago: el vendedor coordina el cobro aparte. */}
