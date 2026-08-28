@@ -12,8 +12,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // rompía nada, porque esa ruta no tenía archivo de pruebas. Este archivo
 // cierra las cuatro grietas.
 
-vi.mock('@/lib/cotizador/ghl', () => ({
-  crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' }),
+// Tarea 12: `notaDeCotizacion` queda real vía `importOriginal` (es pura y
+// local); sólo se mockea `crearEstimate`. `agregarNota` se mockea aparte
+// (ver abajo) para que ninguna prueba de este archivo dispare una llamada
+// de red real cuando el correo "sale".
+vi.mock('@/lib/cotizador/ghl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/cotizador/ghl')>();
+  return {
+    ...real,
+    crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' }),
+  };
+});
+vi.mock('@/lib/agente/acciones', () => ({
+  agregarNota: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/lib/cotizador/documento', () => ({
   renderizarCotizacion: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.7 falso')),

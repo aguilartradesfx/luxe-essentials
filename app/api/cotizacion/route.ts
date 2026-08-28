@@ -214,25 +214,38 @@ export async function POST(request: Request) {
   // de verdad (si no salió, no hay nada que trazar) y hay un contacto al que
   // anotarle algo.
   //
-  // Un fallo acá NO invalida la cotización — el correo ya llegó al hotel;
-  // que el CRM no se haya enterado es un problema menor. `agregarNota` en sí
-  // nunca lanza, pero el try/catch cubre también un fallo construyendo el
-  // propio texto (`notaDeCotizacion`), por la misma razón. Se registra en el
-  // mismo `ghl_error` de más abajo, junto al resto de lo que le pasó a
-  // GoHighLevel con esta cotización.
+  // Ronda de correcciones 1: los dos posibles fallos de acá abajo NO son lo
+  // mismo y se registran distinto.
+  //
+  // - `notaDeCotizacion` es pura, local y síncrona: NUNCA debería lanzar. Si
+  //   lo hace, es un bug de este código (no un fallo de GoHighLevel), y se
+  //   registra como tal — con la palabra "BUG" — para que no se confunda con
+  //   una caída real de la API. No se junta a `ghl_error`: no tiene nada que
+  //   ver con GoHighLevel.
+  // - `agregarNota` (lib/agente/acciones.ts) ya nunca lanza por diseño:
+  //   siempre resuelve, devolviendo el error como valor. Ese error sí es un
+  //   fallo tolerable ("GoHighLevel está caído") y se junta al `ghl_error`
+  //   de más abajo, junto al resto de lo que le pasó a GoHighLevel con esta
+  //   cotización.
+  //
+  // Ninguno de los dos casos invalida la cotización — el correo ya llegó al
+  // hotel.
   let notaError: string | undefined;
   if (correoResultado.ok && contactId) {
+    let textoNota: string | undefined;
     try {
-      notaError = await agregarNota(
-        contactId,
-        notaDeCotizacion({ numero, total: cotizacion.total, vence, enlace: enlacePdf }),
-        { apiKey: process.env.LUXE_GHL_API_KEY ?? '' },
-      );
+      textoNota = notaDeCotizacion({ numero, total: cotizacion.total, vence, enlace: enlacePdf });
     } catch (err) {
-      notaError = err instanceof Error ? err.message : String(err);
+      console.error(
+        '[cotizador] BUG: no se pudo construir el texto de la nota de la cotización.',
+        err instanceof Error ? err.message : String(err),
+      );
     }
-    if (notaError) {
-      console.error('[cotizador] No se pudo agregar la nota de la cotización en GoHighLevel.', notaError);
+    if (textoNota) {
+      notaError = await agregarNota(contactId, textoNota, { apiKey: process.env.LUXE_GHL_API_KEY ?? '' });
+      if (notaError) {
+        console.error('[cotizador] No se pudo agregar la nota de la cotización en GoHighLevel.', notaError);
+      }
     }
   }
 

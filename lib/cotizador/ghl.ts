@@ -416,8 +416,10 @@ export function notaDeCotizacion(p: {
   vence: Date;
   enlace: string;
 }): string {
-  return (
-    `Cotización ${p.numero}: ${colones(p.total)}, vigente hasta el ${formatearFechaLargaCR(p.vence)}.\n` +
-    `PDF: ${p.enlace}`
-  );
+  const primeraLinea =
+    `Cotización ${p.numero}: ${colones(p.total)}, vigente hasta el ${formatearFechaLargaCR(p.vence)}.`;
+  // Mismo criterio que `cuerpoHtml` en lib/cotizador/correo.ts: sin enlace
+  // firmado (Storage caído justo en ese momento), se omite la línea entera
+  // en vez de imprimir "PDF: " seguido de nada.
+  return p.enlace ? `${primeraLinea}\nPDF: ${p.enlace}` : primeraLinea;
 }

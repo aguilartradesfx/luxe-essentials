@@ -1,7 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/cotizador/ghl', () => ({
-  crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' }),
+// Tarea 12: se mockea sólo `crearEstimate` — `notaDeCotizacion` (y las
+// constantes de pipeline) quedan reales vía `importOriginal`. Es una función
+// pura y local: usar la de verdad deja que las pruebas de más abajo
+// verifiquen el texto real que le llega a `agregarNota`, en vez de
+// inventarse un texto de mentira que nunca ejercitaría el cableado real.
+vi.mock('@/lib/cotizador/ghl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/cotizador/ghl')>();
+  return {
+    ...real,
+    crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' }),
+  };
+});
+
+// Tarea 12: la nota en GoHighLevel. Mockeada para que ninguna prueba de este
+// archivo dispare una llamada de red real — `agregarNota`
+// (lib/agente/acciones.ts) no está mockeada en ningún otro punto de este
+// archivo, y sin esto se ejecutaría de verdad en cuanto el correo "sale".
+vi.mock('@/lib/agente/acciones', () => ({
+  agregarNota: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Tarea 5: el PDF, el guardado en Storage y el correo se simulan igual que
@@ -45,6 +62,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 const { POST } = await import('@/app/api/cotizacion/route');
 const { crearEstimate } = await import('@/lib/cotizador/ghl');
+const { agregarNota } = await import('@/lib/agente/acciones');
 const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
 const { guardarPdf, enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
@@ -78,6 +96,8 @@ describe('POST /api/cotizacion', () => {
     vi.mocked(guardarPdf).mockClear();
     vi.mocked(enlaceFirmado).mockClear();
     vi.mocked(enviarCotizacion).mockClear();
+    vi.mocked(agregarNota).mockClear();
+    vi.mocked(agregarNota).mockResolvedValue(undefined);
   });
 
   it('rechaza sin clave', async () => {
@@ -486,5 +506,37 @@ describe('POST /api/cotizacion', () => {
       telefono: '+506 8888-8888',
       direccion: 'Frente al parque, Liberia',
     });
+  });
+
+  // --- Tarea 12: la nota en el contacto de GoHighLevel ---
+  //
+  // Ronda de correcciones 1: antes de estas dos pruebas, apagar la llamada a
+  // la nota por completo en `route.ts` dejaba la suite entera en verde —
+  // ninguna prueba de este archivo, ni de ningún otro, notaba que el único
+  // rastro que deja esta tarea no se estaba creando. `crearEstimate` está
+  // mockeado, pero `notaDeCotizacion` es real (ver `importOriginal` arriba):
+  // el texto que se verifica es el que de verdad calcularía el endpoint.
+
+  it('llama a agregarNota con el contacto y el texto real de la cotización cuando el correo sale', async () => {
+    const res = await POST(peticion(valido));
+    expect(res.status).toBe(200);
+
+    expect(agregarNota).toHaveBeenCalledTimes(1);
+    const [contactId, texto] = vi.mocked(agregarNota).mock.calls[0];
+    expect(contactId).toBe('contacto-ghl-1');
+    // Número de la fila, monto formateado en colones y el enlace firmado
+    // (mockeado como 'https://firmada' arriba) — el mismo criterio que
+    // exige el brief de la Tarea 12: monto y vigencia visibles, enlace al
+    // PDF incluido.
+    expect(texto).toContain('COT-2026-0001');
+    expect(texto).toContain('₡1.464.480');
+    expect(texto).toContain('PDF: https://firmada');
+  });
+
+  it('no llama a agregarNota cuando el correo falla (no hay nada que trazar todavía)', async () => {
+    vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+    const res = await POST(peticion(valido));
+    expect(res.status).toBe(200);
+    expect(agregarNota).not.toHaveBeenCalled();
   });
 });

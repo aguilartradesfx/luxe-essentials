@@ -573,4 +573,15 @@ describe('notaDeCotizacion', () => {
     const nota = notaDeCotizacion({ ...params, total: 90000 });
     expect(nota).toContain('₡90.000');
   });
+
+  it('omite la línea del PDF si no hay enlace (Storage caído justo al firmar)', () => {
+    // Ronda de correcciones 1: mismo criterio que `cuerpoHtml` en
+    // lib/cotizador/correo.ts, que omite el párrafo del enlace entero en vez
+    // de mandar uno vacío. Antes, esta nota quedaba con "PDF: " seguido de
+    // nada.
+    const nota = notaDeCotizacion({ ...params, enlace: '' });
+    expect(nota).not.toContain('PDF:');
+    expect(nota.split('\n')).toHaveLength(1);
+    expect(nota).toContain('₡1.464.480');
+  });
 });
