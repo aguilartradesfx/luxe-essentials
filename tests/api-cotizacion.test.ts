@@ -4,8 +4,22 @@ vi.mock('@/lib/cotizador/ghl', () => ({
   crearEstimate: vi.fn().mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' }),
 }));
 
+// Tarea 5: el PDF, el guardado en Storage y el correo se simulan igual que
+// GoHighLevel arriba — nunca lanzan salvo que una prueba puntual lo pida con
+// `mockRejectedValueOnce`/`mockResolvedValueOnce`.
+vi.mock('@/lib/cotizador/documento', () => ({
+  renderizarCotizacion: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.7 falso')),
+}));
+vi.mock('@/lib/cotizador/almacen', () => ({
+  guardarPdf: vi.fn().mockResolvedValue({ ok: true, ruta: '2026/COT-1-abc.pdf' }),
+  enlaceFirmado: vi.fn().mockResolvedValue({ ok: true, url: 'https://firmada' }),
+}));
+vi.mock('@/lib/cotizador/correo', () => ({
+  enviarCotizacion: vi.fn().mockResolvedValue({ ok: true, resendId: 're_1' }),
+}));
+
 const insertado: unknown[] = [];
-const actualizado: unknown[] = [];
+const actualizados: unknown[] = [];
 let errorAlActualizar: { message: string } | null = null;
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
@@ -14,12 +28,15 @@ vi.mock('@/lib/supabase/server', () => ({
         insertado.push(fila);
         return {
           select: () => ({
-            single: async () => ({ data: { id: 'cot-1', ...(fila as object) }, error: null }),
+            // `numero` simula lo que en la base pone el trigger de la
+            // migración 0010 (`obtener_numero_cotizacion`): el insert nunca lo
+            // manda, la fila vuelve con él puesto.
+            single: async () => ({ data: { id: 'cot-1', numero: 'COT-2026-0001', ...(fila as object) }, error: null }),
           }),
         };
       },
       update: (cambios: unknown) => {
-        actualizado.push(cambios);
+        actualizados.push(cambios);
         return { eq: async () => ({ error: errorAlActualizar }) };
       },
     }),
@@ -28,6 +45,9 @@ vi.mock('@/lib/supabase/server', () => ({
 
 const { POST } = await import('@/app/api/cotizacion/route');
 const { crearEstimate } = await import('@/lib/cotizador/ghl');
+const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
+const { guardarPdf, enlaceFirmado } = await import('@/lib/cotizador/almacen');
+const { enviarCotizacion } = await import('@/lib/cotizador/correo');
 
 function peticion(cuerpo: unknown) {
   return new Request('http://localhost/api/cotizacion', {
@@ -45,10 +65,19 @@ const valido = {
 describe('POST /api/cotizacion', () => {
   beforeEach(() => {
     insertado.length = 0;
-    actualizado.length = 0;
+    actualizados.length = 0;
     errorAlActualizar = null;
     process.env.LUXE_TALLER_CLAVE = 'secreta';
     vi.mocked(crearEstimate).mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' });
+    // `mockClear` (no `mockReset`): borra el historial de llamadas de la
+    // prueba anterior sin perder el `mockResolvedValue` por defecto de cada
+    // mock, fijado arriba en `vi.mock`. Sin esto, `enviarCotizacion` (y los
+    // demás) acumulan llamadas de todas las pruebas anteriores y
+    // `not.toHaveBeenCalled()` nunca podría dar verdadero.
+    vi.mocked(renderizarCotizacion).mockClear();
+    vi.mocked(guardarPdf).mockClear();
+    vi.mocked(enlaceFirmado).mockClear();
+    vi.mocked(enviarCotizacion).mockClear();
   });
 
   it('rechaza sin clave', async () => {
@@ -203,37 +232,59 @@ describe('POST /api/cotizacion', () => {
 
   // --- Ronda de correcciones 1 ---
 
-  it('guarda estado "creada" (no "enviada": crearEstimate nunca envía), el estimateId y el contactId cuando GoHighLevel responde ok', async () => {
-    // Ronda de correcciones 2 (hallazgo C1): 'enviada' sería mentir. El
-    // Estimate queda en borrador dentro de GoHighLevel; 'creada' es el
-    // estado real.
+  it('guarda estado "enviada", el estimateId y el contactId cuando GoHighLevel y el correo responden ok', async () => {
+    // Tarea 5: el `estado` ya no depende de GoHighLevel — `crearEstimate`
+    // sigue sin llamar al envío de GoHighLevel, pero ahora existe un envío
+    // real (correo con el PDF de Luxe adjunto, vía `enviarCotizacion`).
+    // 'enviada' describe eso: la cotización de verdad salió hacia el cliente.
     await POST(peticion(valido));
-    expect(actualizado).toHaveLength(1);
-    expect(actualizado[0]).toMatchObject({
-      estado: 'creada',
+    expect(actualizados).toHaveLength(1);
+    expect(actualizados[0]).toMatchObject({
+      estado: 'enviada',
       ghl_estimate_id: 'est-1',
       contact_id: 'contacto-ghl-1',
     });
   });
 
-  it('guarda estado "error" y ghl_error cuando crearEstimate falla (camino de fallo antes no probado)', async () => {
-    // Antes de esta ronda, `crearEstimate` estaba mockeado siempre en
-    // `ok: true`, así que `estado: 'error'` — el contrato de recuperabilidad
-    // completo — nunca se ejercitaba. Un mutante que escribiera 'enviado' en
-    // vez de 'enviada' (rechazado por el `check` de la tabla) sobrevivía.
+  it('guarda ghl_error cuando crearEstimate falla, pero el estado sigue "enviada" si el correo salió (el fallo de GoHighLevel no invalida un envío que sí llegó)', async () => {
+    // Restricción global del plan: "Ningún fallo de GoHighLevel invalida una
+    // cotización que ya salió al cliente." Antes de la Tarea 5 el único
+    // envío era el Estimate de GoHighLevel, así que su fallo marcaba
+    // 'error'. Ahora el envío real es el correo (mockeado en éxito por
+    // defecto en este archivo), así que un fallo de GoHighLevel debe quedar
+    // registrado en `ghl_error` sin bajar el estado.
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
     const res = await POST(peticion(valido));
     const cuerpo = await res.json();
 
     expect(cuerpo.ghl.error).toContain('boom');
-    expect(actualizado).toHaveLength(1);
-    expect(actualizado[0]).toMatchObject({
+    expect(actualizados).toHaveLength(1);
+    expect(actualizados[0]).toMatchObject({
+      estado: 'enviada',
+      ghl_error: expect.stringContaining('boom'),
+    });
+  });
+
+  it('guarda estado "error" y ghl_error cuando tanto crearEstimate como el correo fallan (camino de fallo antes no probado)', async () => {
+    // Antes de esta ronda, `crearEstimate` estaba mockeado siempre en
+    // `ok: true`, así que `estado: 'error'` — el contrato de recuperabilidad
+    // completo — nunca se ejercitaba. Un mutante que escribiera 'enviado' en
+    // vez de 'enviada' (rechazado por el `check` de la tabla) sobrevivía.
+    const { enviarCotizacion } = await import('@/lib/cotizador/correo');
+    vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
+    vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+
+    expect(cuerpo.ghl.error).toContain('boom');
+    expect(actualizados).toHaveLength(1);
+    expect(actualizados[0]).toMatchObject({
       estado: 'error',
       ghl_error: expect.stringContaining('boom'),
     });
     // El estado que el check de la tabla realmente acepta, no un string
     // parecido: mata el mutante 'enviado' vs 'enviada'.
-    expect((actualizado[0] as { estado: string }).estado).toBe('error');
+    expect((actualizados[0] as { estado: string }).estado).toBe('error');
   });
 
   it('guarda el contactId aunque crearEstimate falle, si se llegó a resolver uno', async () => {
@@ -243,14 +294,16 @@ describe('POST /api/cotizacion', () => {
       contactId: 'nuevo-antes-de-fallar',
     });
     await POST(peticion(valido));
-    expect(actualizado[0]).toMatchObject({ estado: 'error', contact_id: 'nuevo-antes-de-fallar' });
+    // El correo sigue en éxito por defecto: el contactId se guarda pase lo
+    // que pase con GoHighLevel, y el estado no baja por su fallo.
+    expect(actualizados[0]).toMatchObject({ estado: 'enviada', contact_id: 'nuevo-antes-de-fallar' });
   });
 
-  it('guarda estado "creada" con el ghl_error de la Opportunity, sin marcar error', async () => {
-    // Un fallo moviendo la Opportunity no invalida un Estimate que ya se creó
-    // bien: la fila debe seguir en 'creada', con el detalle del fallo en
-    // ghl_error para que alguien lo revise, no como si la cotización entera
-    // hubiera fallado.
+  it('guarda estado "enviada" con el ghl_error de la Opportunity, sin marcar error', async () => {
+    // Un fallo moviendo la Opportunity no invalida ni el Estimate que ya se
+    // creó bien ni el correo que sí salió: la fila queda 'enviada', con el
+    // detalle del fallo en ghl_error para que alguien lo revise, no como si
+    // la cotización entera hubiera fallado.
     vi.mocked(crearEstimate).mockResolvedValueOnce({
       ok: true,
       estimateId: 'est-2',
@@ -261,8 +314,8 @@ describe('POST /api/cotizacion', () => {
     const cuerpo = await res.json();
 
     expect(cuerpo.ghl.estimateId).toBe('est-2');
-    expect(actualizado[0]).toMatchObject({
-      estado: 'creada',
+    expect(actualizados[0]).toMatchObject({
+      estado: 'enviada',
       ghl_estimate_id: 'est-2',
       ghl_error: expect.stringContaining('pipelineStageName'),
       contact_id: 'contacto-x',
@@ -274,7 +327,7 @@ describe('POST /api/cotizacion', () => {
     // perderse si `crearEstimate` no lo repite en su resultado.
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: true, estimateId: 'est-3' } as never);
     await POST(peticion({ ...valido, contactId: 'contacto-del-vendedor' }));
-    expect(actualizado[0]).toMatchObject({ contact_id: 'contacto-del-vendedor' });
+    expect(actualizados[0]).toMatchObject({ contact_id: 'contacto-del-vendedor' });
   });
 
   it('registra en consola si falla el update de Supabase, sin tumbar la respuesta', async () => {
@@ -304,8 +357,8 @@ describe('POST /api/cotizacion', () => {
     // contacto jamás, porque esa función corta si ya hay un 'borrador'
     // abierto suyo.
     await POST(peticion({ ...valido, borradorId: 'borrador-9' }));
-    expect(actualizado).toHaveLength(2);
-    expect(actualizado[0]).toMatchObject({ estado: 'convertida' });
+    expect(actualizados).toHaveLength(2);
+    expect(actualizados[0]).toMatchObject({ estado: 'convertida' });
   });
 
   it('no toca ningún borrador cuando la cotización no viene de uno', async () => {
@@ -313,15 +366,18 @@ describe('POST /api/cotizacion', () => {
     // sin `borradorId` en el cuerpo, solo debe correr el update final de
     // GoHighLevel — nunca un segundo update de cierre.
     await POST(peticion(valido));
-    expect(actualizado).toHaveLength(1);
+    expect(actualizados).toHaveLength(1);
   });
 
   it('cierra el borrador aunque crearEstimate falle después (el cierre no depende de GoHighLevel)', async () => {
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
     await POST(peticion({ ...valido, borradorId: 'borrador-10' }));
-    expect(actualizado).toHaveLength(2);
-    expect(actualizado[0]).toMatchObject({ estado: 'convertida' });
-    expect(actualizado[1]).toMatchObject({ estado: 'error' });
+    expect(actualizados).toHaveLength(2);
+    expect(actualizados[0]).toMatchObject({ estado: 'convertida' });
+    // El correo sigue en éxito por defecto: el fallo de GoHighLevel queda
+    // registrado en ghl_error, pero no baja el estado a 'error' — la
+    // cotización sí llegó al cliente.
+    expect(actualizados[1]).toMatchObject({ estado: 'enviada', ghl_error: expect.stringContaining('boom') });
   });
 
   it('registra en consola si falla el cierre del borrador, sin tumbar la respuesta', async () => {
@@ -334,5 +390,71 @@ describe('POST /api/cotizacion', () => {
       'fila bloqueada',
     );
     consoleError.mockRestore();
+  });
+
+  // --- Tarea 5: el PDF, el guardado y el correo ---
+
+  it('genera el PDF, lo guarda y manda el correo', async () => {
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+    expect(cuerpo.pdf.ruta).toBe('2026/COT-1-abc.pdf');
+    expect(cuerpo.correo.resendId).toBe('re_1');
+  });
+
+  it('guarda la ruta del PDF y el id de Resend en la fila', async () => {
+    await POST(peticion(valido));
+    const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
+    expect(actualizado.pdf_ruta).toBe('2026/COT-1-abc.pdf');
+    expect(actualizado.resend_id).toBe('re_1');
+    expect(actualizado.enviado_at).toBeTruthy();
+  });
+
+  it('si el correo falla, la cotización queda en error y es recuperable', async () => {
+    const { enviarCotizacion } = await import('@/lib/cotizador/correo');
+    vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+    expect(cuerpo.correo.error).toContain('dominio');
+    const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
+    expect(actualizado.estado).toBe('error');
+  });
+
+  it('si el PDF falla, no intenta mandar un correo sin adjunto', async () => {
+    const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
+    const { enviarCotizacion } = await import('@/lib/cotizador/correo');
+    vi.mocked(renderizarCotizacion).mockRejectedValueOnce(new Error('sin fuentes'));
+    const res = await POST(peticion(valido));
+    expect((await res.json()).ok).toBe(true);
+    expect(enviarCotizacion).not.toHaveBeenCalled();
+  });
+
+  it('si el PDF falla, la respuesta no trae ruta de PDF y el correo queda registrado como error, sin tumbar el endpoint', async () => {
+    const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
+    vi.mocked(renderizarCotizacion).mockRejectedValueOnce(new Error('sin fuentes'));
+    const res = await POST(peticion(valido));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.pdf).toBeNull();
+    expect(cuerpo.correo.error).toBeTruthy();
+    const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
+    expect(actualizado.estado).toBe('error');
+    expect(actualizado.pdf_ruta).toBeUndefined();
+  });
+
+  it('guarda teléfono y dirección del cliente cuando vienen en el envío', async () => {
+    // El esquema los acepta como opcionales (Tarea 5): la fila guarda
+    // exactamente el `cliente` validado, sin recortar estos dos campos.
+    const res = await POST(
+      peticion({
+        ...valido,
+        cliente: { ...valido.cliente, telefono: '+506 8888-8888', direccion: 'Frente al parque, Liberia' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const fila = insertado[insertado.length - 1] as Record<string, unknown>;
+    expect(fila.cliente).toMatchObject({
+      telefono: '+506 8888-8888',
+      direccion: 'Frente al parque, Liberia',
+    });
   });
 });

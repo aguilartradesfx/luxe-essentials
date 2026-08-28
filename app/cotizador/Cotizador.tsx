@@ -15,7 +15,11 @@ const IVA_GENERAL = 0.13;
 // tras clave). Ver Tarea 8.
 type SkuUI = { id: string; nombre: string; familia: string };
 
-type Cliente = { nombre: string; empresa: string; email: string };
+// `telefono` y `direccion` (Tarea 5) son opcionales a propósito: un hotel
+// que cotiza por correo puede no tener todavía una dirección de entrega
+// definida, y bloquear el envío por eso sería estorbar. Cuando existen,
+// salen impresos en el PDF (lib/cotizador/documento.tsx).
+type Cliente = { nombre: string; empresa: string; email: string; telefono: string; direccion: string };
 
 // Lo que deja el agente cuando captura una intención por WhatsApp: quién es
 // el cliente, qué línea le interesa y cuánto pidió, en texto libre. `cliente`
@@ -60,7 +64,7 @@ type Resultado =
   | { ok: true; id: string; ghlEstimateId?: string; ghlError?: string }
   | { ok: false; error: string };
 
-const CLIENTE_VACIO: Cliente = { nombre: '', empresa: '', email: '' };
+const CLIENTE_VACIO: Cliente = { nombre: '', empresa: '', email: '', telefono: '', direccion: '' };
 
 const COTIZACION_VACIA: Cotizacion = {
   lineas: [],
@@ -326,7 +330,15 @@ export default function Cotizador() {
   // pantalla no interpreta "unos 300" por su cuenta.
   function usarBorrador(borrador: Borrador) {
     const c = borrador.cliente ?? {};
-    setCliente({ nombre: textoDe(c.nombre), empresa: textoDe(c.empresa), email: textoDe(c.email) });
+    setCliente({
+      nombre: textoDe(c.nombre),
+      empresa: textoDe(c.empresa),
+      email: textoDe(c.email),
+      // El agente de WhatsApp no captura estos dos: quedan vacíos, igual que
+      // en CLIENTE_VACIO, hasta que el vendedor los complete a mano.
+      telefono: textoDe(c.telefono),
+      direccion: textoDe(c.direccion),
+    });
     setRecordatorio({ producto: textoDe(c.producto), cantidadTexto: textoDe(c.cantidadTexto) });
     // Ronda de correcciones 2 (hallazgo I1): antes esto se tiraba —
     // `borrador.id` y `borrador.contact_id` nunca salían de esta función, así
@@ -389,6 +401,11 @@ export default function Cotizador() {
             nombre: cliente.nombre.trim(),
             empresa: cliente.empresa.trim() || undefined,
             email: cliente.email.trim(),
+            // Opcionales (Tarea 5): `undefined` desaparece al pasar por
+            // `JSON.stringify`, así que enviarlos vacíos no bloquea la
+            // cotización — ver el comentario en `Cliente`, arriba.
+            telefono: cliente.telefono.trim() || undefined,
+            direccion: cliente.direccion.trim() || undefined,
           },
           lineas: entradas,
           tasaIva,
@@ -735,6 +752,25 @@ export default function Cotizador() {
                   aria-label="Correo del cliente"
                   value={cliente.email}
                   onChange={(e) => setCliente((c) => ({ ...c, email: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
+                />
+              </label>
+              <label className="block text-xs text-teal">
+                Teléfono (opcional)
+                <input
+                  type="tel"
+                  aria-label="Teléfono del cliente"
+                  value={cliente.telefono}
+                  onChange={(e) => setCliente((c) => ({ ...c, telefono: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
+                />
+              </label>
+              <label className="block text-xs text-teal">
+                Dirección (opcional)
+                <input
+                  aria-label="Dirección del cliente"
+                  value={cliente.direccion}
+                  onChange={(e) => setCliente((c) => ({ ...c, direccion: e.target.value }))}
                   className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
                 />
               </label>

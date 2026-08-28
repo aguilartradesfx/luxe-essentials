@@ -4,9 +4,18 @@ import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
 import { crearEstimate } from '@/lib/cotizador/ghl';
+import { renderizarCotizacion } from '@/lib/cotizador/documento';
+import { guardarPdf, enlaceFirmado } from '@/lib/cotizador/almacen';
+import { enviarCotizacion } from '@/lib/cotizador/correo';
 import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
+
+// Mismo valor que `DIAS_VIGENCIA` en lib/cotizador/ghl.ts (no exportado de
+// ahí, se duplica acá por la misma razón que las notas de documento.tsx/
+// correo.ts): cuántos días queda vigente el precio cotizado. El PDF y el
+// correo tienen que decir la misma fecha que el Estimate de GoHighLevel.
+const DIAS_VIGENCIA = 30;
 
 // Mismo criterio que app/api/q7m4/route.ts: comparación en tiempo constante.
 function claveValida(recibida: string | null): boolean {
@@ -112,6 +121,72 @@ export async function POST(request: Request) {
     }
   }
 
+  // El `numero` no lo asigna este código: lo pone un trigger en la base
+  // (migración 0010, `cotizaciones_asignar_numero` / `obtener_numero_cotizacion`)
+  // al momento del insert, correlativo por año ("COT-2026-0001", "-0002"…).
+  // El insert de arriba ya hizo `.select().single()`, así que `data.numero`
+  // vuelve con el valor puesto, sin una consulta extra. No se deriva del
+  // `id`: un UUID en el documento que recibe un hotel no es un número de
+  // cotización.
+  const numero: string = data.numero;
+
+  const emitida = new Date();
+  const vence = new Date(emitida);
+  vence.setDate(vence.getDate() + DIAS_VIGENCIA);
+
+  // Enriquecimiento (Tarea 5): la fila ya existe desde el insert de arriba,
+  // así que nada de lo que sigue puede perderla — a lo peor queda marcada
+  // 'error' y recuperable a mano. `renderizarCotizacion` es la única pieza
+  // nueva que sí puede lanzar (guardarPdf/enlaceFirmado/enviarCotizacion
+  // nunca lo hacen), por eso va envuelta en try/catch.
+  let pdfBuffer: Buffer | null = null;
+  try {
+    pdfBuffer = await renderizarCotizacion({ numero, cotizacion, cliente: datos.cliente, emitida, vence });
+  } catch (err) {
+    console.error(
+      '[cotizador] No se pudo generar el PDF de la cotización.',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  let pdfRuta: string | null = null;
+  // Regla que no se negocia: si no hay PDF, no se manda un correo que diga
+  // "le adjunto la cotización" sin adjunto — eso es peor que no mandar nada.
+  let correoResultado: { ok: true; resendId: string } | { ok: false; error: string } = {
+    ok: false,
+    error: 'No se generó el PDF: no se intentó enviar el correo.',
+  };
+
+  if (pdfBuffer) {
+    const guardado = await guardarPdf({ id: data.id, numero, pdf: pdfBuffer }, supabaseAdmin());
+    if (!guardado.ok) {
+      console.error('[cotizador] No se pudo guardar el PDF en el almacenamiento.', guardado.error);
+      correoResultado = { ok: false, error: guardado.error };
+    } else {
+      pdfRuta = guardado.ruta;
+      const firmado = await enlaceFirmado(guardado.ruta, supabaseAdmin());
+      if (!firmado.ok) {
+        console.error('[cotizador] No se pudo firmar el enlace del PDF.', firmado.error);
+      }
+      correoResultado = await enviarCotizacion(
+        {
+          numero,
+          cliente: datos.cliente,
+          total: cotizacion.total,
+          vence,
+          pdf: pdfBuffer,
+          // El adjunto es lo que de verdad importa; sin enlace firmado el
+          // correo igual sale, solo que sin el enlace de respaldo.
+          enlace: firmado.ok ? firmado.url : '',
+        },
+        {
+          apiKey: process.env.RESEND_API_KEY ?? '',
+          remitente: process.env.LUXE_CORREO_REMITENTE ?? '',
+        },
+      );
+    }
+  }
+
   const ghl = await crearEstimate(
     { cotizacion, cliente: datos.cliente, contactId: datos.contactId },
     {
@@ -126,45 +201,43 @@ export async function POST(request: Request) {
   // otro modo se pierde sin dejar rastro en la fila.
   const contactId = ghl.contactId ?? datos.contactId ?? null;
 
-  // El registro ya existe pase lo que pase. Aquí solo se anota cómo le fue al
-  // CRM: una cotización con ghl_error es recuperable, igual que un lead.
+  // El registro ya existe pase lo que pase. Un solo update junta cómo le fue
+  // a GoHighLevel (Tarea 7) y cómo le fue al envío real al cliente (PDF +
+  // correo, Tarea 5). El `estado` sigue al correo, no a GoHighLevel:
+  // restricción global del plan — "ningún fallo de GoHighLevel invalida una
+  // cotización que ya salió al cliente". 'enviada' ahora es real: antes
+  // (rondas de correcciones 1 y 2) se quedaba en 'creada' porque
+  // `crearEstimate` nunca llama al envío de GoHighLevel; el envío real es
+  // este correo con el PDF de Luxe adjunto.
   const { error: errorActualizacion } = await supabaseAdmin()
     .from('cotizaciones')
-    .update(
-      // `updated_at` va explícito: la columna tiene `default now()` pero no hay
-      // trigger, así que sin esto se quedaría siempre igual a `created_at` y la
-      // auditoría diría que la cotización nunca cambió de estado.
-      // Ronda de correcciones 2 (hallazgo C1): 'creada', no 'enviada'.
-      // `crearEstimate` (lib/cotizador/ghl.ts) nunca llama al endpoint de
-      // envío de GoHighLevel — el Estimate queda en `draft` ahí adentro
-      // hasta que alguien lo abra y lo mande a mano. 'enviada' se queda en
-      // el check de la tabla para cuando ese envío exista de verdad.
-      ghl.ok
-        ? {
-            estado: 'creada',
-            ghl_estimate_id: ghl.estimateId,
-            ghl_error: ghl.opportunityError ?? null,
-            contact_id: contactId,
-            updated_at: new Date().toISOString(),
-          }
-        : {
-            estado: 'error',
-            ghl_error: ghl.error,
-            contact_id: contactId,
-            updated_at: new Date().toISOString(),
-          },
-    )
+    .update({
+      // `updated_at` va explícito: la columna tiene `default now()` pero no
+      // hay trigger, así que sin esto se quedaría siempre igual a
+      // `created_at` y la auditoría diría que la cotización nunca cambió de
+      // estado.
+      updated_at: new Date().toISOString(),
+      contact_id: contactId,
+      estado: correoResultado.ok ? 'enviada' : 'error',
+      ...(ghl.ok
+        ? { ghl_estimate_id: ghl.estimateId, ghl_error: ghl.opportunityError ?? null }
+        : { ghl_error: ghl.error }),
+      ...(pdfRuta ? { pdf_ruta: pdfRuta } : {}),
+      ...(correoResultado.ok
+        ? { enviado_at: new Date().toISOString(), resend_id: correoResultado.resendId }
+        : {}),
+    })
     .eq('id', data.id);
 
   if (errorActualizacion) {
-    // El Estimate (y la Opportunity) ya se gestionaron en GoHighLevel en este
-    // punto — esto no invalida ese resultado. Pero si esto falla en
-    // silencio, la fila queda parada en 'borrador' sin `ghl_estimate_id`
-    // pese a que el Estimate sí existe: el mismo huérfano que "primero
-    // Supabase" evita, corrido un paso más adelante. Se registra para que
-    // sea recuperable a mano.
+    // El Estimate (y la Opportunity), el PDF y el correo ya se gestionaron
+    // en este punto — esto no invalida ese resultado. Pero si esto falla en
+    // silencio, la fila queda parada en 'borrador' sin nada de lo de arriba
+    // pese a que sí existe: el mismo huérfano que "primero Supabase" evita,
+    // corrido un paso más adelante. Se registra para que sea recuperable a
+    // mano.
     console.error(
-      '[cotizador] El Estimate se gestionó en GoHighLevel pero no se pudo actualizar la fila.',
+      '[cotizador] El envío se procesó pero no se pudo actualizar la fila.',
       errorActualizacion.message,
     );
   }
@@ -174,5 +247,7 @@ export async function POST(request: Request) {
     id: data.id,
     cotizacion,
     ghl: ghl.ok ? { estimateId: ghl.estimateId } : { error: ghl.error },
+    pdf: pdfRuta ? { ruta: pdfRuta } : null,
+    correo: correoResultado.ok ? { resendId: correoResultado.resendId } : { error: correoResultado.error },
   });
 }

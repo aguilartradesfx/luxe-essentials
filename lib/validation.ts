@@ -25,6 +25,12 @@ export const cotizacionSchema = z.object({
     nombre: z.string().trim().min(1, 'Escribe el nombre del cliente.').max(120, 'Escribe un nombre más corto.'),
     empresa: z.string().trim().max(120, 'Escribe un nombre de empresa más corto.').optional(),
     email: z.string().trim().pipe(z.email('Escribe un correo válido.')),
+    // Opcionales a propósito (Tarea 5): un hotel que cotiza por correo puede
+    // no tener todavía una dirección de entrega definida, y bloquear el
+    // envío por eso sería estorbar. Van impresos en el PDF cuando existen
+    // (lib/cotizador/documento.tsx).
+    telefono: z.string().trim().max(40, 'Escribe un teléfono más corto.').optional(),
+    direccion: z.string().trim().max(200, 'Escribe una dirección más corta.').optional(),
   }, { message: 'Los datos del cliente deben ir en un objeto.' }),
   lineas: z
     .array(

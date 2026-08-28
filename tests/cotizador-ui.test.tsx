@@ -163,9 +163,14 @@ async function agregar(usuario: ReturnType<typeof userEvent.setup>, texto: strin
   await usuario.click(screen.getByRole('button', { name: /agregar/i }));
 }
 
-async function llenarCliente(usuario: ReturnType<typeof userEvent.setup>, { nombre, email }: { nombre?: string; email?: string }) {
+async function llenarCliente(
+  usuario: ReturnType<typeof userEvent.setup>,
+  { nombre, email, telefono, direccion }: { nombre?: string; email?: string; telefono?: string; direccion?: string },
+) {
   if (nombre !== undefined) await usuario.type(screen.getByLabelText(/nombre del cliente/i), nombre);
   if (email !== undefined) await usuario.type(screen.getByLabelText(/correo del cliente/i), email);
+  if (telefono !== undefined) await usuario.type(screen.getByLabelText(/teléfono del cliente/i), telefono);
+  if (direccion !== undefined) await usuario.type(screen.getByLabelText(/dirección del cliente/i), direccion);
 }
 
 describe('Cotizador', () => {
@@ -795,5 +800,66 @@ describe('Borradores pendientes (Tarea 10)', () => {
 
     expect(screen.queryByText(/carlos rojas/i)).not.toBeInTheDocument();
     expect(screen.getByText('No hay borradores pendientes.')).toBeInTheDocument();
+  });
+
+  // --- Tarea 5: teléfono y dirección del cliente ---
+
+  it('manda teléfono y dirección en el cuerpo del envío cuando se llenan', async () => {
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, {
+      nombre: 'Ana Pérez',
+      email: 'ana@empresa.com',
+      telefono: '+506 8888-8888',
+      direccion: 'Frente al parque, Liberia',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
+    expect(cuerpo.cliente.telefono).toBe('+506 8888-8888');
+    expect(cuerpo.cliente.direccion).toBe('Frente al parque, Liberia');
+  });
+
+  it('la cotización se puede enviar sin teléfono ni dirección (son opcionales)', async () => {
+    // Un hotel que cotiza por correo puede no tener todavía una dirección de
+    // entrega definida: bloquear el envío por eso sería estorbar.
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /crear en gohighlevel/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /crear en gohighlevel/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/cotización guardada/i)).toBeInTheDocument();
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
+    // `undefined` desaparece al pasar por `JSON.stringify`: no llegan como
+    // strings vacíos, sencillamente no viajan.
+    expect('telefono' in cuerpo.cliente).toBe(false);
+    expect('direccion' in cuerpo.cliente).toBe(false);
   });
 });
