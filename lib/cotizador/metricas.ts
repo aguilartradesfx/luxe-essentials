@@ -20,11 +20,24 @@ const DIA_MS = 24 * 60 * 60 * 1000;
 const VENCE_DIAS = 30;
 const AVISO_DIAS = 7;
 
+// La tabla acepta siete estados, pero solo cinco son cotizaciones de verdad
+// con montos y líneas confiables. `borrador` no tiene ni líneas ni totales
+// (lleva `lineas: []`, `totales: {}`) y `convertida` es la fila fantasma que
+// deja atrás un borrador cuando el vendedor la convierte en una cotización
+// real —la fila nueva es la que cuenta—. Si cualquiera de las dos entrara a
+// las métricas de dinero o producto, un mismo negocio se contaría dos veces.
+const ESTADOS_REALES = new Set(['creada', 'enviada', 'error', 'ganada', 'perdida']);
+
 export type Metricas = {
   sinRespuesta: {
     cantidad: number;
     monto: number;
+    // Vencen dentro de los próximos 7 días (incluido el día del vencimiento):
+    // es la llamada de hoy.
     porVencer: number;
+    // Ya pasaron los 30 días: ese precio no corre más, hay que volver a
+    // cotizar, no llamar a preguntar.
+    vencidas: number;
     cotizaciones: FilaCotizacion[];
   };
   ganado: {
@@ -50,14 +63,19 @@ export type Metricas = {
   fallidas: number;
 };
 
+// Diferencia en días sin redondear — el redondeo pasa una sola vez, al
+// final, sobre el promedio. Redondear cada fila y después promediar acumula
+// error: tres cierres de 0,4 / 1,4 / 0,4 días dan promedio real 0,73 (→ 1),
+// pero redondeados fila por fila dan 0 / 1 / 0 → promedio 0,33 (→ 0).
 function diasEntre(desde: string, hasta: string): number {
-  return Math.round((new Date(hasta).getTime() - new Date(desde).getTime()) / DIA_MS);
+  return (new Date(hasta).getTime() - new Date(desde).getTime()) / DIA_MS;
 }
 
 export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
   const sinRespuestaFilas: FilaCotizacion[] = [];
   let sinRespuestaMonto = 0;
   let porVencer = 0;
+  let vencidas = 0;
 
   let ganadoCantidad = 0;
   let ganadoMonto = 0;
@@ -79,20 +97,24 @@ export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
   const productosPorNombre = new Map<string, { nombre: string; unidades: number; monto: number }>();
 
   for (const fila of filas) {
-    // Cada fila cuenta en exactamente una categoría de estado.
+    // `borrador` y `convertida` quedan fuera de todo: ni líneas ni totales
+    // confiables, y contarlas duplicaría el negocio que ya cuenta la fila
+    // real que las reemplaza.
+    if (!ESTADOS_REALES.has(fila.estado)) continue;
+
+    // Cada fila cuenta en exactamente un estado.
     if (fila.estado === 'error') {
       fallidas += 1;
-      continue;
-    }
-
-    if ((fila.estado === 'creada' || fila.estado === 'enviada') && fila.cerrada_at === null) {
+    } else if ((fila.estado === 'creada' || fila.estado === 'enviada') && fila.cerrada_at === null) {
       sinRespuestaFilas.push(fila);
       sinRespuestaMonto += fila.totales.total;
 
       if (fila.enviado_at !== null) {
         const vence = new Date(fila.enviado_at).getTime() + VENCE_DIAS * DIA_MS;
         const diasHastaVencer = Math.round((vence - hoy.getTime()) / DIA_MS);
-        if (diasHastaVencer <= AVISO_DIAS) {
+        if (diasHastaVencer < 0) {
+          vencidas += 1;
+        } else if (diasHastaVencer <= AVISO_DIAS) {
           porVencer += 1;
         }
       }
@@ -110,11 +132,10 @@ export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
       }
     }
 
-    // Descuento, productos, línea y origen se acumulan sobre toda fila que
-    // no sea una fallida (ya se descartó arriba con el `continue`).
-    descuentoMonto += fila.totales.ahorro;
-    brutoMonto += fila.totales.subtotal + fila.totales.ahorro;
-
+    // Productos, reparto y origen sí incluyen las fallidas: la cotización
+    // se armó y se guardó, lo único que falló fue la entrega (el PDF o el
+    // correo). Los números están intactos y le sirven a producción y a la
+    // pregunta de si el agente aporta cotizaciones reales.
     for (const linea of fila.lineas) {
       const acumulado = productosPorNombre.get(linea.nombre) ?? {
         nombre: linea.nombre,
@@ -133,6 +154,13 @@ export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
     }
 
     porOrigen[fila.origen] = (porOrigen[fila.origen] ?? 0) + 1;
+
+    // El descuento sí excluye las fallidas: mide margen *entregado* a un
+    // cliente, y a quien nunca recibió la cotización no se le otorgó nada.
+    if (fila.estado !== 'error') {
+      descuentoMonto += fila.totales.ahorro;
+      brutoMonto += fila.totales.subtotal + fila.totales.ahorro;
+    }
   }
 
   const productos = [...productosPorNombre.values()].sort((a, b) => b.monto - a.monto);
@@ -142,6 +170,7 @@ export function calcularMetricas(filas: FilaCotizacion[], hoy: Date): Metricas {
       cantidad: sinRespuestaFilas.length,
       monto: Math.round(sinRespuestaMonto),
       porVencer,
+      vencidas,
       cotizaciones: sinRespuestaFilas,
     },
     ganado: {
