@@ -60,8 +60,21 @@ function textoDe(valor: unknown): string {
 // el campo para escribir uno nuevo forzaría a mostrar "0" en vez de vacío.
 type LineaUI = { skuId: string; cantidadTexto: string };
 
+// Ronda de correcciones 1 (Tarea 5): antes esto solo cargaba el resultado de
+// GoHighLevel — la pantalla no tenía forma de saber si el correo con el PDF
+// había salido. Ahora la respuesta del servidor trae `pdf`/`correo`
+// (app/api/cotizacion/route.ts) y el panel de resultado los lee para decir
+// la verdad: a quién le llegó, o por qué no le llegó.
 type Resultado =
-  | { ok: true; id: string; ghlEstimateId?: string; ghlError?: string }
+  | {
+      ok: true;
+      id: string;
+      numero?: string;
+      pdf: { ruta: string } | null;
+      correo: { resendId: string } | { error: string };
+      ghlEstimateId?: string;
+      ghlError?: string;
+    }
   | { ok: false; error: string };
 
 const CLIENTE_VACIO: Cliente = { nombre: '', empresa: '', email: '', telefono: '', direccion: '' };
@@ -155,14 +168,13 @@ export default function Cotizador() {
   const [lineas, setLineas] = useState<LineaUI[]>([]);
   const [tasaIva, setTasaIva] = useState(IVA_GENERAL);
   const [bordadoEspecial, setBordadoEspecial] = useState(false);
-  // Renombrado en la ronda de correcciones "final-fix-C": el botón nunca
-  // envía la cotización al cliente (ver el comentario grande sobre
-  // `crearEstimate` en lib/cotizador/ghl.ts) — lo único que esta pantalla
-  // hace es crear el Estimate en GoHighLevel en estado `draft`. Llamar a
-  // este estado `enviando`/`enviado` invitaba a pensar que sí se mandaba
-  // algo hacia afuera. `creando`/`creado` describe lo que de verdad pasa: la
-  // petición a `/api/cotizacion` está en vuelo, o ya terminó de crear la
-  // fila y el Estimate.
+  // Nombres de variable sin cambiar desde la ronda "final-fix-C" (cuando el
+  // botón no enviaba nada, solo creaba un Estimate en borrador), pero el
+  // texto que ve el vendedor sí cambió en la Tarea 5, ronda de correcciones
+  // 1: ahora `crear()` sí manda la cotización de verdad (correo con el PDF
+  // adjunto), así que el JSX del botón usa "Cotizar y enviar"/"Enviando…" —
+  // ver más abajo. `creando`/`creado` siguen describiendo el estado de la
+  // petición a `/api/cotizacion`, no el rótulo visible.
   const [creando, setCreando] = useState(false);
   // Distinto de `creando`: `creando` es "la petición está en vuelo",
   // `creado` es "ya se guardó con éxito". Sin este segundo estado, tras un
@@ -428,6 +440,11 @@ export default function Cotizador() {
       setResultado({
         ok: true,
         id: datos.id,
+        numero: datos.numero,
+        // Defensivos: si el servidor alguna vez respondiera sin estos dos
+        // campos, la pantalla no debe reventar — solo perder el detalle.
+        pdf: datos.pdf ?? null,
+        correo: datos.correo ?? { error: 'El servidor no informó el resultado del envío.' },
         ghlEstimateId: datos.ghl?.estimateId,
         ghlError: datos.ghl?.error,
       });
@@ -782,15 +799,17 @@ export default function Cotizador() {
               disabled={!puedeCrear}
               className="mt-4 w-full rounded-lg bg-navy px-4 py-2.5 text-sm font-medium text-beige hover:bg-teal disabled:opacity-40"
             >
-              {/* Ronda de correcciones "final-fix-C": "Enviar cotización" ya era falso
-                  ANTES del clic, no solo en el mensaje de después — el vendedor hacía
-                  clic creyendo que mandaba la cotización al cliente, y solo se enteraba
-                  de que no fue así al leer el resultado. `crearEstimate`
-                  (lib/cotizador/ghl.ts) nunca llama al endpoint de envío de
-                  GoHighLevel: solo crea el Estimate ahí, en borrador. El texto del botón
-                  —en los tres estados— tiene que decir eso desde antes del clic; el
-                  detalle de qué falta hacer sigue yendo en el mensaje de abajo. */}
-              {creando ? 'Creando…' : creado ? 'Cotización creada' : 'Crear en GoHighLevel'}
+              {/* Ronda de correcciones 1 (Tarea 5): "Cotizar y enviar" vuelve a ser
+                  cierto — el clic dispara `crear()`, que guarda la fila, genera el PDF
+                  y manda el correo con el adjunto al hotel en la misma petición. Antes
+                  ("final-fix-C") el botón tuvo que dejar de decir "Enviar cotización"
+                  porque `crearEstimate` (lib/cotizador/ghl.ts) solo creaba un Estimate
+                  en borrador — nada salía de verdad. Ahora sí sale, así que el texto
+                  puede volver a prometerlo, en los tres estados: reposo, en vuelo y
+                  terminado. El detalle de qué salió (o no) vive en el mensaje de abajo,
+                  no en el botón — un fallo del correo no debe convertir "guardada" en
+                  mentira. */}
+              {creando ? 'Enviando…' : creado ? 'Cotización guardada' : 'Cotizar y enviar'}
             </button>
 
             {creado && (
@@ -805,20 +824,36 @@ export default function Cotizador() {
 
             {resultado && resultado.ok && (
               <div className="mt-3 rounded-lg bg-[color:var(--carta-border)]/30 px-3 py-2 text-xs text-navy">
-                <p>Cotización guardada · {resultado.id}</p>
-                {/* Ronda de correcciones 2 (hallazgo C1): antes decía "enviada en
-                    GoHighLevel", pero crearEstimate solo la crea ahí en borrador — nunca
-                    la manda. El vendedor tiene que abrirla en GoHighLevel y mandarla él
-                    mismo desde ahí; sin esta línea, nadie se entera de que falta ese
-                    paso y la cotización se queda parada sin que el hotel la reciba. */}
-                {resultado.ghlEstimateId ? (
-                  <p className="mt-1">
-                    Creada en GoHighLevel ({resultado.ghlEstimateId}) — falta enviarla al cliente.
-                    Este cotizador todavía no la manda solo: abrila en GoHighLevel y envíala
-                    vos desde ahí.
+                {/* Ronda de correcciones 1 (Tarea 5): antes esta caja solo decía
+                    "Cotización guardada" y, aparte, "falta enviarla al cliente — abrila
+                    en GoHighLevel y envíala vos desde ahí". Eso invitaba a que el
+                    vendedor mandara la misma cotización dos veces, en formatos
+                    distintos: una vez sola (el correo con el PDF de Luxe, automático) y
+                    otra a mano desde GoHighLevel. Ahora el mensaje principal lee el
+                    resultado real del correo (`resultado.correo`) y el del PDF
+                    (`resultado.pdf`), en vez de asumir que "guardada" alcanza. */}
+                {'resendId' in resultado.correo ? (
+                  <p>
+                    Cotización {resultado.numero ? `${resultado.numero} ` : ''}
+                    enviada a <strong>{cliente.email.trim()}</strong>, con el PDF adjunto.
                   </p>
+                ) : resultado.pdf ? (
+                  <p className="rounded-lg bg-red-50 px-2 py-1.5 text-red-800">
+                    La cotización se guardó, pero el correo no salió: {resultado.correo.error}.
+                    El PDF quedó guardado — se puede reenviar a mano.
+                  </p>
+                ) : (
+                  <p className="rounded-lg bg-red-50 px-2 py-1.5 text-red-800">
+                    No se pudo generar el PDF: no se envió nada al cliente. La cotización
+                    quedó guardada y es recuperable.
+                  </p>
+                )}
+                {/* GoHighLevel queda como una línea secundaria, informativa — ya no es
+                    el envío real, así que no lleva instrucciones de mandar nada a mano. */}
+                {resultado.ghlEstimateId ? (
+                  <p className="mt-1 text-teal">GoHighLevel: Estimate {resultado.ghlEstimateId} creado.</p>
                 ) : resultado.ghlError ? (
-                  <p className="mt-1">GoHighLevel falló: {resultado.ghlError}</p>
+                  <p className="mt-1 text-teal">GoHighLevel: {resultado.ghlError}</p>
                 ) : null}
               </div>
             )}

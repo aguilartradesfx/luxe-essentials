@@ -441,6 +441,36 @@ describe('POST /api/cotizacion', () => {
     expect(actualizado.pdf_ruta).toBeUndefined();
   });
 
+  it('usa el numero real de la fila (el que puso el trigger), no uno derivado del id', async () => {
+    // El mock del insert (arriba) devuelve `id: 'cot-1'` y
+    // `numero: 'COT-2026-0001'` — deliberadamente distintos, para que un
+    // mutante que derive el número del id (`` `COT-2026-${data.id}` `` →
+    // 'COT-2026-cot-1') no pueda esconderse detrás de una coincidencia. Esta
+    // es exactamente la regla que el brief dedica un párrafo a prohibir.
+    await POST(peticion(valido));
+    expect(vi.mocked(renderizarCotizacion).mock.calls[0][0]).toMatchObject({ numero: 'COT-2026-0001' });
+    expect(vi.mocked(guardarPdf).mock.calls[0][0]).toMatchObject({ numero: 'COT-2026-0001' });
+    expect(vi.mocked(enviarCotizacion).mock.calls[0][0]).toMatchObject({ numero: 'COT-2026-0001' });
+    expect(vi.mocked(renderizarCotizacion).mock.calls[0][0].numero).not.toBe('COT-2026-cot-1');
+  });
+
+  it('si guardarPdf falla, no intenta mandar el correo (el adjunto nunca se guardó) y la respuesta no trae ruta de PDF', async () => {
+    // Distinto del caso "el PDF no se generó" (renderizarCotizacion falla):
+    // acá el PDF sí existe en memoria, pero no llegó a Storage. Sin esto, el
+    // correo saldría con un adjunto que nunca quedó guardado del lado de
+    // Luxe — el enlace firmado del correo apuntaría a un archivo que no
+    // existe.
+    vi.mocked(guardarPdf).mockResolvedValueOnce({ ok: false, error: 'bucket lleno' });
+    const res = await POST(peticion(valido));
+    const cuerpo = await res.json();
+    expect(cuerpo.pdf).toBeNull();
+    expect(cuerpo.correo.error).toContain('bucket lleno');
+    expect(enviarCotizacion).not.toHaveBeenCalled();
+    const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
+    expect(actualizado.estado).toBe('error');
+    expect(actualizado.pdf_ruta).toBeUndefined();
+  });
+
   it('guarda teléfono y dirección del cliente cuando vienen en el envío', async () => {
     // El esquema los acepta como opcionales (Tarea 5): la fila guarda
     // exactamente el `cliente` validado, sin recortar estos dos campos.

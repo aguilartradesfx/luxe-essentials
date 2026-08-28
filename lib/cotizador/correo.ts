@@ -46,6 +46,10 @@ function cuerpoHtml(p: ParamsCorreo): string {
   const primerNombre = p.cliente.nombre.trim().split(/\s+/)[0] ?? p.cliente.nombre;
   const destino = p.cliente.empresa ? ` para ${p.cliente.empresa}` : '';
 
+  // Ronda de correcciones 1 (Tarea 5): cuando `enlaceFirmado` falla, la ruta
+  // manda `enlace: ''` para no bloquear el correo por eso — pero antes este
+  // párrafo se imprimía igual, y el hotel leía "puede abrirla acá:" seguido
+  // de un enlace vacío. Sin enlace, el párrafo entero se omite.
   return `
 <div style="font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.6; color: #20211f; max-width: 560px; margin: 0 auto;">
   <p style="margin: 0 0 16px 0;">Hola ${primerNombre},</p>
@@ -57,10 +61,12 @@ function cuerpoHtml(p: ParamsCorreo): string {
     <span style="font-size: 20px; font-weight: bold; color: #93712f;">${colones(p.total)}</span>,
     válido hasta el <strong>${formatearVigencia(p.vence)}</strong>.
   </p>
-  <p style="margin: 0 0 20px 0;">
+  ${p.enlace
+    ? `<p style="margin: 0 0 20px 0;">
     Si prefiere verla desde el navegador en vez del adjunto, puede abrirla acá:<br />
     <a href="${p.enlace}" style="color: #93712f;">${p.enlace}</a>
-  </p>
+  </p>`
+    : ''}
   <p style="margin: 0;">
     Saludos,<br />
     Luxe Essentials

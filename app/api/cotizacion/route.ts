@@ -121,6 +121,30 @@ export async function POST(request: Request) {
     }
   }
 
+  // GoHighLevel primero (Tarea 7), fuera del camino crítico del envío real
+  // al cliente. Ronda de correcciones 1 (Tarea 5): antes esta llamada corría
+  // DESPUÉS de mandar el correo — hasta cuatro peticiones HTTP a GoHighLevel,
+  // sin `AbortSignal` ni timeout propio, entre "el hotel ya tiene el PDF" y
+  // "la fila quedó registrada". Si `crearEstimate` se colgaba y la función
+  // expiraba (la ruta no declara `maxDuration`), el único `update` de abajo
+  // nunca corría: la fila se quedaba en 'borrador', sin `pdf_ruta` ni
+  // `resend_id`, candidata a que algún reintento futuro reenviara al hotel
+  // una cotización que ya recibió. Moviendo GoHighLevel antes, un colgado
+  // ahí ya no puede tumbar el registro de un correo que sí salió.
+  const ghl = await crearEstimate(
+    { cotizacion, cliente: datos.cliente, contactId: datos.contactId },
+    {
+      apiKey: process.env.LUXE_GHL_API_KEY ?? '',
+      locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
+    },
+  );
+
+  // El contactId se guarda aunque GoHighLevel haya fallado después: si el
+  // contacto se llegó a resolver (recibido del vendedor, o recién creado por
+  // `crearEstimate`), es un dato gratis que ya tenemos en la mano y que de
+  // otro modo se pierde sin dejar rastro en la fila.
+  const contactId = ghl.contactId ?? datos.contactId ?? null;
+
   // El `numero` no lo asigna este código: lo pone un trigger en la base
   // (migración 0010, `cotizaciones_asignar_numero` / `obtener_numero_cotizacion`)
   // al momento del insert, correlativo por año ("COT-2026-0001", "-0002"…).
@@ -176,7 +200,8 @@ export async function POST(request: Request) {
           vence,
           pdf: pdfBuffer,
           // El adjunto es lo que de verdad importa; sin enlace firmado el
-          // correo igual sale, solo que sin el enlace de respaldo.
+          // correo igual sale, solo que `cuerpoHtml` (lib/cotizador/correo.ts)
+          // omite el párrafo del enlace en vez de mandar uno vacío.
           enlace: firmado.ok ? firmado.url : '',
         },
         {
@@ -186,20 +211,6 @@ export async function POST(request: Request) {
       );
     }
   }
-
-  const ghl = await crearEstimate(
-    { cotizacion, cliente: datos.cliente, contactId: datos.contactId },
-    {
-      apiKey: process.env.LUXE_GHL_API_KEY ?? '',
-      locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
-    },
-  );
-
-  // El contactId se guarda aunque GoHighLevel haya fallado después: si el
-  // contacto se llegó a resolver (recibido del vendedor, o recién creado por
-  // `crearEstimate`), es un dato gratis que ya tenemos en la mano y que de
-  // otro modo se pierde sin dejar rastro en la fila.
-  const contactId = ghl.contactId ?? datos.contactId ?? null;
 
   // El registro ya existe pase lo que pase. Un solo update junta cómo le fue
   // a GoHighLevel (Tarea 7) y cómo le fue al envío real al cliente (PDF +
@@ -245,6 +256,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     id: data.id,
+    numero,
     cotizacion,
     ghl: ghl.ok ? { estimateId: ghl.estimateId } : { error: ghl.error },
     pdf: pdfRuta ? { ruta: pdfRuta } : null,

@@ -48,6 +48,19 @@ describe('enviarCotizacion', () => {
     expect(html).toMatch(/26.*setiembre|26\/09|2026-09-26/);
   });
 
+  it('si no hay enlace firmado, omite el párrafo del enlace en vez de mandar uno vacío', async () => {
+    // Ronda de correcciones 1 (Tarea 5): cuando `enlaceFirmado` falla, la
+    // ruta manda `enlace: ''` para no bloquear el correo por eso. Antes el
+    // párrafo "puede abrirla acá" se imprimía igual, con un `href=""` y un
+    // texto de enlace vacío — un hotel real vería una promesa rota en su
+    // propio correo.
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarCotizacion({ ...params, enlace: '' }, { ...deps, fetchImpl });
+    const { html } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(html).not.toMatch(/abrirla ac/i);
+    expect(html).not.toContain('href=""');
+  });
+
   it('nunca menciona método de pago', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
     await enviarCotizacion(params, { ...deps, fetchImpl });
