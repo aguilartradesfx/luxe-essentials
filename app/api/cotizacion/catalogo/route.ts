@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
+import { sesionValida } from '@/lib/sesion';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
 
 export const runtime = 'nodejs';
@@ -27,14 +28,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  // La clave se revisa antes de tocar el resto del cuerpo: no hay esquema que
-  // validar aquí (solo se espera `clave`), pero el orden se mantiene igual
-  // que en los otros endpoints de este directorio por consistencia.
+  // La clave (o la sesión) se revisa antes de tocar el resto del cuerpo: no
+  // hay esquema que validar aquí (solo se espera `clave`), pero el orden se
+  // mantiene igual que en los otros endpoints de este directorio por
+  // consistencia. Ruta de solo lectura: no exige el token anti-CSRF, ese
+  // requisito es de las que escriben (app/api/cotizacion/route.ts).
   const claveRecibida =
     typeof crudo === 'object' && crudo !== null && 'clave' in crudo
       ? (crudo as { clave?: unknown }).clave
       : undefined;
-  if (!claveValida(typeof claveRecibida === 'string' ? claveRecibida : null)) {
+  if (!claveValida(typeof claveRecibida === 'string' ? claveRecibida : null) && !sesionValida(request)) {
     return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
   }
 

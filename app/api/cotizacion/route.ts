@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
+import { sesionValida, csrfValido } from '@/lib/sesion';
 import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
@@ -34,15 +35,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  // La clave se revisa antes que el esquema: si alguien sin credenciales manda
-  // un cuerpo mal formado, no debe recibir mensajes de validación que revelen
-  // la forma esperada del cuerpo. Mismo orden que app/api/q7m4/route.ts.
+  // La clave (o la sesión) se revisa antes que el esquema: si alguien sin
+  // credenciales manda un cuerpo mal formado, no debe recibir mensajes de
+  // validación que revelen la forma esperada del cuerpo. Mismo orden que
+  // app/api/q7m4/route.ts.
   const claveRecibida =
     typeof crudo === 'object' && crudo !== null && 'clave' in crudo
       ? (crudo as { clave?: unknown }).clave
       : undefined;
-  if (!claveValida(typeof claveRecibida === 'string' ? claveRecibida : null)) {
+  const porClave = claveValida(typeof claveRecibida === 'string' ? claveRecibida : null);
+  // La sesión por cookie (Tarea 6) es la segunda vía: no reemplaza la clave
+  // en el cuerpo, se suma para el panel embebido en GoHighLevel.
+  const porSesion = !porClave && sesionValida(request);
+  if (!porClave && !porSesion) {
     return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
+  }
+  // Esta ruta escribe (inserta la cotización): entrar por cookie exige el
+  // token anti-CSRF en la cabecera, porque `SameSite=None` hace que la
+  // cookie viaje sola en peticiones que origina cualquier otro sitio que el
+  // vendedor visite. Entrar por clave en el cuerpo no lo necesita — un sitio
+  // ajeno no conoce la clave.
+  if (porSesion) {
+    const csrfRecibido = request.headers.get('x-csrf-token') ?? undefined;
+    if (!csrfValido(request, csrfRecibido)) {
+      return NextResponse.json({ ok: false, error: 'Token anti-CSRF inválido.' }, { status: 401 });
+    }
   }
 
   const parseado = cotizacionSchema.safeParse(crudo);

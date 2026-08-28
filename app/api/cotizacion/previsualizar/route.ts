@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
+import { sesionValida } from '@/lib/sesion';
 import { previsualizarSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
@@ -28,14 +29,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  // La clave se revisa antes que el esquema: mismo motivo que en
-  // app/api/cotizacion/route.ts — no filtrar la forma del cuerpo a quien no
-  // tiene credencial.
+  // La clave (o la sesión) se revisa antes que el esquema: mismo motivo que
+  // en app/api/cotizacion/route.ts — no filtrar la forma del cuerpo a quien
+  // no tiene credencial. Ruta de solo lectura: no persiste nada, no exige el
+  // token anti-CSRF.
   const claveRecibida =
     typeof crudo === 'object' && crudo !== null && 'clave' in crudo
       ? (crudo as { clave?: unknown }).clave
       : undefined;
-  if (!claveValida(typeof claveRecibida === 'string' ? claveRecibida : null)) {
+  if (!claveValida(typeof claveRecibida === 'string' ? claveRecibida : null) && !sesionValida(request)) {
     return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
   }
 

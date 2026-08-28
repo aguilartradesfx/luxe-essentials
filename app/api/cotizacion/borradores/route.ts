@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
+import { sesionValida } from '@/lib/sesion';
 import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
@@ -24,7 +25,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  if (!claveValida(cuerpo.clave)) {
+  // Ruta de solo lectura (SELECT): la sesión por cookie basta, sin exigir el
+  // token anti-CSRF que sí piden las que escriben.
+  if (!claveValida(cuerpo.clave) && !sesionValida(request)) {
     return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
   }
 
