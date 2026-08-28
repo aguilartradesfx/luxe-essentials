@@ -1,0 +1,65 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
+import { supabaseAdmin } from '@/lib/supabase/server';
+
+export const runtime = 'nodejs';
+
+const MAX_LIMITE = 200;
+
+const listadoSchema = z.object({
+  clave: z.string().optional(),
+  estado: z.string().optional(),
+  limite: z.number().int('El límite debe ser un número entero.').positive('El límite debe ser mayor que cero.').optional(),
+});
+
+// Columnas del listado: deliberadamente SIN `lineas`. La pantalla muestra
+// cliente, monto, fecha y estado — no necesita el detalle de cada producto
+// de cada fila, y son muchos datos para traer en cada carga. `contact_id` sí
+// viaja: la pantalla lo usa para enlazar a la ficha del contacto en
+// GoHighLevel.
+const COLUMNAS =
+  'id, numero, created_at, updated_at, estado, origen, contact_id, cliente, totales, ' +
+  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error';
+
+export async function POST(request: Request) {
+  let crudo: unknown;
+  try {
+    crudo = await request.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
+  }
+
+  // La credencial se revisa antes que el esquema: mismo motivo que en el
+  // resto de app/api/cotizacion/* — no filtrar la forma del cuerpo a quien
+  // no tiene credencial. Ruta de solo lectura (SELECT): no exige el token
+  // anti-CSRF, ese requisito es de las que escriben (/cerrar, /reenviar).
+  const auth = autenticarPeticion(request, crudo, { requiereCsrf: false });
+  if (!auth.ok) {
+    return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+  }
+
+  const parseado = listadoSchema.safeParse(crudo);
+  if (!parseado.success) {
+    return NextResponse.json(
+      { ok: false, error: parseado.error.issues[0]?.message ?? 'Datos inválidos.' },
+      { status: 400 },
+    );
+  }
+  const datos = parseado.data;
+  const limite = Math.min(datos.limite ?? MAX_LIMITE, MAX_LIMITE);
+
+  let consulta = supabaseAdmin().from('cotizaciones').select(COLUMNAS);
+  if (datos.estado) {
+    consulta = consulta.eq('estado', datos.estado);
+  }
+
+  const { data, error } = await consulta.order('created_at', { ascending: false }).limit(limite);
+
+  if (error) {
+    console.error('[cotizador] No se pudo consultar el listado de cotizaciones.', error.message);
+    return NextResponse.json({ ok: false, error: 'No se pudo consultar.' }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, cotizaciones: data ?? [] });
+}
