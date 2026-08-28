@@ -3,7 +3,8 @@ import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
-import { crearEstimate } from '@/lib/cotizador/ghl';
+import { crearEstimate, notaDeCotizacion } from '@/lib/cotizador/ghl';
+import { agregarNota } from '@/lib/agente/acciones';
 import { renderizarCotizacion } from '@/lib/cotizador/documento';
 import { guardarPdf, enlaceFirmado } from '@/lib/cotizador/almacen';
 import { enviarCotizacion } from '@/lib/cotizador/correo';
@@ -164,6 +165,9 @@ export async function POST(request: Request) {
   }
 
   let pdfRuta: string | null = null;
+  // Enlace firmado del PDF, para el correo y (más abajo) para la nota de
+  // GoHighLevel. Se queda vacío si no se llegó a firmar o nunca se guardó.
+  let enlacePdf = '';
   // Regla que no se negocia: si no hay PDF, no se manda un correo que diga
   // "le adjunto la cotización" sin adjunto — eso es peor que no mandar nada.
   let correoResultado: { ok: true; resendId: string } | { ok: false; error: string } = {
@@ -182,6 +186,10 @@ export async function POST(request: Request) {
       if (!firmado.ok) {
         console.error('[cotizador] No se pudo firmar el enlace del PDF.', firmado.error);
       }
+      // El adjunto es lo que de verdad importa; sin enlace firmado el correo
+      // igual sale, solo que `cuerpoHtml` (lib/cotizador/correo.ts) omite el
+      // párrafo del enlace en vez de mandar uno vacío.
+      enlacePdf = firmado.ok ? firmado.url : '';
       correoResultado = await enviarCotizacion(
         {
           numero,
@@ -189,16 +197,42 @@ export async function POST(request: Request) {
           total: cotizacion.total,
           vence,
           pdf: pdfBuffer,
-          // El adjunto es lo que de verdad importa; sin enlace firmado el
-          // correo igual sale, solo que `cuerpoHtml` (lib/cotizador/correo.ts)
-          // omite el párrafo del enlace en vez de mandar uno vacío.
-          enlace: firmado.ok ? firmado.url : '',
+          enlace: enlacePdf,
         },
         {
           apiKey: process.env.RESEND_API_KEY ?? '',
           remitente: process.env.LUXE_CORREO_REMITENTE ?? '',
         },
       );
+    }
+  }
+
+  // Tarea 12 — la nota en el contacto de GoHighLevel: el correo con el PDF
+  // sale por Resend, por fuera del CRM, así que sin esto la conversación del
+  // contacto no muestra nada y el equipo comercial no tiene forma de saber
+  // que a este hotel ya se le cotizó. Sólo se agrega cuando el correo salió
+  // de verdad (si no salió, no hay nada que trazar) y hay un contacto al que
+  // anotarle algo.
+  //
+  // Un fallo acá NO invalida la cotización — el correo ya llegó al hotel;
+  // que el CRM no se haya enterado es un problema menor. `agregarNota` en sí
+  // nunca lanza, pero el try/catch cubre también un fallo construyendo el
+  // propio texto (`notaDeCotizacion`), por la misma razón. Se registra en el
+  // mismo `ghl_error` de más abajo, junto al resto de lo que le pasó a
+  // GoHighLevel con esta cotización.
+  let notaError: string | undefined;
+  if (correoResultado.ok && contactId) {
+    try {
+      notaError = await agregarNota(
+        contactId,
+        notaDeCotizacion({ numero, total: cotizacion.total, vence, enlace: enlacePdf }),
+        { apiKey: process.env.LUXE_GHL_API_KEY ?? '' },
+      );
+    } catch (err) {
+      notaError = err instanceof Error ? err.message : String(err);
+    }
+    if (notaError) {
+      console.error('[cotizador] No se pudo agregar la nota de la cotización en GoHighLevel.', notaError);
     }
   }
 
@@ -210,6 +244,16 @@ export async function POST(request: Request) {
   // (rondas de correcciones 1 y 2) se quedaba en 'creada' porque
   // `crearEstimate` nunca llama al envío de GoHighLevel; el envío real es
   // este correo con el PDF de Luxe adjunto.
+  // Junta el error de la Opportunity/Estimate (si lo hubo) con el de la nota
+  // (si lo hubo): las dos cosas son "algo le pasó a GoHighLevel con esta
+  // cotización" y comparten la misma columna. Ninguna de las dos baja el
+  // `estado` — ver el comentario grande de arriba sobre por qué el estado
+  // sigue al correo, no a GoHighLevel.
+  const erroresGhl = [ghl.ok ? ghl.opportunityError : ghl.error, notaError].filter(
+    (e): e is string => Boolean(e),
+  );
+  const ghlError = erroresGhl.length > 0 ? erroresGhl.join(' | ') : null;
+
   const { error: errorActualizacion } = await supabaseAdmin()
     .from('cotizaciones')
     .update({
@@ -220,9 +264,7 @@ export async function POST(request: Request) {
       updated_at: new Date().toISOString(),
       contact_id: contactId,
       estado: correoResultado.ok ? 'enviada' : 'error',
-      ...(ghl.ok
-        ? { ghl_estimate_id: ghl.estimateId, ghl_error: ghl.opportunityError ?? null }
-        : { ghl_error: ghl.error }),
+      ...(ghl.ok ? { ghl_estimate_id: ghl.estimateId, ghl_error: ghlError } : { ghl_error: ghlError }),
       ...(pdfRuta ? { pdf_ruta: pdfRuta } : {}),
       ...(correoResultado.ok
         ? { enviado_at: new Date().toISOString(), resend_id: correoResultado.resendId }
