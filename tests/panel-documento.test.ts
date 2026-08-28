@@ -9,7 +9,7 @@
 // firma y el tamaño del buffer — nunca el contenido. Este archivo corre bajo
 // Node real (sin el DOM simulado de jsdom) precisamente para que el PDF que
 // se valida acá sea el mismo que ve un hotel de verdad.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PDFParse } from 'pdf-parse';
 // Sin la capa de alto nivel de pdf-parse: para el hallazgo del nombre largo
 // sin espacios (ronda de correcciones 1) hace falta la posición de cada
@@ -18,6 +18,20 @@ import { PDFParse } from 'pdf-parse';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { renderizarCotizacion } from '@/lib/cotizador/documento';
 import type { Cotizacion } from '@/lib/cotizador/tipos';
+
+// La suite corre en paralelo (varios archivos de prueba a la vez, cada uno
+// en su propio worker) y este archivo es el único que de verdad renderiza
+// PDFs con fuentes embebidas (`@react-pdf/renderer`, con las fuentes de
+// lib/cotizador/fonts/) y los vuelve a parsear con pdfjs-dist — de lejos lo
+// más caro en CPU de toda la suite. Corriendo solo, las 11 pruebas tardan
+// ~4s en total; bajo carga (compitiendo por CPU con el resto de los ~500
+// pruebas del resto de la suite en paralelo) una prueba individual puede
+// superar el `testTimeout` global de Vitest (5000ms) sin que el código bajo
+// prueba tenga ningún defecto — es contención de CPU, no una prueba lenta
+// por accidente. `vi.setConfig` cambia el timeout solo para este archivo
+// (no para el resto de la suite): si alguien lo ve pequeño y lo "corrige"
+// bajándolo, esta nota explica por qué no hay que hacerlo.
+vi.setConfig({ testTimeout: 30_000 });
 
 const cotizacion: Cotizacion = {
   lineas: [
