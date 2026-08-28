@@ -1,6 +1,6 @@
 // tests/panel-sesion.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { emitirSesion, sesionValida, csrfValido } from '@/lib/sesion';
+import { emitirSesion, sesionValida, csrfValido, csrfDeSesion } from '@/lib/sesion';
 
 function conCookie(valor: string, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/x', { headers: { cookie: valor, ...cabeceras } });
@@ -93,6 +93,36 @@ describe('sesión', () => {
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal); // vuelve al presente real: emitidoEn queda en el futuro.
       expect(sesionValida(conCookie(valor))).toBe(false);
+    });
+  });
+
+  // --- Ronda de correcciones 1 (Tarea 9, hallazgo crítico) ---
+  describe('csrfDeSesion: deriva el token anti-CSRF de una cookie ya válida', () => {
+    beforeEach(() => {
+      process.env.LUXE_TALLER_CLAVE = 'secreta';
+    });
+
+    it('con cookie válida, devuelve el mismo token que csrfValido acepta', () => {
+      const { cookie, csrf } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      const derivado = csrfDeSesion(conCookie(valor));
+      expect(derivado).toBe(csrf);
+      expect(csrfValido(conCookie(valor), derivado ?? undefined)).toBe(true);
+    });
+
+    it('sin cookie, devuelve null', () => {
+      expect(csrfDeSesion(new Request('http://localhost/x'))).toBeNull();
+    });
+
+    it('con una cookie inventada, devuelve null (nunca inventa un token para quien no la tiene)', () => {
+      expect(csrfDeSesion(conCookie('luxe_sesion=inventado'))).toBeNull();
+    });
+
+    it('con una sesión firmada con otra clave, devuelve null', () => {
+      const { cookie } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      process.env.LUXE_TALLER_CLAVE = 'otra';
+      expect(csrfDeSesion(conCookie(valor))).toBeNull();
     });
   });
 });

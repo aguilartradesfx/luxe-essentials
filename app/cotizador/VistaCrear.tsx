@@ -124,25 +124,43 @@ function formatearFecha(iso: string): string {
   return `${dos(f.getDate())}/${dos(f.getMonth() + 1)}/${f.getFullYear()} ${dos(f.getHours())}:${dos(f.getMinutes())}`;
 }
 
+// Ronda de correcciones 1 (Tarea 9, hallazgo menor): cuando la sesión entró
+// por cookie (la sonda de `Panel`, sin clave conocida), `clave` llega como
+// `''` — mandarla igual (`clave: ''`) no es una credencial, es peso muerto
+// que enturbia cuál vía de autenticación se está usando de verdad. Este
+// helper arma el cuerpo de una petición de LECTURA con la clave solo cuando
+// se conoce una; las que escriben (`crear`, más abajo) ya no la mandan en
+// absoluto — ver el comentario ahí.
+function conClave(clave: string, resto: Record<string, unknown>): Record<string, unknown> {
+  return clave ? { clave, ...resto } : resto;
+}
+
 type Props = {
   // El catálogo (sin precios) que ya bajó `Panel` tras validar la sesión.
   skus: SkuUI[];
   // La clave escrita al entrar por formulario. Vacía cuando la sesión ya
   // estaba viva al montar (Tarea 9) — en ese caso las peticiones de esta
   // vista dependen de la cookie y del token anti-CSRF, no de este valor.
+  // Ronda de correcciones 1: cuando está vacía, ninguna petición manda la
+  // clave en el cuerpo — `clave: ''` no es una credencial, es peso muerto
+  // que solo confunde qué vía se está usando de verdad.
   clave: string;
   // Lee el token anti-CSRF vigente desde `sessionStorage` (lo guarda `Panel`
-  // al validar la clave). `null` si todavía no hay uno: las peticiones que
-  // escriben salen igual —la clave sigue siendo una vía válida— pero sin la
-  // cabecera `x-csrf-token`.
+  // al validar la clave, o al confirmar una sesión ya viva). `null` si
+  // todavía no hay uno.
   obtenerCsrf: () => string | null;
+  // Ronda de correcciones 1 (hallazgo crítico): si el envío final vuelve
+  // con 401, el token guardado (o la clave) ya no sirve — quedarse en esta
+  // vista dejaría al vendedor con una pantalla que lee pero nunca puede
+  // volver a escribir. `Panel` limpia la sesión y vuelve a pedir la clave.
+  onSesionInvalida: () => void;
 };
 
 // Todo lo que antes vivía en `Cotizador.tsx` después de la pantalla de
 // clave: buscador, líneas, totales, envío y la cola de borradores del
 // agente. Extraído en la Tarea 9 — el comportamiento es el mismo, solo
 // cambia de dónde saca la clave y de dónde consigue el catálogo.
-export function VistaCrear({ skus, clave, obtenerCsrf }: Props) {
+export function VistaCrear({ skus, clave, obtenerCsrf, onSesionInvalida }: Props) {
   // La cola de borradores del agente (Tarea 10): se pide una sola vez, al
   // montar esta vista — que es exactamente cuando antes se pedía, justo
   // después de validar la clave.
@@ -227,7 +245,7 @@ export function VistaCrear({ skus, clave, obtenerCsrf }: Props) {
         const res = await fetch('/api/cotizacion/borradores', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clave }),
+          body: JSON.stringify(conClave(clave, {})),
         });
         const datos = await res.json();
         if (cancelado) return;
@@ -268,7 +286,7 @@ export function VistaCrear({ skus, clave, obtenerCsrf }: Props) {
       fetch('/api/cotizacion/previsualizar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clave, lineas: entradas, tasaIva, bordadoEspecial }),
+        body: JSON.stringify(conClave(clave, { lineas: entradas, tasaIva, bordadoEspecial })),
         signal: controlador.signal,
       })
         .then(async (res) => {
@@ -379,14 +397,21 @@ export function VistaCrear({ skus, clave, obtenerCsrf }: Props) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Esta ruta escribe: si la sesión ya tiene un token anti-CSRF
-          // (Tarea 9), va en la cabecera. Sin él, el servidor igual acepta
-          // la petición por la vía de la clave —sigue viajando abajo, en el
-          // cuerpo— así que no hace falta bloquear el envío por su ausencia.
+          // Ronda de correcciones 1 (Tarea 9): esta ruta escribe, y esta
+          // vista ya no manda la clave en el cuerpo (ver más abajo) — la
+          // única credencial que lleva es la cookie de sesión más este
+          // token en la cabecera. Sin uno vigente, el servidor responde 401
+          // y `onSesionInvalida()`, más abajo, saca al vendedor de vuelta a
+          // la pantalla de clave para conseguir uno nuevo.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
         body: JSON.stringify({
-          clave,
+          // Ronda de correcciones 1: antes se mandaba `clave` acá como
+          // respaldo. Ese contrato era de una etapa anterior a la sesión
+          // por cookie (Tarea 6/9); ahora el envío final depende
+          // enteramente de la cookie + el token anti-CSRF de arriba —
+          // `tests/cotizador-ui.test.tsx` afirma la cabecera, no un campo
+          // `clave` en este cuerpo.
           cliente: {
             nombre: cliente.nombre.trim(),
             empresa: cliente.empresa.trim() || undefined,
@@ -412,6 +437,14 @@ export function VistaCrear({ skus, clave, obtenerCsrf }: Props) {
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {
+        // Ronda de correcciones 1 (hallazgo crítico): un 401 acá solo puede
+        // significar que la cookie y/o el token anti-CSRF ya no valen —esta
+        // vista no manda otra credencial—, así que quedarse con el token
+        // rancio dejaría al vendedor atrapado: puede seguir leyendo (las
+        // rutas de lectura no exigen CSRF) pero nunca volver a escribir.
+        // `onSesionInvalida()` limpia el token y vuelve a la pantalla de
+        // clave, que es la única forma de conseguir uno vigente.
+        if (res.status === 401) onSesionInvalida();
         setResultado({ ok: false, error: datos.error ?? `Error ${res.status}` });
         return;
       }

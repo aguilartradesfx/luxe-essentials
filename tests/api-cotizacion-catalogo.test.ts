@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 const { POST } = await import('@/app/api/cotizacion/catalogo/route');
+const { emitirSesion } = await import('@/lib/sesion');
 
-function peticion(cuerpo: unknown) {
+function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/api/cotizacion/catalogo', {
     method: 'POST',
+    headers: cabeceras,
     body: JSON.stringify(cuerpo),
   });
 }
@@ -63,5 +65,58 @@ describe('POST /api/cotizacion/catalogo', () => {
     const res = await POST(peticion({ clave: 'secreta' }));
     const cuerpo = await res.json();
     expect(cuerpo.skus).toHaveLength(CATALOGO.length);
+  });
+
+  // --- Ronda de correcciones 1 (Tarea 9, hallazgo crítico) ---
+  //
+  // Esta ruta es la sonda que usa `Panel.tsx` para saber si ya hay una
+  // sesión viva al montar: si la cookie es válida, también devuelve el
+  // token anti-CSRF que le corresponde, para que una pestaña nueva (o el
+  // navegador reabierto) no dependa de `sessionStorage` —por pestaña, se
+  // pierde al cerrarla— para recuperar un token que la cookie, de 30 días,
+  // ya demuestra que le pertenece.
+  describe('token anti-CSRF en la respuesta cuando la entrada es por cookie', () => {
+    beforeEach(() => {
+      process.env.LUXE_TALLER_CLAVE = 'secreta';
+    });
+
+    it('con cookie válida y sin clave, la respuesta trae el csrf que le corresponde a esa cookie', async () => {
+      const { cookie, csrf } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      const res = await POST(peticion({}, { cookie: valor }));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo.csrf).toBe(csrf);
+    });
+
+    it('con clave correcta y sin cookie, la respuesta NO trae csrf (no hay sesión de la que derivarlo)', async () => {
+      const res = await POST(peticion({ clave: 'secreta' }));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect('csrf' in cuerpo).toBe(false);
+    });
+
+    it('con Sec-Fetch-Site: cross-site, no devuelve el csrf aunque la cookie sea válida', async () => {
+      // Endurecimiento a propósito: hoy un sitio ajeno no puede LEER esta
+      // respuesta (sin cabecera Access-Control-Allow-Origin, es opaca para
+      // su JavaScript), pero este chequeo no depende de que eso siga siendo
+      // cierto para siempre. La petición en sí sigue pasando (200, con los
+      // SKUs) — lo único que se retiene es el token.
+      const { cookie } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      const res = await POST(peticion({}, { cookie: valor, 'sec-fetch-site': 'cross-site' }));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo.ok).toBe(true);
+      expect('csrf' in cuerpo).toBe(false);
+    });
+
+    it('con Sec-Fetch-Site: same-origin, sí devuelve el csrf (uso normal del panel)', async () => {
+      const { cookie, csrf } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      const res = await POST(peticion({}, { cookie: valor, 'sec-fetch-site': 'same-origin' }));
+      const cuerpo = await res.json();
+      expect(cuerpo.csrf).toBe(csrf);
+    });
   });
 });

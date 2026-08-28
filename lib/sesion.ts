@@ -155,3 +155,27 @@ export function csrfValido(request: Request, enviado: string | undefined): boole
 
   return igualesEnTiempoConstante(enviado, derivarCsrf(valor));
 }
+
+// Ronda de correcciones 1 (Tarea 9, hallazgo crítico): el token anti-CSRF
+// solo se entregaba en la respuesta de `/api/cotizacion/entrar`, y esa
+// respuesta viajaba una única vez. Guardarlo del lado del cliente en
+// `sessionStorage` (por pestaña, se pierde al cerrarla) dejaba la
+// credencial durable de verdad —esta cookie, 30 días, `Partitioned`— detrás
+// del almacenamiento más frágil del navegador: pestaña nueva, navegador
+// reabierto, o `sessionStorage` bloqueado (Safari/modo privado) y la sesión
+// nunca persistía, pese a que la cookie sí era válida.
+//
+// La función expone el mismo token que ya calcula `csrfValido` para
+// verificar, pero en sentido inverso: dado un request con una cookie
+// válida, devuelve el token que le correspondería. Es seguro porque el
+// token es una función determinista de la cookie (`HMAC(secreto, "csrf." +
+// valorCookie)`) — devolvérselo a quien ya demuestra tener la cookie válida
+// no le concede ninguna capacidad que no tuviera ya. `null` si no hay una
+// sesión válida (sin cookie, cookie vencida, o firmada con otra clave):
+// nunca se inventa un token para quien no la tiene.
+export function csrfDeSesion(request: Request): string | null {
+  if (!sesionValida(request)) return null;
+  const valor = obtenerCookie(request, NOMBRE_COOKIE);
+  if (!valor) return null;
+  return derivarCsrf(valor);
+}

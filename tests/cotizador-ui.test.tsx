@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import Cotizador from '@/app/cotizador/Panel';
+import Cotizador, { CSRF_STORAGE_KEY } from '@/app/cotizador/Panel';
 
 // Tarea 8: el catálogo ya no viaja en el bundle. `Cotizador` arranca con una
 // pantalla de clave y solo pide el catálogo (sin precios) a
@@ -35,6 +35,14 @@ const SKUS = [
   { id: 'uni-filipina-tradicional-manga-corta', nombre: 'filipina tradicional manga corta', familia: 'Uniformes' },
   { id: 'inserto-duvet-king', nombre: 'inserto de duvet king', familia: 'Edredones' },
 ];
+
+// Token anti-CSRF que devuelve el simulacro de `/api/cotizacion/entrar` (y,
+// cuando aplica, el de `/api/cotizacion/catalogo` por cookie) — Ronda de
+// correcciones 1 (Tarea 9). Un valor fijo alcanza: lo único que estas
+// pruebas verifican es que la pantalla lo guarde y lo reenvíe tal cual, no
+// que sea criptográficamente válido (eso lo prueba el servidor, en
+// tests/api-cotizacion-sesion.test.ts).
+const CSRF_TOKEN_DE_PRUEBA = 'csrf-token-de-prueba';
 
 // Réplica mínima de lo que hace `calcular()` en el servidor para las líneas
 // que estas pruebas necesitan: sets de cama (escalón de 16 → 10%, y "sin
@@ -108,18 +116,48 @@ type OpcionesFetch = {
   // o que el PDF nunca se generó, sin tener que reescribir todo `mockFetch`.
   correoFalla?: string;
   pdfFalla?: boolean;
+  // Ronda de correcciones 1 (Tarea 9) — sesión por cookie y CSRF:
+  // `sesionActiva` simula que ya hay una cookie válida antes de montar la
+  // pantalla: `/api/cotizacion/catalogo` responde bien aunque el cuerpo no
+  // traiga `clave` (la sonda de `Panel`). `csrf` fija el token que devuelven
+  // `/entrar` y (si `sesionActiva`) `/catalogo`; por defecto,
+  // `CSRF_TOKEN_DE_PRUEBA`. `crear401` hace que `/api/cotizacion` responda
+  // 401 sin importar qué mande la pantalla — simula un token anti-CSRF
+  // rancio, para probar la recuperación.
+  sesionActiva?: boolean;
+  csrf?: string;
+  crear401?: boolean;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString();
     const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
+    const csrf = opciones.csrf ?? CSRF_TOKEN_DE_PRUEBA;
 
     if (url.endsWith('/api/cotizacion/catalogo')) {
+      if (cuerpo.clave === 'correcta') {
+        return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+      }
+      // Ronda de correcciones 1 (Tarea 9): la sonda de sesión de `Panel`
+      // llama acá sin `clave`, apoyada solo en la cookie. `sesionActiva`
+      // simula que esa cookie ya es válida — y, como la ruta real, devuelve
+      // el token anti-CSRF derivado de ella en la misma respuesta.
+      if (!cuerpo.clave && opciones.sesionActiva) {
+        return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+    }
+
+    if (url.endsWith('/api/cotizacion/entrar')) {
+      // Ronda de correcciones 1 (Tarea 9): valida la clave igual que
+      // `/catalogo` arriba — a propósito el mismo criterio, para que ningún
+      // simulacro de este archivo pueda "entrar" con una clave que el
+      // servidor real rechazaría.
       if (cuerpo.clave !== 'correcta') {
         return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
       }
-      return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, csrf }), { status: 200 });
     }
 
     if (url.endsWith('/api/cotizacion/borradores')) {
@@ -140,6 +178,12 @@ function mockFetch(opciones: OpcionesFetch = {}) {
     if (url.endsWith('/api/cotizacion')) {
       if (opciones.fallarRed === 'cotizacion') {
         throw new TypeError('Failed to fetch');
+      }
+      // Ronda de correcciones 1 (Tarea 9, hallazgo crítico): simula un token
+      // anti-CSRF rancio (p. ej. una segunda pestaña rotó la cookie) — la
+      // pantalla debe recuperarse, no quedar atrapada.
+      if (opciones.crear401) {
+        return new Response(JSON.stringify({ ok: false, error: 'Token anti-CSRF inválido.' }), { status: 401 });
       }
       const pdf = opciones.pdfFalla ? null : { ruta: '2026/COT-2026-0001-cot-1.pdf' };
       const correo = opciones.pdfFalla
@@ -424,16 +468,28 @@ describe('Cotizador', () => {
     expect(llamadasAlEnvio).toHaveLength(0);
   });
 
-  it('el cuerpo del envío final lleva la clave real y las líneas tal cual están en pantalla, sin un total inventado', async () => {
-    // Mata el mutante "mandar total: 1 y quitar la clave": si el envío deja
-    // de mandar la clave, o agrega un campo `total` que el servidor no debe
-    // recibir (lo calcula él con el catálogo real), esta prueba lo detecta.
+  it('el cuerpo del envío final ya no lleva la clave y manda el token anti-CSRF en la cabecera, con las líneas tal cual están en pantalla, sin un total inventado', async () => {
+    // Ronda de correcciones 1 (Tarea 9): este contrato reemplaza al de la
+    // etapa anterior a la sesión por cookie. Antes mataba el mutante
+    // "mandar total: 1 y quitar la clave" exigiendo `clave` en el cuerpo;
+    // ahora la clave ya no viaja ahí en absoluto —la sesión por cookie más
+    // el token anti-CSRF de la cabecera son la única credencial de este
+    // envío—, así que el mutante equivalente hoy es "quitar la cabecera
+    // `x-csrf-token`", cubierto por la aserción de más abajo.
     const fetchEspiado = mockFetch();
     const usuario = userEvent.setup();
     render(<Cotizador />);
     await entrar(usuario);
     await agregar(usuario, 'set de 600 hilos king');
     await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    // La sesión por cookie (Tarea 9) se establece en segundo plano tras
+    // entrar: se espera a que el token quede guardado antes de enviar, para
+    // no depender de que las interacciones de arriba le hayan dado tiempo
+    // por casualidad.
+    await waitFor(() => {
+      expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBe(CSRF_TOKEN_DE_PRUEBA);
+    });
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
@@ -452,13 +508,16 @@ describe('Cotizador', () => {
     const cuerpo = JSON.parse(init.body as string);
 
     expect(cuerpo).toEqual({
-      clave: 'correcta',
       cliente: { nombre: 'Ana Pérez', email: 'ana@empresa.com' },
       lineas: [{ skuId: 'set-600-king', cantidad: 1 }],
       tasaIva: 0.13,
       bordadoEspecial: false,
     });
     expect('total' in cuerpo).toBe(false);
+    expect('clave' in cuerpo).toBe(false);
+
+    const cabeceras = new Headers(init.headers);
+    expect(cabeceras.get('x-csrf-token')).toBe(CSRF_TOKEN_DE_PRUEBA);
   });
 
   it('el botón dice la verdad ANTES del clic: ahora sí manda la cotización', async () => {
@@ -484,7 +543,25 @@ describe('Cotizador', () => {
       const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
 
       if (url.endsWith('/api/cotizacion/catalogo')) {
+        // Ronda de correcciones 1 (Tarea 9): este simulacro respondía
+        // `ok: true` sin mirar la clave — a diferencia del `mockFetch()`
+        // compartido, que sí la exige. Con la sonda de sesión de `Panel`
+        // (dispara siempre al montar, sin gate), ese simulacro laxo hacía
+        // que la pantalla "entrara sola" antes de que esta prueba llegara a
+        // escribir la clave y apretar "Entrar" — el simulacro mentía sobre
+        // lo que hace el servidor real (tests/api-cotizacion-catalogo.test.ts:
+        // rechaza sin clave). Corregido para que valide igual que el mock
+        // compartido.
+        if (cuerpo.clave !== 'correcta') {
+          return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+        }
         return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+      }
+      if (url.endsWith('/api/cotizacion/entrar')) {
+        if (cuerpo.clave !== 'correcta') {
+          return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+        }
+        return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
       }
       if (url.endsWith('/api/cotizacion/borradores')) {
         return new Response(JSON.stringify({ ok: true, borradores: [] }), { status: 200 });
@@ -968,5 +1045,105 @@ describe('Borradores pendientes (Tarea 10)', () => {
     // strings vacíos, sencillamente no viajan.
     expect('telefono' in cuerpo.cliente).toBe(false);
     expect('direccion' in cuerpo.cliente).toBe(false);
+  });
+});
+
+// Ronda de correcciones 1 (Tarea 9): la sesión por cookie es la razón de
+// ser de este panel dentro del iframe de GoHighLevel — sin ella, cada
+// recarga obliga al vendedor a volver a escribir la clave. El revisor probó
+// tres mutantes (quitar la cabecera `x-csrf-token` de `crear()`, hacer que
+// la sonda nunca entre, y borrar entera la llamada que crea la sesión) y
+// las 32 pruebas de arriba seguían en verde: nada las ejercitaba. Estas
+// tres pruebas cierran ese hueco, y una cuarta cubre la recuperación de un
+// token rancio (hallazgo crítico separado).
+describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('al validar la clave, llama a /api/cotizacion/entrar y guarda el token anti-CSRF que devuelve', async () => {
+    // Mata el mutante "borrar la llamada que crea la sesión": sin ella, no
+    // hay ningún POST a /entrar y `sessionStorage` se queda vacío para
+    // siempre.
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBe(CSRF_TOKEN_DE_PRUEBA);
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/entrar'),
+    );
+    expect(llamada).toBeDefined();
+    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
+    expect(cuerpo).toEqual({ clave: 'correcta' });
+  });
+
+  it('si la sesión ya está viva al montar (cookie), entra directo sin pedir la clave, y no manda clave vacía en las lecturas', async () => {
+    // Mata el mutante "la sonda nunca entra": con `sesionActiva`,
+    // `/api/cotizacion/catalogo` responde bien a la sonda (sin `clave` en
+    // el cuerpo) porque hay una cookie válida — la pantalla de clave no
+    // debería aparecer en ningún momento.
+    const fetchEspiado = mockFetch({ sesionActiva: true });
+    render(<Cotizador />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/buscar/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText(/^clave$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^entrar$/i })).not.toBeInTheDocument();
+
+    // Ronda de correcciones 1 (hallazgo menor): sin una clave conocida
+    // (se entró por cookie, nunca se escribió una), la cola de borradores
+    // —que se pide sola al montar `VistaCrear`— no debe mandar `clave: ''`
+    // de peso muerto en el cuerpo.
+    await waitFor(() => {
+      const llamada = fetchEspiado.mock.calls.find(([input]) =>
+        (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/borradores'),
+      );
+      expect(llamada).toBeDefined();
+    });
+    const llamadaBorradores = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/borradores'),
+    );
+    const cuerpoBorradores = JSON.parse((llamadaBorradores![1] as RequestInit).body as string);
+    expect('clave' in cuerpoBorradores).toBe(false);
+  });
+
+  it('si el envío final vuelve con 401 (token anti-CSRF rancio), limpia la sesión y vuelve a pedir la clave', async () => {
+    // Hallazgo crítico: antes `dentro` nunca volvía a `false` por sí solo,
+    // así que un token rancio (p. ej. una segunda pestaña rotó la cookie)
+    // dejaba al vendedor en una pantalla que lee pero nunca puede volver a
+    // escribir, sin ninguna forma de recuperarse salvo recargar.
+    const fetchEspiado = mockFetch({ crear401: true });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
+
+    // Vuelve a la pantalla de clave — no se queda atrapado.
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText(/buscar/i)).not.toBeInTheDocument();
+    // El token inservible no se deja atrás: si sobreviviera, una sonda
+    // futura (u otra pestaña) podría volver a intentarlo con el mismo token
+    // rancio.
+    expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
+
+    // Se ejerció el camino de escritura, y falló como se esperaba.
+    const llamadasAlEnvio = fetchEspiado.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamadasAlEnvio).toHaveLength(1);
   });
 });
