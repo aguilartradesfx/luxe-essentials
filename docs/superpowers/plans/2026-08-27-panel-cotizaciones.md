@@ -1133,7 +1133,19 @@ agregar nada, se parte.
 - Produce: `Panel` como componente por defecto de la ruta; `VistaCrear`, `PantallaClave`, y
   `formatearColones(n: number): string` / `formatearTasa(t: number): string`.
 
-**Esta tarea no cambia ningún comportamiento.** Sólo mueve código. Las pruebas existentes de
+**Esta tarea mueve código y conecta la sesión.** Todo lo demás queda igual.
+
+**Lo que sí cambia: la pantalla pasa a usar la cookie.** Hoy manda `clave` en el cuerpo de
+cada petición. `PantallaClave` debe llamar a `POST /api/cotizacion/entrar`, que valida la
+clave y devuelve la cookie de sesión más un token anti-CSRF. A partir de ahí las peticiones
+van sin clave, y las que escriben mandan el token en la cabecera `x-csrf-token`.
+
+**El token hay que guardarlo en `sessionStorage`, no en memoria.** Sólo se entrega en la
+respuesta de `/entrar`; si vive en una variable de React, cada recarga del iframe deja al
+vendedor con cookie válida y sin token, obligándolo a escribir la clave de nuevo — que es
+justo lo que la sesión existe para evitar.
+
+Si la sesión ya está viva al montar, la pantalla no debe pedir la clave. Las pruebas existentes de
 `tests/cotizador-ui.test.tsx` tienen que seguir pasando **sin modificar lo que afirman** —
 sólo el import y, si hace falta, envolver en `Panel`. Si alguna prueba necesita cambiar su
 aserción, algo se rompió: pará y avisá.
