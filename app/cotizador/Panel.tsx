@@ -96,14 +96,16 @@ export default function Panel() {
   // vacía cuando se entra por la sonda de sesión (sin clave conocida).
   const [clave, setClave] = useState('');
   const [pestana, setPestana] = useState<Pestana>('crear');
-  // Tarea 10 ("Duplicar"): lo que precarga la próxima vez que `VistaCrear`
-  // se monte en la pestaña "Crear". `VistaListado` cambia de pestaña no
-  // decide nada más — arma el dato, lo manda para acá, y es `Panel` quien
-  // decide qué hacer con él (cambiar de pestaña). `VistaCrear` ya se
-  // desmonta y remonta al cambiar de pestaña (ver el `nav` más abajo: cada
-  // pestaña solo renderiza su contenido cuando está activa), así que basta
-  // con pasarle este valor como estado inicial — no hace falta una `key`
-  // aparte para forzar el remonte.
+  // Tarea 10 ("Duplicar"): lo que precarga en `VistaCrear`. `VistaListado`
+  // no decide nada más — arma el dato y lo manda para acá; `Panel` decide
+  // qué hacer con él (cambiar a la pestaña "Crear"). Ronda de correcciones
+  // 1: `VistaCrear` ya NO se desmonta al cambiar de pestaña (ver el `div
+  // hidden` más abajo), así que esto ya no es un valor inicial de una sola
+  // vez — `VistaCrear` reacciona a cada cambio de esta referencia con un
+  // `useEffect`, y por eso `onPlantillaConsumida` (abajo) la vuelve a
+  // `null` después de aplicada: sin eso, un futuro cambio de pestaña no
+  // volvería a disparar el efecto (la referencia sería la misma), pero
+  // tampoco queremos que sobreviva para reaplicarse sola más adelante.
   const [plantilla, setPlantilla] = useState<PrefillCotizacion | null>(null);
 
   // Requisito 3 (Tarea 9): si la sesión ya está viva al montar —cookie
@@ -308,7 +310,24 @@ export default function Panel() {
           </nav>
 
           <div className="mt-6">
-            {pestana === 'crear' && (
+            {/* Ronda de correcciones 1 (hallazgo importante): `VistaCrear`
+                YA NO se desmonta al salir de esta pestaña. Antes vivía
+                detrás de `{pestana === 'crear' && (...)}`, igual que las
+                otras dos — pero esta es la única de las tres que puede
+                tener trabajo del vendedor a medio hacer (cliente tecleado,
+                líneas elegidas) que nada persiste en ningún lado. Con esa
+                pestaña unmontando el componente, saltar a "Cotizaciones" a
+                mirar algo y volver perdía todo, exactamente lo que la Tarea
+                9 evitó para el caso de la sesión vencida — solo que ahí sí
+                se resolvió. Ahora se renderiza siempre (mientras `dentro`
+                sea `true`) y solo se OCULTA con `hidden` cuando no es la
+                pestaña activa: `hidden` es `display: none` nativo, saca el
+                contenido del árbol de accesibilidad y de la tabulación por
+                sí solo, sin necesitar `aria-hidden`/`inert` aparte. Las
+                otras dos pestañas siguen desmontándose: no tienen estado
+                que valga la pena preservar, y así no siguen pidiendo datos
+                de fondo mientras el vendedor está en otra pestaña. */}
+            <div hidden={pestana !== 'crear'}>
               <VistaCrear
                 skus={skus}
                 clave={clave}
@@ -317,7 +336,7 @@ export default function Panel() {
                 plantilla={plantilla}
                 onPlantillaConsumida={onPlantillaConsumida}
               />
-            )}
+            </div>
             {pestana === 'cotizaciones' && (
               <VistaListado
                 clave={clave}

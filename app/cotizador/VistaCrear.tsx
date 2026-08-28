@@ -186,20 +186,16 @@ export function VistaCrear({
   // `BorradorActivo` arriba.
   const [borradorActivo, setBorradorActivo] = useState<BorradorActivo | null>(null);
 
-  // Tarea 10 ("Duplicar"): si esta vista arrancó con una plantilla, el
-  // cliente y las líneas iniciales salen de ahí en vez de empezar en
-  // blanco. Solo importa el valor que había en el primer render —
-  // `useState` con función perezosa, nunca se vuelve a evaluar— porque
-  // `Panel` desmonta y remonta esta vista cada vez que se cambia de
-  // pestaña (ver el `nav` de Panel.tsx), así que un cambio posterior de
-  // `plantilla` ya le llega a un componente nuevo, no a este.
-  const [cliente, setCliente] = useState<Cliente>(() =>
-    plantilla ? { ...CLIENTE_VACIO, ...plantilla.cliente } : CLIENTE_VACIO,
-  );
+  // Tarea 10 ("Duplicar"). Ronda de correcciones 1 (hallazgo importante):
+  // esta vista YA NO se desmonta al cambiar de pestaña (ver Panel.tsx) —
+  // sigue viva de fondo para no perderle al vendedor la cotización a medio
+  // armar—, así que un `useState` perezoso que solo mira el primer render
+  // ya no alcanza: un segundo "Duplicar" mientras esta vista sigue montada
+  // nunca se aplicaría. Por eso arranca vacía y un efecto (más abajo,
+  // después de declarar `lineas`) reacciona a CADA cambio de `plantilla`.
+  const [cliente, setCliente] = useState<Cliente>(CLIENTE_VACIO);
   const [busqueda, setBusqueda] = useState('');
-  const [lineas, setLineas] = useState<LineaUI[]>(() =>
-    (plantilla?.lineas ?? []).map((l) => ({ skuId: l.skuId, cantidadTexto: String(l.cantidad) })),
-  );
+  const [lineas, setLineas] = useState<LineaUI[]>([]);
   const [tasaIva, setTasaIva] = useState(IVA_GENERAL);
   const [bordadoEspecial, setBordadoEspecial] = useState(false);
   // Nombres de variable sin cambiar desde la ronda "final-fix-C" (cuando el
@@ -255,13 +251,39 @@ export function VistaCrear({
     [lineas],
   );
 
-  // Avisa a `Panel` que ya usó la plantilla, una sola vez, al montar — así
-  // `Panel` la limpia y un remonte posterior de esta vista (volver a
-  // "Crear" sin haber duplicado de nuevo) no la vuelve a aplicar.
+  // Ronda de correcciones 1 (hallazgo importante): una linea que llego por
+  // "Duplicar" puede referirse a un SKU que ya no esta en el catalogo
+  // vigente (`porId` sale de `skus`, lo que de verdad se puede vender hoy).
+  // El servidor la rechaza de todas formas (`calcular` lanza, 400) -- eso
+  // ya funcionaba -- pero antes esa linea se pintaba como si no existiera
+  // (`porId.get` devolvia `undefined` y el `.map` la saltaba con `return
+  // null`), asi que el vendedor veia un error que nombraba un producto que
+  // no estaba en pantalla, sin boton para quitarlo, y la unica salida era
+  // abandonar la cotizacion entera. Ahora esas lineas se pintan igual (ver
+  // el `.map` de abajo) y esto bloquea el envio hasta que se quiten -- no
+  // tiene sentido dejar avanzar un pedido que el servidor va a rechazar
+  // seguro.
+  const hayLineaDescontinuada = useMemo(() => lineas.some((l) => !porId.has(l.skuId)), [lineas, porId]);
+
+  // Aplica una plantilla nueva de "Duplicar" (Tarea 10, ronda de
+  // correcciones 1). Reacciona a CADA cambio de `plantilla` -- no solo al
+  // montar -- porque esta vista ya no se desmonta al salir de la pestaña
+  // "Crear" (ver Panel.tsx): el vendedor puede duplicar, volver a
+  // "Cotizaciones", duplicar OTRA fila y volver, todo sin que esta vista se
+  // haya reiniciado nunca. Pisa el cliente y las lineas que hubiera (mismo
+  // criterio que ya tenia `nuevaCotizacion`: empezar de nuevo es explicito,
+  // el vendedor lo pidio con el clic en "Duplicar"). Avisa a `Panel` que ya
+  // la aplico para que la limpie -- si no, un cambio futuro de `plantilla`
+  // a la misma referencia (o un remonte) la reaplicaria de nuevo.
   useEffect(() => {
-    if (plantilla) onPlantillaConsumida?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- se avisa una sola vez, al montar.
-  }, []);
+    if (!plantilla) return;
+    setCliente({ ...CLIENTE_VACIO, ...plantilla.cliente });
+    setLineas(plantilla.lineas.map((l) => ({ skuId: l.skuId, cantidadTexto: String(l.cantidad) })));
+    setResultado(null);
+    setCreado(false);
+    onPlantillaConsumida?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo debe reaccionar a `plantilla`; `onPlantillaConsumida` no es estable entre renders de Panel.
+  }, [plantilla]);
 
   // La cola de borradores: `/api/cotizacion/borradores` es POST (la clave
   // puede viajar en el cuerpo, o la sesión por cookie basta) y devuelve solo
@@ -418,7 +440,13 @@ export function VistaCrear({
   // evitable. Ver revisión de la Tarea 8.
   const nombreValido = cliente.nombre.trim().length > 0;
   const puedeCrear =
-    !creando && !creado && lineas.length > 0 && !hayLineaInvalida && correoValido && nombreValido;
+    !creando &&
+    !creado &&
+    lineas.length > 0 &&
+    !hayLineaInvalida &&
+    !hayLineaDescontinuada &&
+    correoValido &&
+    nombreValido;
 
   async function crear() {
     if (!puedeCrear) return;
@@ -628,7 +656,37 @@ export function VistaCrear({
             <ul className="mt-3 divide-y divide-[var(--carta-border)]">
               {lineas.map((linea) => {
                 const sku = porId.get(linea.skuId);
-                if (!sku) return null;
+                // Ronda de correcciones 1 (hallazgo importante): antes esta
+                // linea desaparecia en silencio (`return null`) cuando el
+                // SKU ya no estaba en el catalogo vigente -- tipicamente
+                // una cotizacion vieja duplicada cuyo producto se
+                // descontinuo despues. El servidor la rechaza igual (400,
+                // `calcular` lanza) pero el vendedor no tenia forma de
+                // verla ni de quitarla desde acá: la unica salida era
+                // abandonar la cotizacion entera. Ahora se pinta marcada,
+                // con boton de quitar -- ver `hayLineaDescontinuada`, que
+                // bloquea el envio mientras quede alguna.
+                if (!sku) {
+                  return (
+                    <li key={linea.skuId} className="rounded-lg bg-red-50 px-2 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm text-red-800">
+                          Producto ya no disponible <span className="font-mono text-xs">({linea.skuId})</span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => quitar(linea.skuId)}
+                          className="text-xs text-red-800 underline hover:text-red-900"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                      <p className="mt-1 text-xs text-red-700">
+                        Este producto salió del catálogo. Quitalo para poder cotizar el resto.
+                      </p>
+                    </li>
+                  );
+                }
                 const validacion = validarCantidad(linea.cantidadTexto);
                 const calculada = validacion.ok
                   ? cotizacion.lineas.find((l) => l.skuId === linea.skuId)
@@ -686,6 +744,12 @@ export function VistaCrear({
             <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
               Hay líneas con la cantidad incompleta o inválida — corregilas o quitalas para
               poder enviar la cotización.
+            </p>
+          )}
+          {hayLineaDescontinuada && (
+            <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
+              Hay líneas de productos que ya no están en el catálogo — quitalas para poder
+              enviar la cotización.
             </p>
           )}
         </div>

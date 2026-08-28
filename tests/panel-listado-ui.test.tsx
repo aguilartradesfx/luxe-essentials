@@ -70,6 +70,7 @@ type OpcionesFetch = {
   reenviarRespuesta?: unknown;
   reenviarStatus?: number;
   duplicarLineas?: { skuId: string; cantidad: number }[];
+  duplicarStatus?: number;
   listado401?: boolean;
 };
 
@@ -100,11 +101,19 @@ function mockFetch(opciones: OpcionesFetch = {}) {
 
     if (url.endsWith('/api/cotizacion/reenviar')) {
       const status = opciones.reenviarStatus ?? 200;
-      const cuerpoRespuesta = opciones.reenviarRespuesta ?? { ok: true, resendId: 're_1', vencida: false, actualizado: true };
+      const cuerpoRespuesta =
+        opciones.reenviarRespuesta ??
+        (status === 200
+          ? { ok: true, resendId: 're_1', vencida: false, actualizado: true }
+          : { ok: false, error: 'Token anti-CSRF inválido.' });
       return new Response(JSON.stringify(cuerpoRespuesta), { status });
     }
 
     if (url.endsWith('/api/cotizacion/duplicar')) {
+      const status = opciones.duplicarStatus ?? 200;
+      if (status !== 200) {
+        return new Response(JSON.stringify({ ok: false, error: 'Token anti-CSRF inválido.' }), { status });
+      }
       return new Response(
         JSON.stringify({ ok: true, lineas: opciones.duplicarLineas ?? [{ skuId: 'set-600-king', cantidad: 12 }] }),
         { status: 200 },
@@ -215,6 +224,28 @@ describe('VistaListado', () => {
 
     await waitFor(() => {
       const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/cerrar'));
+      expect(llamada).toBeDefined();
+      const cabeceras = new Headers(llamada!.init!.headers);
+      expect(cabeceras.get('x-csrf-token')).toBe(CSRF_TOKEN);
+    });
+  });
+
+  // Hallazgo importante del revisor: esta era la misma cabecera, en la
+  // misma pantalla, sin la misma prueba — quitarle el token a `reenviar`
+  // dejaba las 645 pruebas anteriores en verde. Dentro del iframe la sesión
+  // es por cookie: sin este token, el servidor responde 401 y el vendedor
+  // rebota a la pantalla de clave cada vez que aprieta "Reenviar".
+  it('"Reenviar" manda el token anti-CSRF en la cabecera', async () => {
+    const { llamadas } = mockFetch();
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+
+    await waitFor(() => {
+      const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/reenviar'));
       expect(llamada).toBeDefined();
       const cabeceras = new Headers(llamada!.init!.headers);
       expect(cabeceras.get('x-csrf-token')).toBe(CSRF_TOKEN);
@@ -354,5 +385,109 @@ describe('VistaListado', () => {
     await waitFor(() => {
       expect(onSesionInvalida).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // Hallazgo importante del revisor: la regla de "un 401 vuelve a la
+  // pantalla de clave sin perder el trabajo" se sostenía sobre UNA sola
+  // prueba (la de arriba, sobre /cerrar). Quitarle el manejo del 401 a
+  // /listado o a /reenviar no rompía nada — acá van sus gemelas.
+  it('un 401 al listar llama a onSesionInvalida', async () => {
+    mockFetch({ listado401: true });
+    const { onSesionInvalida } = renderVista();
+
+    await waitFor(() => {
+      expect(onSesionInvalida).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('un 401 al reenviar llama a onSesionInvalida', async () => {
+    mockFetch({ reenviarStatus: 401 });
+    const usuario = userEvent.setup();
+    const { onSesionInvalida } = renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+
+    await waitFor(() => {
+      expect(onSesionInvalida).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('un 401 al duplicar llama a onSesionInvalida', async () => {
+    mockFetch({ duplicarStatus: 401 });
+    const usuario = userEvent.setup();
+    const { onSesionInvalida, onDuplicar } = renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /duplicar/i }));
+
+    await waitFor(() => {
+      expect(onSesionInvalida).toHaveBeenCalledTimes(1);
+    });
+    expect(onDuplicar).not.toHaveBeenCalled();
+  });
+
+  // El resaltado de las que vencen (aviso #2 del brief anterior: "tienen
+  // que saltar a la vista") no estaba defendido por ninguna prueba: se
+  // podía dejar la fila idéntica a las demás y las 12 de antes seguían
+  // verdes, porque solo se afirmaba el texto "Vence en N días", nunca que
+  // se distinguiera visualmente.
+  it('la fila que vence pronto se distingue visualmente de las que no', async () => {
+    mockFetch();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/beto ruiz/i)).toBeInTheDocument());
+    const filaPorVencer = screen.getByText(/beto ruiz/i).closest('tr') as HTMLElement;
+    const filaNormal = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+
+    expect(filaPorVencer.className).not.toBe(filaNormal.className);
+    expect(filaPorVencer.className.length).toBeGreaterThan(0);
+  });
+
+  // "Por vencer": recorta la lista a lo que de verdad hay que llamar hoy,
+  // sin depender del resaltado para encontrarlo entre hasta 200 filas.
+  it('el filtro "Por vencer" no manda estado al servidor y solo muestra las próximas a vencer', async () => {
+    const { llamadas } = mockFetch();
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    await usuario.selectOptions(screen.getByLabelText(/filtrar por estado/i), 'Por vencer');
+
+    await waitFor(() => {
+      expect(screen.getByText(/beto ruiz/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/ana pérez/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/carla gómez/i)).not.toBeInTheDocument();
+
+    const ultima = llamadas.filter((l) => l.url.endsWith('/api/cotizacion/listado')).at(-1);
+    expect(ultima).toBeDefined();
+    const cuerpo = JSON.parse((ultima!.init!.body as string) ?? '{}');
+    expect(cuerpo.estado).toBeUndefined();
+  });
+
+  // El mensaje de una acción anterior ("Reenviado.", o un error) no debe
+  // sobrevivir a un cambio de filtro: ni la fila a la que pertenecía sigue
+  // necesariamente visible ahí.
+  it('los mensajes de una fila se limpian al cambiar el filtro, aunque la fila siga visible', async () => {
+    mockFetch();
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+    await waitFor(() => expect(within(fila).getByText(/reenviado/i)).toBeInTheDocument());
+
+    // Filtra por el propio estado de la fila de Ana ('enviada'): sigue
+    // visible después del filtro — así el mensaje desaparecido se debe de
+    // verdad a la limpieza, no a que la fila se haya ido con el filtro.
+    await usuario.selectOptions(screen.getByLabelText(/filtrar por estado/i), 'enviada');
+    await waitFor(() => {
+      expect(screen.getByText(/ana pérez/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/reenviado/i)).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import type { PrefillCotizacion } from './Panel';
 import { formatearColones } from './formato';
@@ -117,8 +117,19 @@ function estiloEstado(estado: Estado): string {
   }
 }
 
+// Ronda de correcciones 1 (hallazgo): "Por vencer" no es un estado que el
+// servidor entienda -- es un cruce de "sin respuesta" + "vence pronto" que
+// solo esta pantalla puede calcular (ver `calcularVigencia`). Con la lista
+// llena (hasta 200 filas, ordenadas por fecha) una fila ambar en la
+// posicion 40 deja de saltar a la vista con solo el resaltado -- que es
+// justo lo que esta pantalla necesita para servir de algo. El valor no se
+// manda como `estado` a `/listado` (ver `cargar`): se filtra del lado del
+// cliente, sobre lo que ya bajo.
+const FILTRO_POR_VENCER = 'por-vencer';
+
 const OPCIONES_FILTRO: { valor: string; etiqueta: string }[] = [
   { valor: '', etiqueta: 'Todos' },
+  { valor: FILTRO_POR_VENCER, etiqueta: 'Por vencer' },
   { valor: 'creada', etiqueta: 'Creada' },
   { valor: 'enviada', etiqueta: 'Enviada' },
   { valor: 'error', etiqueta: 'Error' },
@@ -174,11 +185,15 @@ export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar 
   async function cargar(estado: string, estaCancelado: () => boolean = () => false) {
     setCargando(true);
     setError('');
+    // "Por vencer" no es un estado real: se pide la lista completa (o
+    // filtrada por lo que sí entiende el servidor) y se recorta del lado
+    // del cliente, más abajo, en `filasVisibles`.
+    const estadoParaServidor = estado === FILTRO_POR_VENCER ? '' : estado;
     try {
       const res = await fetch('/api/cotizacion/listado', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(conClave(clave, estado ? { estado } : {})),
+        body: JSON.stringify(conClave(clave, estadoParaServidor ? { estado: estadoParaServidor } : {})),
       });
       const datos = await res.json();
       if (estaCancelado()) return;
@@ -202,6 +217,13 @@ export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar 
 
   useEffect(() => {
     let cancelado = false;
+    // Ronda de correcciones 1 (hallazgo menor): un mensaje de error o de
+    // "Reenviado." de una acción anterior no debe sobrevivir a un cambio de
+    // filtro -- ni la fila a la que pertenecía sigue necesariamente visible
+    // acá. Las llamadas a `cargar` que SÍ deben conservar el mensaje que
+    // acaban de dejar (después de cerrar/reenviar/duplicar con éxito o
+    // error) no pasan por este efecto, así que no las toca.
+    setMensajesFila({});
     void cargar(filtroEstado, () => cancelado);
     return () => {
       cancelado = true;
@@ -321,6 +343,19 @@ export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar 
     }
   }
 
+  // Ronda de correcciones 1: "Por vencer" recorta y ordena del lado del
+  // cliente (ver `cargar` y la nota de `FILTRO_POR_VENCER`) -- las más
+  // urgentes primero, para que la fila que vence hoy no dependa de scrollear
+  // hasta encontrarla entre las 200 que puede traer el servidor.
+  const filasVisibles = useMemo(() => {
+    if (!cotizaciones) return null;
+    if (filtroEstado !== FILTRO_POR_VENCER) return cotizaciones;
+    const ahora = new Date();
+    return [...cotizaciones]
+      .filter((f) => calcularVigencia(f, ahora).proximaAVencer)
+      .sort((a, b) => calcularVigencia(a, ahora).diasRestantes - calcularVigencia(b, ahora).diasRestantes);
+  }, [cotizaciones, filtroEstado]);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -344,11 +379,11 @@ export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar 
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">{error}</p>}
 
-      {cotizaciones !== null && cotizaciones.length === 0 && !cargando && !error && (
+      {filasVisibles !== null && filasVisibles.length === 0 && !cargando && !error && (
         <p className="text-sm text-teal">No hay cotizaciones para este filtro.</p>
       )}
 
-      {cotizaciones !== null && cotizaciones.length > 0 && (
+      {filasVisibles !== null && filasVisibles.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-[var(--carta-border)]">
           <table className="w-full min-w-[840px] text-left text-sm">
             <thead className="bg-[var(--carta-fill)] text-xs uppercase tracking-wide text-teal">
@@ -363,7 +398,7 @@ export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar 
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--carta-border)]">
-              {cotizaciones.map((fila) => {
+              {filasVisibles.map((fila) => {
                 const { vence, diasRestantes, proximaAVencer } = calcularVigencia(fila, new Date());
                 const nombre = textoDe(fila.cliente?.nombre) || 'Sin nombre';
                 const empresa = textoDe(fila.cliente?.empresa);

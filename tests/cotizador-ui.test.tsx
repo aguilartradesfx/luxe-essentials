@@ -166,6 +166,14 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       return new Response(JSON.stringify({ ok: true, borradores: opciones.borradores ?? [] }), { status: 200 });
     }
 
+    if (url.endsWith('/api/cotizacion/listado')) {
+      // Ronda de correcciones 1 (Tarea 10): la pestaña "Cotizaciones" pide
+      // esto al montar. Vacío alcanza para las pruebas de este archivo —lo
+      // único que ejercitan de esa pestaña es que cambiar a ella y volver
+      // no le borre al vendedor lo que armó en "Crear".
+      return new Response(JSON.stringify({ ok: true, cotizaciones: [], locationId: 'loc-1' }), { status: 200 });
+    }
+
     if (url.endsWith('/api/cotizacion/previsualizar')) {
       if (opciones.fallarRed === 'previsualizar') {
         throw new TypeError('Failed to fetch');
@@ -1227,5 +1235,46 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
     });
+  });
+});
+
+describe('Pestañas del panel (Tarea 10, ronda de correcciones 1)', () => {
+  // Hallazgo importante del revisor: `VistaCrear` se desmontaba al salir de
+  // la pestaña "Crear" (era condicional a `pestana === 'crear'`, igual que
+  // las otras dos), y no persistía el cliente ni las líneas en ningún
+  // lado. Con "Duplicar" (Tarea 10) el salto entre pestañas pasa a ser
+  // parte de la rutina diaria —duplicar allá, editar acá, volver a mirar
+  // algo allá—, así que perder el trabajo en cada ida y vuelta ya no es un
+  // caso raro. Es el mismo problema que la Tarea 9 resolvió para la sesión
+  // vencida (no perderle el trabajo al vendedor); esta prueba pide que se
+  // sostenga también acá.
+  it('cambiar a "Cotizaciones" y volver a "Crear" no pierde el cliente ni las líneas', async () => {
+    mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+    await agregar(usuario, 'set de 600 hilos king');
+    await waitFor(() => {
+      expect(screen.getByLabelText(/cantidad/i)).toHaveValue(1);
+    });
+
+    await usuario.click(screen.getByRole('button', { name: /^cotizaciones$/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/filtrar por estado/i)).toBeInTheDocument();
+    });
+    // La pantalla de "Crear" ya no está en el árbol visible mientras se
+    // mira "Cotizaciones" — el punto es que no se haya DESMONTADO (y por
+    // lo tanto no perdió el estado), no que siga a la vista.
+    expect(screen.queryByLabelText(/nombre del cliente/i)).not.toBeVisible();
+
+    await usuario.click(screen.getByRole('button', { name: /^crear$/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/nombre del cliente/i)).toBeVisible();
+    });
+    expect(screen.getByLabelText(/nombre del cliente/i)).toHaveValue('Ana Pérez');
+    expect(screen.getByLabelText(/correo del cliente/i)).toHaveValue('ana@empresa.com');
+    expect(screen.getByLabelText(/cantidad/i)).toHaveValue(1);
   });
 });
