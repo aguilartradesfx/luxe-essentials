@@ -152,13 +152,30 @@ type Props = {
   // qué hacer con eso —cambiar de pestaña, precargar el formulario— es
   // `Panel`, no esta vista.
   onDuplicar: (datos: PrefillCotizacion) => void;
+  // Tarea 11: "Ver en el listado" desde la pestaña Métricas (bloque de
+  // fallidas) llega pidiendo un filtro ya aplicado. Se lee una sola vez, al
+  // montar: esta vista se remonta entera cada vez que se entra a la pestaña
+  // (ver el `{pestana === 'cotizaciones' && ...}` en Panel.tsx), así que no
+  // hace falta re-sincronizar después — y `onFiltroInicialConsumido` le
+  // avisa a `Panel` que ya se aplicó, para que un cambio de pestaña normal
+  // (clic en "Cotizaciones", sin pasar por Métricas) no vuelva a filtrar por
+  // error solo. Mismo patrón que `plantilla`/`onPlantillaConsumida`.
+  filtroInicial?: string;
+  onFiltroInicialConsumido?: () => void;
 };
 
-export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar }: Props) {
+export function VistaListado({
+  clave,
+  obtenerCsrf,
+  onSesionInvalida,
+  onDuplicar,
+  filtroInicial,
+  onFiltroInicialConsumido,
+}: Props) {
   const [cotizaciones, setCotizaciones] = useState<FilaListado[] | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
-  const [filtroEstado, setFiltroEstado] = useState('');
+  const [filtroEstado, setFiltroEstado] = useState(filtroInicial ?? '');
   // El enlace a GoHighLevel se arma con esto. Llega en la MISMA respuesta
   // de `/api/cotizacion/listado` (ver su comentario en el route.ts):
   // nunca desde `process.env.NEXT_PUBLIC_*` ni desde el catálogo — un env
@@ -230,6 +247,16 @@ export function VistaListado({ clave, obtenerCsrf, onSesionInvalida, onDuplicar 
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- se pide de nuevo cada vez que cambia el filtro, no en cada render.
   }, [filtroEstado]);
+
+  // Tarea 11: le avisa a `Panel` que el filtro que trajo desde "Métricas"
+  // ya se aplicó (quedó adentro de `filtroEstado`, arriba), para que la
+  // próxima vez que se entre a esta pestaña por el camino normal —el botón
+  // "Cotizaciones"— no vuelva a filtrar por error solo. Se dispara una sola
+  // vez, al montar: es a propósito que no dependa de `filtroInicial`.
+  useEffect(() => {
+    if (filtroInicial) onFiltroInicialConsumido?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al montar.
+  }, []);
 
   async function cerrar(id: string, estado: 'ganada' | 'perdida', motivo?: string) {
     setProcesandoId(id);

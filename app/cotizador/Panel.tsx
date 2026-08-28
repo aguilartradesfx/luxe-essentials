@@ -5,6 +5,7 @@ import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import { PantallaClave } from './PantallaClave';
 import { VistaCrear } from './VistaCrear';
 import { VistaListado } from './VistaListado';
+import { VistaMetricas } from './VistaMetricas';
 
 // Lo único que el vendedor necesita para buscar y elegir un SKU. Nada de
 // `precioLista` ni `grupo`: eso es la lista de precios de Luxe, y esta forma
@@ -107,6 +108,14 @@ export default function Panel() {
   // volvería a disparar el efecto (la referencia sería la misma), pero
   // tampoco queremos que sobreviva para reaplicarse sola más adelante.
   const [plantilla, setPlantilla] = useState<PrefillCotizacion | null>(null);
+  // Tarea 11: el filtro con el que "Ver en el listado" (bloque de fallidas,
+  // en Métricas) quiere que arranque la pestaña "Cotizaciones". Vacío en el
+  // caso normal —se entra a esa pestaña por su propio botón, sin filtro
+  // pedido—. `VistaListado` lo consume una sola vez, al montar, y avisa por
+  // `onFiltroInicialConsumido` para que un cambio de pestaña posterior (el
+  // botón "Cotizaciones", no el enlace de fallidas) no vuelva a filtrar por
+  // error solo. Mismo patrón que `plantilla`/`onPlantillaConsumida`.
+  const [filtroListadoInicial, setFiltroListadoInicial] = useState('');
 
   // Requisito 3 (Tarea 9): si la sesión ya está viva al montar —cookie
   // válida de una entrada anterior—, no hay que pedir la clave otra vez. Se
@@ -217,6 +226,14 @@ export default function Panel() {
   function onDuplicar(datos: PrefillCotizacion) {
     setPlantilla(datos);
     setPestana('crear');
+  }
+
+  // "Ver en el listado" (Tarea 11, bloque de fallidas en Métricas): salta a
+  // la pestaña "Cotizaciones" con el filtro ya en 'error'. Es el único
+  // camino que hoy saca esas cotizaciones a la luz.
+  function onVerFallidas() {
+    setFiltroListadoInicial('error');
+    setPestana('cotizaciones');
   }
 
   // `VistaCrear` llama a esto una sola vez, al montar, si arrancó con una
@@ -343,10 +360,12 @@ export default function Panel() {
                 obtenerCsrf={obtenerCsrf}
                 onSesionInvalida={onSesionInvalida}
                 onDuplicar={onDuplicar}
+                filtroInicial={filtroListadoInicial}
+                onFiltroInicialConsumido={() => setFiltroListadoInicial('')}
               />
             )}
             {pestana === 'metricas' && (
-              <p className="text-sm text-teal">Métricas — disponible en la próxima tarea.</p>
+              <VistaMetricas clave={clave} onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />
             )}
           </div>
         </main>
