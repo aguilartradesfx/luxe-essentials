@@ -15,7 +15,9 @@ const DIAS_VIGENCIA = 30;
 
 const reenviarSchema = z.object({
   clave: z.string().optional(),
-  id: z.string().min(1, 'Falta el id de la cotización.'),
+  // Ronda de correcciones 1: un id que no es UUID revienta en Postgres como
+  // 500 en vez de 400 — mismo motivo que en /cerrar.
+  id: z.uuid('El id de la cotización no es válido.'),
 });
 
 type FilaReenviar = {
@@ -97,8 +99,13 @@ export async function POST(request: Request) {
     console.error('[cotizador] No se pudo firmar el enlace del PDF al reenviar.', firmado.error);
   }
 
+  // Fija desde `created_at`, nunca desde "ahora": es la misma fecha que ya
+  // llevaba el PDF que se está reenviando (el archivo no cambia, solo se
+  // vuelve a mandar), y es la que después usa esta misma respuesta para el
+  // aviso de `vencida`.
   const vence = new Date(filaTipada.created_at);
   vence.setDate(vence.getDate() + DIAS_VIGENCIA);
+  const vencida = vence.getTime() < Date.now();
 
   const correoResultado = await enviarCotizacion(
     {
@@ -116,15 +123,35 @@ export async function POST(request: Request) {
   );
 
   if (!correoResultado.ok) {
+    // A diferencia de app/api/cotizacion/route.ts (que hace varias cosas y
+    // no es idempotente: si el correo falla ahí, la cotización igual quedó
+    // creada con su número y su PDF, y un 5xx invitaría a un reintento que
+    // duplica la cotización), /reenviar hace una sola cosa. Si falla, no
+    // pasó nada — reintentar es seguro. Por eso sí es un error HTTP: 502,
+    // más preciso que un 500 genérico porque quien falló fue Resend, no
+    // la base.
     console.error('[cotizador] No se pudo reenviar el correo.', correoResultado.error);
     return NextResponse.json({ ok: false, error: 'No se pudo reenviar el correo.' }, { status: 502 });
   }
 
+  // Ronda de correcciones 1 (Tarea 8, hallazgo importante): antes este
+  // `update` pisaba `enviado_at` con la fecha del reenvío. `enviado_at` es
+  // "cuándo salió por primera vez", y es lo que usan las métricas
+  // (lib/cotizador/metricas.ts) para calcular vigencia y "por vencer"/
+  // "vencidas" — pisarlo con "ahora" hacía que reenviar una cotización de
+  // hace 40 días la sacara de "vencidas" con 30 días frescos en el panel,
+  // mientras el correo que el cliente acaba de recibir anuncia una fecha ya
+  // pasada. Dos métricas falseadas por un clic. `resend_id` sí se
+  // actualiza: es la última entrega, y es lo único que cambió de verdad.
+  // `estado` pasa a 'enviada': el caso de uso principal de este endpoint es
+  // sanar una fila que quedó en 'error' porque el primer envío falló — sin
+  // esto, el panel seguía mostrándola como fallida (y las métricas
+  // contándola en `fallidas`) después de un reenvío exitoso.
   const { error: errorActualizacion } = await db
     .from('cotizaciones')
     .update({
       updated_at: new Date().toISOString(),
-      enviado_at: new Date().toISOString(),
+      estado: 'enviada',
       resend_id: correoResultado.resendId,
     })
     .eq('id', datos.id);
@@ -139,5 +166,8 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, resendId: correoResultado.resendId });
+  // `vencida`: para que la pantalla le diga al vendedor que el precio que
+  // se acaba de reenviar ya no corre, y que conviene duplicar la cotización
+  // y cotizar de nuevo en vez de reenviar un PDF con una fecha vencida.
+  return NextResponse.json({ ok: true, resendId: correoResultado.resendId, vencida });
 }

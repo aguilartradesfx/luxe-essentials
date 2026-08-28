@@ -10,6 +10,19 @@ export const runtime = 'nodejs';
 // sale el reparto por producto y por línea de negocio.
 const COLUMNAS = 'id, created_at, enviado_at, cerrada_at, estado, origen, cliente, lineas, totales';
 
+// Ronda de correcciones 1 (Tarea 8, hallazgo importante): la API de
+// Supabase/PostgREST trunca en silencio a partir de 1000 filas por defecto,
+// y sin `order` explícito el corte cae en un orden arbitrario del motor —
+// hoy la tabla está casi vacía, así que nunca se nota, pero es exactamente
+// el tipo de error que solo aparece cuando el negocio crece, en el peor
+// momento para descubrirlo. Este tope es una red explícita, no la solución
+// de fondo: si `cotizaciones` supera `MAX_FILAS`, las métricas empiezan a
+// excluir en silencio las filas más antiguas (el `order` deja las más
+// recientes primero, así que el corte se lleva lo de atrás). El día que
+// haga falta, la solución real es agregar filtro de rango de fechas al
+// panel, no subir este número.
+const MAX_FILAS = 5000;
+
 export async function POST(request: Request) {
   let crudo: unknown;
   try {
@@ -28,7 +41,11 @@ export async function POST(request: Request) {
   // Sin filtrar por estado: `calcularMetricas` decide caso por caso qué
   // estados cuentan para cada número (Tarea 7, `ESTADOS_REALES`). Filtrar acá
   // duplicaría ese criterio en dos lugares que podrían desalinearse.
-  const { data, error } = await supabaseAdmin().from('cotizaciones').select(COLUMNAS);
+  const { data, error } = await supabaseAdmin()
+    .from('cotizaciones')
+    .select(COLUMNAS)
+    .order('created_at', { ascending: false })
+    .limit(MAX_FILAS);
 
   if (error) {
     console.error('[cotizador] No se pudieron leer las cotizaciones para las métricas.', error.message);
