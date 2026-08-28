@@ -64,7 +64,8 @@ nativo de GoHighLevel se retira al final, cuando el reemplazo esté verificado.
 
 **Interfaces:**
 - Produce: en `public.cotizaciones`, las columnas `pdf_ruta`, `enviado_at`, `resend_id`,
-  `cerrada_at`, `motivo_cierre`, y los estados `ganada` y `perdida` en el `check`.
+  `cerrada_at`, `motivo_cierre`, `numero` (correlativo único), y los estados `ganada` y
+  `perdida` en el `check`.
 
 - [ ] **Paso 1: Escribir la migración**
 
@@ -88,9 +89,20 @@ alter table public.cotizaciones drop constraint if exists cotizaciones_estado_ch
 alter table public.cotizaciones add constraint cotizaciones_estado_check
   check (estado in ('borrador','creada','enviada','error','convertida','ganada','perdida'));
 
--- El listado ordena por fecha y filtra por estado; las métricas agrupan por mes.
+-- El listado ordena por fecha descendente sin filtrar por origen, así que el
+-- índice tampoco filtra: uno parcial que no cubre la consulta es peso muerto.
 create index if not exists cotizaciones_creadas_idx
-  on public.cotizaciones (created_at desc) where origen = 'humano';
+  on public.cotizaciones (created_at desc);
+
+-- El número que el cliente cita cuando llama a preguntar. Correlativo de
+-- verdad, no un fragmento del id: `COT-2026-a3f9b2c1` en el documento que
+-- recibe un hotel no es un número de cotización, es ruido.
+create sequence if not exists cotizaciones_numero_seq;
+
+alter table public.cotizaciones
+  add column if not exists numero text unique
+    default 'COT-' || to_char(now(), 'YYYY') || '-' ||
+            lpad(nextval('cotizaciones_numero_seq')::text, 4, '0');
 ```
 
 - [ ] **Paso 2: Aplicar y verificar**
@@ -692,8 +704,10 @@ Esperado: FALLAN las cuatro nuevas.
 En `app/api/cotizacion/route.ts`, **después** del insert que devuelve `data` y **antes** de
 llamar a GoHighLevel:
 
-1. Generar el número de cotización a partir de la fila (`COT-<año>-<correlativo>`; usar los
-   primeros 8 caracteres del id si no hay correlativo).
+1. **Leer el `numero` de la fila insertada.** Lo genera la base con una secuencia
+   (`COT-2026-0001`, `COT-2026-0002`…). No lo derives del id: un número como
+   `COT-2026-a3f9b2c1` en el documento que recibe un hotel no es un número de cotización.
+   El `insert` ya hace `.select().single()`, así que el valor vuelve sin una consulta extra.
 2. `renderizarCotizacion(...)` dentro de un `try/catch`: si lanza, registrar el error, dejar
    `estado: 'error'` y **no** intentar mandar el correo.
 3. `guardarPdf(...)` y `enlaceFirmado(...)`.
