@@ -119,6 +119,17 @@ describe('renderizarCotizacion', () => {
     expect(text).toContain('Válida hasta');
   });
 
+  // Regresión: ronda de correcciones 1 sobre la Tarea 4. `Intl.DateTimeFormat
+  // ('es-CR', {month:'long'})` da "septiembre", nunca "setiembre" — la forma
+  // que se usa en Costa Rica. `lib/cotizador/fechas.ts` lo corrige a mano;
+  // esta prueba comprueba que el PDF (no sólo el correo) realmente lo usa.
+  it('la fecha usa "setiembre", no "septiembre"', async () => {
+    const buf = await renderizarCotizacion(base); // vence: 2026-09-26
+    const { text } = await extraerTexto(buf);
+    expect(text).toContain('setiembre');
+    expect(text).not.toContain('septiembre');
+  });
+
   it('no menciona ningún método de pago', async () => {
     // Requisito escrito del cliente: el vendedor coordina el cobro aparte.
     // Se prueba sobre la cotización con más superficie de texto (muchas

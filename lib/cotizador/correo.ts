@@ -7,6 +7,7 @@
 // y `lib/agente/acciones.ts`: `fetchImpl` inyectable, nunca lanza, se puede
 // probar sin red.
 import 'server-only';
+import { formatearFechaLargaCR } from '@/lib/cotizador/fechas';
 
 const RESEND_URL = 'https://api.resend.com/emails';
 
@@ -32,28 +33,10 @@ function colones(valor: number): string {
   return `₡${Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
-// Fecha en palabras ("26 de septiembre de 2026") más la forma numérica entre
-// paréntesis. Mismo huso horario que `FORMATEADOR_FECHA_CR` en
-// `lib/cotizador/ghl.ts` y `FORMATEADOR_FECHA` en `documento.tsx`: el
-// servidor corre en UTC (normal en Vercel), así que formatear sin huso
-// horario explícito puede imprimir el día siguiente para una cotización
-// armada de noche hora tica.
-const FORMATEADOR_LARGO = new Intl.DateTimeFormat('es-CR', {
-  timeZone: 'America/Costa_Rica',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
-const FORMATEADOR_CORTO = new Intl.DateTimeFormat('es-CR', {
-  timeZone: 'America/Costa_Rica',
-  day: '2-digit',
-  month: '2-digit',
-  year: 'numeric',
-});
-
-function formatearVigencia(fecha: Date): string {
-  return `${FORMATEADOR_LARGO.format(fecha)} (${FORMATEADOR_CORTO.format(fecha)})`;
-}
+// Fecha en palabras ("26 de setiembre de 2026"), con los nombres de mes de
+// Costa Rica — ver `lib/cotizador/fechas.ts`, compartido con `documento.tsx`
+// para que el correo y el PDF nunca digan cosas distintas.
+const formatearVigencia = formatearFechaLargaCR;
 
 // HTML plano, con estilos en línea y sin flexbox/grid: nada que un cliente de
 // correo como Outlook no sepa pintar. Un párrafo, el monto destacado, la

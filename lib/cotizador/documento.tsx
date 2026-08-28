@@ -26,6 +26,7 @@ import {
   renderToBuffer,
 } from '@react-pdf/renderer';
 import type { Cotizacion, LineaCalculada } from '@/lib/cotizador/tipos';
+import { formatearFechaLargaCR } from '@/lib/cotizador/fechas';
 
 // Los 14 fonts estándar de PDF (Helvetica, Times, etc.) usan una codificación
 // de 8 bits que NO incluye el signo de colón costarricense (₡, U+20A1): sin
@@ -118,21 +119,11 @@ function formatearTasa(tasa: number): string {
   return (tasa * 100).toFixed(2).replace(/\.?0+$/, '');
 }
 
-// Fecha en palabras ("27 de agosto de 2026"), en huso horario de Costa Rica.
-// Igual razón que `FORMATEADOR_FECHA_CR` en lib/cotizador/ghl.ts: el
-// servidor corre en UTC (normal en Vercel), así que formatear sin huso
-// horario explícito puede imprimir el día siguiente para una cotización
-// armada de noche hora tica.
-const FORMATEADOR_FECHA = new Intl.DateTimeFormat('es-CR', {
-  timeZone: 'America/Costa_Rica',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
-
-function formatearFecha(fecha: Date): string {
-  return FORMATEADOR_FECHA.format(fecha);
-}
+// Fecha en palabras ("27 de agosto de 2026"), con los nombres de mes de
+// Costa Rica ("setiembre", no "septiembre" — ver `lib/cotizador/fechas.ts`,
+// que es el único lugar donde eso se resuelve; este archivo y `correo.ts`
+// sólo lo importan).
+const formatearFecha = formatearFechaLargaCR;
 
 const TINTA = '#20211f';
 const TINTA_SUAVE = '#6b6a63';

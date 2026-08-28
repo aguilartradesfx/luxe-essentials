@@ -55,6 +55,12 @@ describe('enviarCotizacion', () => {
     expect(cuerpo).not.toMatch(/pagar|pago en línea|tarjeta|transferencia/i);
   });
 
+  it('devuelve error si Resend responde 2xx sin id', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({}));
+    const r = await enviarCotizacion(params, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+  });
+
   it('devuelve el error de Resend sin lanzar', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(respuesta({ message: 'dominio no verificado' }, 403));
     const r = await enviarCotizacion(params, { ...deps, fetchImpl });
