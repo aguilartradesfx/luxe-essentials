@@ -16,10 +16,11 @@ type Pestana = 'crear' | 'cotizaciones' | 'metricas';
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
 // React: solo lo entrega la respuesta de `/api/cotizacion/entrar` (y, desde
 // la ronda de correcciones 1, también `/api/cotizacion/catalogo` cuando la
-// entrada fue por cookie — ver ese archivo). Si viviera en memoria, cada
-// recarga del iframe de GoHighLevel lo perdería — la cookie de sesión
-// seguiría viva (dura 30 días), pero sin el token ninguna petición que
-// escribe podría pasar el chequeo anti-CSRF, y el vendedor tendría que
+// cookie de la petición es válida — ver ese archivo; no depende de CÓMO se
+// autenticó la petición, solo de que la cookie lo sea). Si viviera en
+// memoria, cada recarga del iframe de GoHighLevel lo perdería — la cookie de
+// sesión seguiría viva (dura 30 días), pero sin el token ninguna petición
+// que escribe podría pasar el chequeo anti-CSRF, y el vendedor tendría que
 // volver a escribir la clave solo para conseguir uno nuevo. `sessionStorage`
 // sobrevive a una recarga dentro de la misma pestaña, que es el caso más
 // común, aunque no el único — ver el comentario de la sonda, más abajo,
@@ -57,8 +58,23 @@ function limpiarCsrf() {
   }
 }
 
+const MENSAJE_SESION_VENCIDA =
+  'Tu sesión venció. Volvé a entrar — lo que armaste sigue acá, no se perdió.';
+
 export default function Panel() {
+  // Ronda de correcciones 2 (hallazgo importante): `dentro` ya NO significa
+  // "sesión válida ahora mismo" — significa "el catálogo se cargó alguna
+  // vez, así que `VistaCrear` puede existir". Una vez en `true`, se queda
+  // así para siempre; ver `onSesionInvalida` más abajo para por qué.
   const [dentro, setDentro] = useState(false);
+  // Controla la pantalla de clave: visible al principio (`dentro` todavía
+  // en `false`) y de nuevo cuando la sesión vence a mitad de una
+  // cotización. Distinto de `dentro` a propósito — ver el hallazgo 1 de la
+  // ronda de correcciones 2.
+  const [pidiendoClave, setPidiendoClave] = useState(true);
+  // Por qué se está pidiendo la clave, cuando no es la primera vez. `null`
+  // en la primera entrada (no hace falta explicar nada todavía).
+  const [mensajePantallaClave, setMensajePantallaClave] = useState<string | null>(null);
   const [skus, setSkus] = useState<SkuUI[]>([]);
   // La clave escrita al entrar por formulario. Se guarda en memoria (no en
   // `sessionStorage`, a diferencia del token anti-CSRF): perderla en una
@@ -101,6 +117,7 @@ export default function Panel() {
         if (cancelado || !res.ok || !datos.ok) return;
         setSkus(datos.skus);
         setDentro(true);
+        setPidiendoClave(false);
         // Esta respuesta trae el token anti-CSRF derivado de la cookie que
         // acaba de demostrarse válida (ver app/api/cotizacion/catalogo/route.ts):
         // guardarlo acá repara `sessionStorage` en cualquier pestaña donde
@@ -119,16 +136,10 @@ export default function Panel() {
   }, []);
 
   // Cambia la clave por una cookie de sesión más un token anti-CSRF
-  // (`/api/cotizacion/entrar`, Tarea 6). Es "best-effort" y no bloquea la
-  // entrada: la clave que ya se validó contra `/catalogo` abajo sigue
-  // siendo una vía de autenticación válida por sí sola para las rutas de
-  // lectura (lib/autenticacion-cotizador.ts), así que un fallo acá (red,
-  // cookies bloqueadas) no debe dejar al vendedor fuera de la pantalla. Lo
-  // que sí puede fallar en silencio si esto falla es el envío final
-  // (`VistaCrear.crear()`, que ya no manda la clave en el cuerpo — ver ese
-  // archivo): por eso el `console.error`, para que el síntoma ("no puedo
-  // cotizar") tenga un rastro distinguible de un simple fallo de red del
-  // vendedor.
+  // (`/api/cotizacion/entrar`, Tarea 6). Nunca lanza: sus tres ramas de
+  // fallo (status no-ok, respuesta sin `csrf`, excepción de red) se
+  // registran con `console.error` y devuelven sin más — el llamador
+  // (`onEntrar`, abajo) decide qué hacer con eso.
   async function establecerSesion(claveIngresada: string) {
     try {
       const res = await fetch('/api/cotizacion/entrar', {
@@ -154,19 +165,26 @@ export default function Panel() {
     }
   }
 
-  // Ronda de correcciones 1 (hallazgo crítico): si el token guardado quedó
-  // rancio —por ejemplo, se abrió una segunda pestaña y volvió a entrar,
-  // rotando la cookie y el csrf que le corresponde, mientras esta pestaña
-  // seguía con el viejo— el envío final vuelve con 401 y, sin esto, el
-  // vendedor quedaba atrapado: `dentro` nunca volvía a `false` por sí solo,
-  // así que el panel seguía leyendo (las rutas de lectura no exigen CSRF)
-  // pero nunca podía volver a escribir. `VistaCrear` llama a esto cuando
-  // `crear()` recibe 401: se limpia el token inservible y se vuelve a la
-  // pantalla de clave, que es la única forma de conseguir uno vigente.
+  // Ronda de correcciones 1 (hallazgo crítico) — Ronda de correcciones 2
+  // (hallazgo importante, cierra el problema que dejó abierto la 1): si el
+  // token guardado quedó rancio (segunda pestaña que rotó la cookie, o
+  // simplemente venció) el envío final vuelve con 401. `VistaCrear` llama a
+  // esto para pedir la clave de nuevo — pero YA NO desmonta la vista: antes
+  // esto ponía `dentro = false`, y como `Panel` solo renderizaba
+  // `VistaCrear` cuando `dentro` era `true`, React desmontaba el subárbol
+  // entero (cliente, líneas, todo lo armado) en el mismo instante en que
+  // `crear()` intentaba pintar el error en él — el vendedor se encontraba
+  // con un formulario de clave en blanco, sin explicación, y el trabajo
+  // perdido. Ahora `dentro` no se toca: `VistaCrear` sigue montada (con su
+  // estado intacto) y `pidiendoClave` la tapa con la pantalla de clave,
+  // con un mensaje que dice qué pasó. Al reautenticarse, `onEntrar` solo
+  // baja `pidiendoClave` — la cotización a medio armar sigue exactamente
+  // donde estaba.
   function onSesionInvalida() {
     limpiarCsrf();
     setClave('');
-    setDentro(false);
+    setMensajePantallaClave(MENSAJE_SESION_VENCIDA);
+    setPidiendoClave(true);
   }
 
   // La pantalla de clave: sin ella no hay catálogo. `/api/cotizacion/catalogo`
@@ -183,73 +201,104 @@ export default function Panel() {
       if (!res.ok || !datos.ok) {
         return res.status === 401 ? 'Clave incorrecta.' : (datos.error ?? `Error ${res.status}`);
       }
+      // Ronda de correcciones 2 (hallazgo importante): antes esta llamada
+      // se disparaba sin esperarla, para no demorar la entrada. Pero
+      // `crear()` (VistaCrear.tsx) ya no manda la clave en el cuerpo desde
+      // la ronda anterior — depende enteramente de que esta sesión ya esté
+      // establecida. Sin esperar, el primer envío podía ganarle la carrera
+      // a esta llamada y volver con un 401 evitable. Se espera acá: nunca
+      // lanza (ver su propio try/catch), así que no puede dejar al
+      // vendedor afuera si falla — solo demora unos cientos de ms el
+      // "Entrando…" para que, en el camino feliz, el token ya esté listo
+      // antes del primer clic en "Cotizar y enviar".
+      await establecerSesion(claveIngresada);
       setSkus(datos.skus);
       setClave(claveIngresada);
       setDentro(true);
-      // No se espera esta llamada: obtener la sesión por cookie no debe
-      // demorar la entrada a la pantalla principal.
-      void establecerSesion(claveIngresada);
+      setPidiendoClave(false);
+      setMensajePantallaClave(null);
       return null;
     } catch {
       return 'Fallo de red.';
     }
   }
 
-  if (!dentro) {
-    return <PantallaClave onEntrar={onEntrar} />;
-  }
-
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
-      <header className="border-b border-[var(--carta-border)] pb-4">
-        <h1 className="font-display text-xl text-navy">Cotizador</h1>
-        <p className="text-xs text-teal">
-          Armá la cotización por SKU. Los precios y descuentos los calcula el mismo motor que
-          usa el servidor — lo que ves acá es exactamente lo que va a facturarse.
-        </p>
-      </header>
+    <>
+      {dentro && (
+        <main
+          className="mx-auto max-w-6xl px-4 py-6 sm:px-6"
+          // Ronda de correcciones 2: mientras la pantalla de clave está
+          // encima (sesión vencida a mitad de trabajo), este contenido
+          // sigue montado —preserva `VistaCrear`— pero queda inerte: sin
+          // foco, sin clics, y fuera del árbol de accesibilidad, para que
+          // no compita con el formulario que sí hay que llenar.
+          aria-hidden={pidiendoClave || undefined}
+          // eslint-disable-next-line react/no-unknown-property -- atributo HTML estándar; React 19 lo pasa tal cual al DOM.
+          inert={pidiendoClave || undefined}
+        >
+          <header className="border-b border-[var(--carta-border)] pb-4">
+            <h1 className="font-display text-xl text-navy">Cotizador</h1>
+            <p className="text-xs text-teal">
+              Armá la cotización por SKU. Los precios y descuentos los calcula el mismo motor que
+              usa el servidor — lo que ves acá es exactamente lo que va a facturarse.
+            </p>
+          </header>
 
-      {/* Tres pestañas (Tarea 9): solo "Crear" tiene contenido hoy —lo que ya
-          existía en Cotizador.tsx—. "Cotizaciones" y "Métricas" quedan como
-          marcadores; se llenan en las próximas dos tareas. */}
-      <nav className="mt-4 flex gap-4 border-b border-[var(--carta-border)]" aria-label="Secciones del panel">
-        {(
-          [
-            ['crear', 'Crear'],
-            ['cotizaciones', 'Cotizaciones'],
-            ['metricas', 'Métricas'],
-          ] as const
-        ).map(([valor, etiqueta]) => (
-          <button
-            key={valor}
-            type="button"
-            onClick={() => setPestana(valor)}
-            aria-current={pestana === valor}
-            className={`-mb-px border-b-2 px-1 pb-2 text-sm font-medium ${
-              pestana === valor ? 'border-navy text-navy' : 'border-transparent text-teal hover:text-navy'
-            }`}
-          >
-            {etiqueta}
-          </button>
-        ))}
-      </nav>
+          {/* Tres pestañas (Tarea 9): solo "Crear" tiene contenido hoy —lo que ya
+              existía en Cotizador.tsx—. "Cotizaciones" y "Métricas" quedan como
+              marcadores; se llenan en las próximas dos tareas. */}
+          <nav className="mt-4 flex gap-4 border-b border-[var(--carta-border)]" aria-label="Secciones del panel">
+            {(
+              [
+                ['crear', 'Crear'],
+                ['cotizaciones', 'Cotizaciones'],
+                ['metricas', 'Métricas'],
+              ] as const
+            ).map(([valor, etiqueta]) => (
+              <button
+                key={valor}
+                type="button"
+                onClick={() => setPestana(valor)}
+                aria-current={pestana === valor}
+                className={`-mb-px border-b-2 px-1 pb-2 text-sm font-medium ${
+                  pestana === valor ? 'border-navy text-navy' : 'border-transparent text-teal hover:text-navy'
+                }`}
+              >
+                {etiqueta}
+              </button>
+            ))}
+          </nav>
 
-      <div className="mt-6">
-        {pestana === 'crear' && (
-          <VistaCrear
-            skus={skus}
-            clave={clave}
-            obtenerCsrf={obtenerCsrf}
-            onSesionInvalida={onSesionInvalida}
-          />
-        )}
-        {pestana === 'cotizaciones' && (
-          <p className="text-sm text-teal">Cotizaciones — disponible en la próxima tarea.</p>
-        )}
-        {pestana === 'metricas' && (
-          <p className="text-sm text-teal">Métricas — disponible en la próxima tarea.</p>
-        )}
-      </div>
-    </main>
+          <div className="mt-6">
+            {pestana === 'crear' && (
+              <VistaCrear
+                skus={skus}
+                clave={clave}
+                obtenerCsrf={obtenerCsrf}
+                onSesionInvalida={onSesionInvalida}
+              />
+            )}
+            {pestana === 'cotizaciones' && (
+              <p className="text-sm text-teal">Cotizaciones — disponible en la próxima tarea.</p>
+            )}
+            {pestana === 'metricas' && (
+              <p className="text-sm text-teal">Métricas — disponible en la próxima tarea.</p>
+            )}
+          </div>
+        </main>
+      )}
+      {pidiendoClave && (
+        // Ronda de correcciones 2 (hallazgo importante): sin este `fixed`
+        // (superpuesto, no reemplazando), volver a pedir la clave a mitad
+        // de una cotización se llevaría puesto el trabajo de abajo — ver el
+        // comentario de `onSesionInvalida`. En la primera entrada (`dentro`
+        // todavía en `false`) no hay nada debajo que tapar: se ve igual que
+        // antes, solo que con este mismo contenedor.
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-navy/50 backdrop-blur-sm">
+          <PantallaClave onEntrar={onEntrar} mensaje={mensajePantallaClave ?? undefined} />
+        </div>
+      )}
+    </>
   );
 }

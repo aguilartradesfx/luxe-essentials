@@ -1061,6 +1061,59 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     vi.restoreAllMocks();
   });
 
+  it('no entra a la pantalla principal hasta que /entrar termina, para que el primer envío no dependa de una carrera', async () => {
+    // Ronda de correcciones 2 (hallazgo importante): el revisor señaló mi
+    // propia preocupación del reporte anterior — `crear()` ya no manda la
+    // clave en el cuerpo, así que el primer envío depende enteramente de
+    // que `establecerSesion` (el POST a /entrar) haya terminado. Si esa
+    // llamada se dispara sin esperarla, el primer envío puede ganarle la
+    // carrera y volver con un 401 evitable. Esta prueba retiene /entrar a
+    // propósito (mismo patrón que "el botón dice la verdad ANTES del
+    // clic") y confirma que la pantalla NO pasa a mostrar el catálogo
+    // mientras esa llamada sigue en vuelo.
+    let liberarEntrar: (() => void) | undefined;
+    const bloqueoEntrar = new Promise<void>((resolve) => {
+      liberarEntrar = resolve;
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
+      if (url.endsWith('/api/cotizacion/catalogo')) {
+        if (cuerpo.clave === 'correcta') {
+          return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+      }
+      if (url.endsWith('/api/cotizacion/entrar')) {
+        await bloqueoEntrar;
+        return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
+      }
+      throw new Error(`Fetch no simulado en la prueba: ${url}`);
+    });
+
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
+    await usuario.click(screen.getByRole('button', { name: /^entrar$/i }));
+
+    // /entrar sigue retenido: todavía "Entrando…", sin buscador. Si
+    // `establecerSesion` se disparara sin esperarla, esto ya habría
+    // pasado a la pantalla principal en este punto.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /entrando/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText(/buscar/i)).not.toBeInTheDocument();
+
+    liberarEntrar?.();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/buscar/i)).toBeInTheDocument();
+    });
+    // Y, para cuando entra, el token ya está guardado — el primer envío no
+    // tiene que competir contra nada.
+    expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBe(CSRF_TOKEN_DE_PRUEBA);
+  });
+
   it('al validar la clave, llama a /api/cotizacion/entrar y guarda el token anti-CSRF que devuelve', async () => {
     // Mata el mutante "borrar la llamada que crea la sesión": sin ella, no
     // hay ningún POST a /entrar y `sessionStorage` se queda vacío para
@@ -1113,11 +1166,15 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     expect('clave' in cuerpoBorradores).toBe(false);
   });
 
-  it('si el envío final vuelve con 401 (token anti-CSRF rancio), limpia la sesión y vuelve a pedir la clave', async () => {
-    // Hallazgo crítico: antes `dentro` nunca volvía a `false` por sí solo,
-    // así que un token rancio (p. ej. una segunda pestaña rotó la cookie)
-    // dejaba al vendedor en una pantalla que lee pero nunca puede volver a
-    // escribir, sin ninguna forma de recuperarse salvo recargar.
+  it('si el envío final vuelve con 401 (token anti-CSRF rancio), avisa por qué y NO pierde la cotización a medio armar', async () => {
+    // Ronda de correcciones 2 (hallazgo importante): la primera versión de
+    // esta prueba (ronda 1) afirmaba `expect(screen.queryByLabelText(/buscar/i)).not.toBeInTheDocument()`
+    // — es decir, congelaba el bug que el revisor encontró: `onSesionInvalida`
+    // desmontaba `VistaCrear` entera (ponía `dentro = false`), así que el
+    // vendedor perdía el cliente y las líneas ya armadas, sin ninguna
+    // explicación, en un formulario de clave en blanco. Ahora `VistaCrear`
+    // sigue montada (con su estado intacto) detrás de la pantalla de clave,
+    // que además explica qué pasó.
     const fetchEspiado = mockFetch({ crear401: true });
     const usuario = userEvent.setup();
     render(<Cotizador />);
@@ -1130,11 +1187,22 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     });
     await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
 
-    // Vuelve a la pantalla de clave — no se queda atrapado.
+    // Vuelve a pedir la clave — pero con una explicación, no un formulario
+    // en blanco sin contexto.
     await waitFor(() => {
       expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText(/buscar/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/tu sesión venció/i)).toBeInTheDocument();
+
+    // Lo armado sigue ahí, debajo de la pantalla de clave — no se perdió.
+    // (`getByLabelText(/cantidad/i)` es unívoco: solo la línea agregada lo
+    // tiene, a diferencia de "set de 600 hilos king" en texto, que también
+    // aparece en el resultado del buscador porque `busqueda` no se limpia
+    // sola.)
+    expect(screen.getByLabelText(/nombre del cliente/i)).toHaveValue('Ana Pérez');
+    expect(screen.getByLabelText(/correo del cliente/i)).toHaveValue('ana@empresa.com');
+    expect(screen.getByLabelText(/cantidad/i)).toHaveValue(1);
+
     // El token inservible no se deja atrás: si sobreviviera, una sonda
     // futura (u otra pestaña) podría volver a intentarlo con el mismo token
     // rancio.
@@ -1145,5 +1213,19 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
       (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
     );
     expect(llamadasAlEnvio).toHaveLength(1);
+
+    // Al reautenticarse, sigue exactamente donde estaba: no hay que
+    // rearmar nada de cero.
+    await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
+    await usuario.click(screen.getByRole('button', { name: /^entrar$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/^clave$/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/nombre del cliente/i)).toHaveValue('Ana Pérez');
+    expect(screen.getByLabelText(/cantidad/i)).toHaveValue(1);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
+    });
   });
 });

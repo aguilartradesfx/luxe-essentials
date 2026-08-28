@@ -96,6 +96,21 @@ describe('POST /api/cotizacion/catalogo', () => {
       expect('csrf' in cuerpo).toBe(false);
     });
 
+    it('con clave correcta Y cookie válida, la respuesta también trae el csrf (depende de la cookie, no de cómo se autenticó)', async () => {
+      // Ronda de correcciones 2 (hallazgo menor): `csrfDeSesion` no mira
+      // `autenticarPeticion` ni cómo pasó la petición — solo si la cookie
+      // presentada es válida. Mandar además una clave correcta no cambia
+      // eso. Sin impacto de seguridad (quien ya tiene la cookie válida no
+      // gana ninguna capacidad nueva), pero el reporte de la ronda anterior
+      // decía "nunca por la vía de la clave", que esta prueba desmiente.
+      const { cookie, csrf } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      const res = await POST(peticion({ clave: 'secreta' }, { cookie: valor }));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo.csrf).toBe(csrf);
+    });
+
     it('con Sec-Fetch-Site: cross-site, no devuelve el csrf aunque la cookie sea válida', async () => {
       // Endurecimiento a propósito: hoy un sitio ajeno no puede LEER esta
       // respuesta (sin cabecera Access-Control-Allow-Origin, es opaca para
