@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import Cotizador from '@/app/cotizador/Cotizador';
+import Cotizador from '@/app/cotizador/Panel';
 
 // Tarea 8: el catálogo ya no viaja en el bundle. `Cotizador` arranca con una
 // pantalla de clave y solo pide el catálogo (sin precios) a
