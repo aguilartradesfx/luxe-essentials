@@ -80,6 +80,20 @@ const valido = {
   lineas: [{ skuId: 'set-600-king', cantidad: 16 }],
 };
 
+describe('app/api/cotizacion/route.ts declara un maxDuration', () => {
+  // Ronda de correcciones final (hallazgo importante): es la única ruta que
+  // escribe sin declarar un tiempo máximo, pese a ser la más larga (insert +
+  // hasta cuatro llamadas a GoHighLevel + render del PDF + subida + firma +
+  // correo con adjunto + nota + update). Sin esto corre con el límite por
+  // defecto de Vercel (10s) y, si expira a mitad, la fila queda huérfana en
+  // 'borrador': /cerrar y /reenviar la rechazan, y no aparece en fallidas.
+  it('declara maxDuration, igual que app/api/ghl/webhook/route.ts', async () => {
+    const modulo = await import('@/app/api/cotizacion/route');
+    expect(typeof modulo.maxDuration).toBe('number');
+    expect(modulo.maxDuration).toBeGreaterThanOrEqual(30);
+  });
+});
+
 describe('POST /api/cotizacion', () => {
   beforeEach(() => {
     insertado.length = 0;
@@ -225,6 +239,24 @@ describe('POST /api/cotizacion', () => {
     expect(lineaGuardada[0].subtotal).not.toBe(1);
     expect(lineaGuardada[0].descuentoPct).not.toBe(999);
     expect(lineaGuardada[0].descuentoPct).toBe(10);
+  });
+
+  // Ronda de correcciones final (hallazgo crítico): `origen` era siempre
+  // 'humano', incluso cuando el envío traía `borradorId` (la cotización nació
+  // de un borrador que dejó el agente de WhatsApp por su cuenta). Como esas
+  // filas cierran en 'convertida' y ese estado queda fuera de las métricas
+  // (lib/cotizador/metricas.ts, ESTADOS_REALES), `porOrigen.agente` daba cero
+  // siempre — la métrica de "Origen" mentía.
+  it('guarda origen "agente" cuando el envío trae borradorId', async () => {
+    await POST(peticion({ ...valido, borradorId: 'borrador-20' }));
+    const fila = insertado[insertado.length - 1] as Record<string, unknown>;
+    expect(fila.origen).toBe('agente');
+  });
+
+  it('guarda origen "humano" cuando el envío no trae borradorId', async () => {
+    await POST(peticion(valido));
+    const fila = insertado[insertado.length - 1] as Record<string, unknown>;
+    expect(fila.origen).toBe('humano');
   });
 
   it('rechaza una cantidad por línea absurdamente grande', async () => {
@@ -437,6 +469,24 @@ describe('POST /api/cotizacion', () => {
     expect(cuerpo.correo.error).toContain('dominio');
     const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
     expect(actualizado.estado).toBe('error');
+  });
+
+  // Ronda de correcciones final (hallazgo importante): el diseño promete "las
+  // que fallaron, con su error" — pero el error del correo no se guardaba en
+  // ningún lado, así que la vista de fallidas no tenía nada que mostrar más
+  // allá de la palabra "Error".
+  it('guarda el error del correo en correo_error cuando el envío falla', async () => {
+    const { enviarCotizacion } = await import('@/lib/cotizador/correo');
+    vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+    await POST(peticion(valido));
+    const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
+    expect(actualizado.correo_error).toBe('dominio no verificado');
+  });
+
+  it('no guarda correo_error cuando el envío sale bien', async () => {
+    await POST(peticion(valido));
+    const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
+    expect(actualizado.correo_error).toBeNull();
   });
 
   it('si el PDF falla, no intenta mandar un correo sin adjunto', async () => {

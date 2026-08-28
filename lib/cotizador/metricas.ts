@@ -104,10 +104,20 @@ function claveMesAnterior(hoy: Date): string {
 // fila con `sumarCierre` y se cierra una sola vez, al final, con
 // `resumenDe` -- mismo motivo que `diasEntre`: redondear el promedio una
 // sola vez, no fila por fila.
-type AcumuladorCierre = { cantidad: number; monto: number; diasSuma: number };
+//
+// Ronda de correcciones final: `diasCantidad` es DISTINTO de `cantidad`.
+// `cantidad` cuenta toda fila cerrada en el mes (entra al numerador del
+// monto); `diasCantidad` cuenta solo las que tienen las dos fechas y por lo
+// tanto un número de días real que sumar. Antes el promedio dividía
+// `diasSuma` entre `cantidad` -- si de dos cotizaciones ganadas solo una
+// tenía `enviado_at` (la otra lo tiene `null`, típicamente una fila vieja de
+// antes de que existiera esa columna, o una `error` corregida a mano),
+// `diasSuma` solo llevaba los días de la medible pero el divisor contaba las
+// dos: el promedio salía a la mitad de lo real.
+type AcumuladorCierre = { cantidad: number; monto: number; diasSuma: number; diasCantidad: number };
 
 function acumuladorVacio(): AcumuladorCierre {
-  return { cantidad: 0, monto: 0, diasSuma: 0 };
+  return { cantidad: 0, monto: 0, diasSuma: 0, diasCantidad: 0 };
 }
 
 function sumarCierre(acc: AcumuladorCierre, fila: FilaCotizacion): void {
@@ -115,6 +125,7 @@ function sumarCierre(acc: AcumuladorCierre, fila: FilaCotizacion): void {
   acc.monto += fila.totales.total;
   if (fila.enviado_at !== null && fila.cerrada_at !== null) {
     acc.diasSuma += diasEntre(fila.enviado_at, fila.cerrada_at);
+    acc.diasCantidad += 1;
   }
 }
 
@@ -122,7 +133,10 @@ function resumenDe(acc: AcumuladorCierre): ResumenMes {
   return {
     cantidad: acc.cantidad,
     monto: Math.round(acc.monto),
-    diasPromedio: acc.cantidad > 0 ? Math.round(acc.diasSuma / acc.cantidad) : 0,
+    // Se divide por las filas MEDIBLES (`diasCantidad`), no por todas
+    // (`cantidad`): una cotización sin `enviado_at` no aporta días a la
+    // suma, así que tampoco debe diluir el promedio.
+    diasPromedio: acc.diasCantidad > 0 ? Math.round(acc.diasSuma / acc.diasCantidad) : 0,
   };
 }
 

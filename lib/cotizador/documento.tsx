@@ -101,6 +101,25 @@ const NOTA_BORDADO =
 const NOTA_BORDADO_ESPECIAL =
   'El bordado solicitado excede el estándar: el precio final se confirma contra muestra.';
 
+// Ronda de correcciones final (hallazgo menor): el documento no decía a
+// quién responderle. Se arma con lo que haya en las tres variables de
+// entorno — cualquier subconjunto, no las tres a la fuerza — y si NINGUNA
+// está definida se omite el pie entero: nunca se inventa un dato ni se deja
+// un marcador ("Tel: ___") en un documento que un hotel real recibe. Se lee
+// `process.env` directamente (no como prop) porque este módulo ya es
+// server-only y son datos de la empresa, no del cálculo — mismo criterio que
+// separa esto de `ClienteDocumento`/`DatosDocumento`, que sí varían por
+// cotización.
+function lineaContacto(): string | null {
+  const partes = [
+    process.env.LUXE_CONTACTO_TELEFONO,
+    process.env.LUXE_CONTACTO_CORREO,
+    process.env.LUXE_CONTACTO_SITIO,
+  ].filter((v): v is string => Boolean(v && v.trim().length > 0));
+  if (partes.length === 0) return null;
+  return `¿Consultas sobre esta cotización? ${partes.join(' · ')}`;
+}
+
 // Colones sin decimales, con "." como separador de miles — mismo criterio
 // que `colones()` en app/cotizador/Cotizador.tsx: no se usa
 // `toLocaleString`/`Intl.NumberFormat` porque el separador de miles que trae
@@ -358,6 +377,14 @@ const styles = StyleSheet.create({
     lineHeight: 1.5,
     marginBottom: 4,
   },
+  notaContacto: {
+    fontSize: 8,
+    fontFamily: 'Inter',
+    fontWeight: 600,
+    color: TINTA_SUAVE,
+    lineHeight: 1.5,
+    marginTop: 8,
+  },
 
   piePagina: {
     position: 'absolute',
@@ -392,6 +419,7 @@ function FilaProducto({ linea }: { linea: LineaCalculada }) {
 
 function Documento({ numero, cotizacion, cliente, emitida, vence }: DatosDocumento) {
   const { lineas, subtotal, ahorro, tasaIva, iva, total, bordadoEspecial } = cotizacion;
+  const contacto = lineaContacto();
 
   return (
     <Document>
@@ -487,6 +515,7 @@ function Documento({ numero, cotizacion, cliente, emitida, vence }: DatosDocumen
           </Text>
           <Text style={styles.notaTexto}>{NOTA_BORDADO}</Text>
           {bordadoEspecial && <Text style={styles.notaTexto}>{NOTA_BORDADO_ESPECIAL}</Text>}
+          {contacto && <Text style={styles.notaContacto}>{contacto}</Text>}
         </View>
 
         <Text

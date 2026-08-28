@@ -20,7 +20,7 @@ const listadoSchema = z.object({
 // GoHighLevel.
 const COLUMNAS =
   'id, numero, created_at, updated_at, estado, origen, contact_id, cliente, totales, ' +
-  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error';
+  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error, correo_error';
 
 export async function POST(request: Request) {
   let crudo: unknown;

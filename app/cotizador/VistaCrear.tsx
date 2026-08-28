@@ -128,9 +128,24 @@ function formatearFecha(iso: string): string {
 // por cookie (la sonda de `Panel`, sin clave conocida), `clave` llega como
 // `''` — mandarla igual (`clave: ''`) no es una credencial, es peso muerto
 // que enturbia cuál vía de autenticación se está usando de verdad. Este
-// helper arma el cuerpo de una petición de LECTURA con la clave solo cuando
-// se conoce una; las que escriben (`crear`, más abajo) ya no la mandan en
-// absoluto — ver el comentario ahí.
+// helper arma el cuerpo de una petición con la clave solo cuando se conoce
+// una — cuando no (sesión por cookie, la clave nunca se tecleó en esta
+// pestaña), la petición depende enteramente de la cookie más el token
+// anti-CSRF.
+//
+// Ronda de correcciones final (hallazgo crítico): antes esto solo se usaba
+// en las rutas de LECTURA — `crear()`, más abajo, dejaba de mandar `clave`
+// por completo, dependiendo solo de la cookie + CSRF. El servidor la sigue
+// aceptando (`autenticarPeticion`, lib/autenticacion-cotizador.ts), así que
+// el respaldo existía; solo el navegador había dejado de usarlo. Eso
+// convierte cualquier rechazo silencioso de la cookie (nadie había probado
+// este panel dentro de un iframe real de GoHighLevel todavía) en un fallo
+// total y disfrazado: el vendedor puede seguir leyendo — catálogo, listado,
+// métricas, todas rutas de lectura que sí mandan la clave — pero nada de lo
+// que escribe funciona jamás, con un mensaje que culpa a una sesión que
+// nunca existió. Mandar la clave acá no debilita nada: un sitio ajeno no la
+// conoce, así que no abre ninguna puerta que el token anti-CSRF no cerrara
+// ya.
 function conClave(clave: string, resto: Record<string, unknown>): Record<string, unknown> {
   return clave ? { clave, ...resto } : resto;
 }
@@ -466,35 +481,39 @@ export function VistaCrear({
           // la pantalla de clave para conseguir uno nuevo.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
-        body: JSON.stringify({
-          // Ronda de correcciones 1: antes se mandaba `clave` acá como
-          // respaldo. Ese contrato era de una etapa anterior a la sesión
-          // por cookie (Tarea 6/9); ahora el envío final depende
-          // enteramente de la cookie + el token anti-CSRF de arriba —
-          // `tests/cotizador-ui.test.tsx` afirma la cabecera, no un campo
-          // `clave` en este cuerpo.
-          cliente: {
-            nombre: cliente.nombre.trim(),
-            empresa: cliente.empresa.trim() || undefined,
-            email: cliente.email.trim(),
-            // Opcionales (Tarea 5): `undefined` desaparece al pasar por
-            // `JSON.stringify`, así que enviarlos vacíos no bloquea la
-            // cotización — ver el comentario en `Cliente`, arriba.
-            telefono: cliente.telefono.trim() || undefined,
-            direccion: cliente.direccion.trim() || undefined,
-          },
-          lineas: entradas,
-          tasaIva,
-          bordadoEspecial,
-          // Ronda de correcciones 2 (hallazgo I1): solo van si esta
-          // cotización nació de un borrador del agente. `borradorId` le dice
-          // al servidor qué fila cerrar; `contactId` evita que se dé de alta
-          // un contacto nuevo en GoHighLevel para alguien que ya existe ahí.
-          // `undefined` desaparece al pasar por `JSON.stringify`, así que una
-          // cotización armada desde cero no manda ninguno de los dos.
-          borradorId: borradorActivo?.id,
-          contactId: borradorActivo?.contactId ?? undefined,
-        }),
+        body: JSON.stringify(
+          // Ronda de correcciones final (hallazgo crítico): `clave` vuelve
+          // al cuerpo cuando se conoce (ver `conClave`, arriba) — el respaldo
+          // que la ronda anterior le había quitado a esta única ruta de
+          // escritura. Con sesión por cookie viva (la vía normal dentro del
+          // iframe), `clave` es `''` y `conClave` no manda nada de más; el
+          // token anti-CSRF sigue siendo la única defensa contra CSRF, esto
+          // no lo reemplaza.
+          conClave(clave, {
+            cliente: {
+              nombre: cliente.nombre.trim(),
+              empresa: cliente.empresa.trim() || undefined,
+              email: cliente.email.trim(),
+              // Opcionales (Tarea 5): `undefined` desaparece al pasar por
+              // `JSON.stringify`, así que enviarlos vacíos no bloquea la
+              // cotización — ver el comentario en `Cliente`, arriba.
+              telefono: cliente.telefono.trim() || undefined,
+              direccion: cliente.direccion.trim() || undefined,
+            },
+            lineas: entradas,
+            tasaIva,
+            bordadoEspecial,
+            // Ronda de correcciones 2 (hallazgo I1): solo van si esta
+            // cotización nació de un borrador del agente. `borradorId` le
+            // dice al servidor qué fila cerrar; `contactId` evita que se dé
+            // de alta un contacto nuevo en GoHighLevel para alguien que ya
+            // existe ahí. `undefined` desaparece al pasar por
+            // `JSON.stringify`, así que una cotización armada desde cero no
+            // manda ninguno de los dos.
+            borradorId: borradorActivo?.id,
+            contactId: borradorActivo?.contactId ?? undefined,
+          }),
+        ),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {

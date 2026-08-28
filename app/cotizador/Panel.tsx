@@ -169,10 +169,28 @@ export default function Panel() {
   }, []);
 
   // Cambia la clave por una cookie de sesión más un token anti-CSRF
-  // (`/api/cotizacion/entrar`, Tarea 6). Nunca lanza: sus tres ramas de
-  // fallo (status no-ok, respuesta sin `csrf`, excepción de red) se
-  // registran con `console.error` y devuelven sin más — el llamador
-  // (`onEntrar`, abajo) decide qué hacer con eso.
+  // (`/api/cotizacion/entrar`, Tarea 6). Nunca lanza: sus ramas de fallo
+  // (status no-ok, respuesta sin `csrf`, cookie que no llegó a fijarse,
+  // excepción de red) se registran con `console.error` y devuelven sin más —
+  // el llamador (`onEntrar`, abajo) decide qué hacer con eso.
+  //
+  // Ronda de correcciones final (hallazgo crítico): un 200 de `/entrar` solo
+  // prueba que el servidor INTENTÓ fijar la cookie (mandó `Set-Cookie` en la
+  // respuesta) — no que el navegador la aceptó. La cookie es `HttpOnly`: este
+  // código no puede leerla directo para comprobarlo, y dentro de un iframe
+  // real de GoHighLevel (`SameSite=None` + `Partitioned`) nada garantiza que
+  // el navegador la conserve — es exactamente el escenario que nadie había
+  // probado todavía. Antes esto se asumía sin más; ahora se VERIFICA con una
+  // lectura real, apoyada solo en la cookie (sin `clave` en el cuerpo): si el
+  // servidor la valida (`/api/cotizacion/catalogo` sin clave, mismo endpoint
+  // que usa la sonda de sesión al montar), la cookie de verdad llegó, y solo
+  // entonces se guarda el token anti-CSRF que esa misma respuesta trae. Si la
+  // verificación falla, no se guarda ningún token — uno guardado "por si
+  // acaso" sin cookie real detrás sería inútil de todos modos (`sesionValida`
+  // lo rechazaría) y solo ensuciaría `sessionStorage`. Esto no dificulta
+  // nada: las tres rutas que escriben también aceptan `clave` en el cuerpo
+  // (ver `conClave` en VistaCrear.tsx/VistaListado.tsx), así que una cookie
+  // que nunca cuajó no deja al vendedor sin forma de guardar en esta pestaña.
   async function establecerSesion(claveIngresada: string) {
     try {
       const res = await fetch('/api/cotizacion/entrar', {
@@ -185,11 +203,25 @@ export default function Panel() {
         return;
       }
       const datos = await res.json();
-      if (datos.ok && typeof datos.csrf === 'string') {
-        guardarCsrf(datos.csrf);
-      } else {
+      if (!datos.ok || typeof datos.csrf !== 'string') {
         console.error('[cotizador] /entrar respondió sin token anti-CSRF.');
+        return;
       }
+
+      const verificacion = await fetch('/api/cotizacion/catalogo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const datosVerificacion = await verificacion.json().catch(() => null);
+      if (!verificacion.ok || !datosVerificacion?.ok || typeof datosVerificacion.csrf !== 'string') {
+        console.error(
+          '[cotizador] La cookie de sesión no quedó establecida en el navegador (¿bloqueada dentro del iframe?). ' +
+            'Las rutas que escriben seguirán funcionando por la clave, mandada en el cuerpo de cada una.',
+        );
+        return;
+      }
+      guardarCsrf(datosVerificacion.csrf);
     } catch (e) {
       console.error(
         '[cotizador] No se pudo establecer la sesión por cookie (fallo de red).',

@@ -127,9 +127,26 @@ type OpcionesFetch = {
   sesionActiva?: boolean;
   csrf?: string;
   crear401?: boolean;
+  // Ronda de correcciones final: simula que el navegador RECHAZA la cookie
+  // que `/entrar` intenta fijar (el escenario declarado en el hallazgo
+  // crítico — nadie había probado este panel dentro de un iframe real de
+  // GoHighLevel todavía). `/entrar` sigue respondiendo 200 con un csrf (el
+  // servidor solo sabe que MANDÓ el `Set-Cookie`, no si el navegador lo
+  // aceptó) pero ninguna lectura posterior sin `clave` en el cuerpo se
+  // reconoce como autenticada por cookie — igual que pasaría de verdad si la
+  // cookie nunca llegó a guardarse.
+  cookieBloqueada?: boolean;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
+  // Ronda de correcciones final: si `/entrar` responde bien (clave correcta,
+  // sin `cookieBloqueada`), el simulacro trata la cookie como establecida de
+  // verdad para el resto del test — es el caso normal, y `establecerSesion`
+  // (Panel.tsx) ahora lo VERIFICA con una lectura sin `clave` antes de
+  // guardar el token anti-CSRF. Empieza en `true` cuando `sesionActiva` ya
+  // simula una cookie viva desde antes de montar.
+  let cookieEstablecida = opciones.sesionActiva ?? false;
+
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString();
     const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
@@ -140,10 +157,11 @@ function mockFetch(opciones: OpcionesFetch = {}) {
         return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
       }
       // Ronda de correcciones 1 (Tarea 9): la sonda de sesión de `Panel`
-      // llama acá sin `clave`, apoyada solo en la cookie. `sesionActiva`
-      // simula que esa cookie ya es válida — y, como la ruta real, devuelve
-      // el token anti-CSRF derivado de ella en la misma respuesta.
-      if (!cuerpo.clave && opciones.sesionActiva) {
+      // llama acá sin `clave`, apoyada solo en la cookie — igual que la
+      // verificación que ahora hace `establecerSesion` justo después de
+      // `/entrar`. Responde bien solo si la cookie de verdad "quedó puesta"
+      // en este simulacro (ver `cookieEstablecida`, arriba).
+      if (!cuerpo.clave && cookieEstablecida) {
         return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
@@ -157,6 +175,12 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       if (cuerpo.clave !== 'correcta') {
         return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
       }
+      // El servidor real siempre responde 200 con `Set-Cookie` acá — nunca
+      // sabe si el navegador la va a aceptar. `cookieBloqueada` simula esa
+      // divergencia: la respuesta sigue en 200, pero `cookieEstablecida`
+      // (lo que de verdad decide si una lectura sin `clave` pasa) no se
+      // enciende.
+      if (!opciones.cookieBloqueada) cookieEstablecida = true;
       return new Response(JSON.stringify({ ok: true, csrf }), { status: 200 });
     }
 
@@ -476,14 +500,15 @@ describe('Cotizador', () => {
     expect(llamadasAlEnvio).toHaveLength(0);
   });
 
-  it('el cuerpo del envío final ya no lleva la clave y manda el token anti-CSRF en la cabecera, con las líneas tal cual están en pantalla, sin un total inventado', async () => {
-    // Ronda de correcciones 1 (Tarea 9): este contrato reemplaza al de la
-    // etapa anterior a la sesión por cookie. Antes mataba el mutante
-    // "mandar total: 1 y quitar la clave" exigiendo `clave` en el cuerpo;
-    // ahora la clave ya no viaja ahí en absoluto —la sesión por cookie más
-    // el token anti-CSRF de la cabecera son la única credencial de este
-    // envío—, así que el mutante equivalente hoy es "quitar la cabecera
-    // `x-csrf-token`", cubierto por la aserción de más abajo.
+  it('el cuerpo del envío final lleva la clave (respaldo de la cookie) Y el token anti-CSRF en la cabecera, con las líneas tal cual están en pantalla, sin un total inventado', async () => {
+    // Ronda de correcciones final (hallazgo crítico): la ronda anterior había
+    // quitado `clave` del cuerpo de esta única ruta de escritura, dejando la
+    // cookie + el token anti-CSRF como única credencial — sin respaldo si el
+    // navegador rechazaba la cookie (nadie había probado este panel dentro
+    // de un iframe real de GoHighLevel todavía). Ahora vuelve: el mutante que
+    // esto mata es "quitar `clave` del cuerpo de `crear()`" — y, por
+    // separado, "quitar la cabecera `x-csrf-token`", cubierto por la
+    // aserción de más abajo.
     const fetchEspiado = mockFetch();
     const usuario = userEvent.setup();
     render(<Cotizador />);
@@ -516,13 +541,13 @@ describe('Cotizador', () => {
     const cuerpo = JSON.parse(init.body as string);
 
     expect(cuerpo).toEqual({
+      clave: 'correcta',
       cliente: { nombre: 'Ana Pérez', email: 'ana@empresa.com' },
       lineas: [{ skuId: 'set-600-king', cantidad: 1 }],
       tasaIva: 0.13,
       bordadoEspecial: false,
     });
     expect('total' in cuerpo).toBe(false);
-    expect('clave' in cuerpo).toBe(false);
 
     const cabeceras = new Headers(init.headers);
     expect(cabeceras.get('x-csrf-token')).toBe(CSRF_TOKEN_DE_PRUEBA);
@@ -1083,6 +1108,11 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     const bloqueoEntrar = new Promise<void>((resolve) => {
       liberarEntrar = resolve;
     });
+    // Ronda de correcciones final: la cookie solo se considera "puesta" acá
+    // DESPUÉS de que `/entrar` termine — antes de eso (la sonda de montaje,
+    // que corre sin haber tecleado nada todavía) tiene que seguir fallando,
+    // o esta prueba entraría sola sin pasar por el formulario.
+    let cookieEstablecida = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
       const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
@@ -1090,10 +1120,14 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
         if (cuerpo.clave === 'correcta') {
           return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
         }
+        if (!cuerpo.clave && cookieEstablecida) {
+          return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
+        }
         return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
       }
       if (url.endsWith('/api/cotizacion/entrar')) {
         await bloqueoEntrar;
+        cookieEstablecida = true;
         return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
       }
       throw new Error(`Fetch no simulado en la prueba: ${url}`);
@@ -1141,6 +1175,49 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     expect(llamada).toBeDefined();
     const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
     expect(cuerpo).toEqual({ clave: 'correcta' });
+  });
+
+  // Ronda de correcciones final (hallazgo crítico): el escenario declarado
+  // en el encargo — nadie había probado este panel dentro de un iframe real
+  // de GoHighLevel todavía, y si el navegador rechaza la cookie (bloqueada
+  // como de terceros), el fallo era total y estaba disfrazado: `/entrar`
+  // sigue respondiendo 200 (el servidor solo sabe que MANDÓ el
+  // `Set-Cookie`), así que nada avisaba que la sesión nunca cuajó de
+  // verdad. Con `establecerSesion` verificando ahora con una lectura real
+  // (en vez de asumir el 200), y con `clave` de vuelta en el cuerpo de las
+  // rutas que escriben, esta prueba comprueba las dos mitades del arreglo:
+  // ningún token anti-CSRF inservible queda guardado, y el envío igual
+  // funciona porque manda la clave.
+  it('si el navegador rechaza la cookie (bloqueada dentro del iframe), no guarda un token anti-CSRF inútil, pero el envío igual funciona porque manda la clave', async () => {
+    const fetchEspiado = mockFetch({ cookieBloqueada: true });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    // `/entrar` respondió 200 igual (el servidor no sabe que el navegador
+    // descartó la cookie) pero la verificación posterior falló: sin token
+    // guardado.
+    expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
+
+    // El envío sale bien igual: la clave en el cuerpo es un respaldo
+    // completo, no depende de la cookie ni del token anti-CSRF.
+    await waitFor(() => {
+      expect(screen.getByText(/enviada a/i)).toBeInTheDocument();
+    });
+
+    const llamada = fetchEspiado.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamada).toBeDefined();
+    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
+    expect(cuerpo.clave).toBe('correcta');
   });
 
   it('si la sesión ya está viva al montar (cookie), entra directo sin pedir la clave, y no manda clave vacía en las lecturas', async () => {

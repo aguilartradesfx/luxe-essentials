@@ -140,6 +140,7 @@ const { POST: postMetricas } = await import('@/app/api/cotizacion/metricas/route
 const { POST: postCerrar } = await import('@/app/api/cotizacion/cerrar/route');
 const { POST: postReenviar } = await import('@/app/api/cotizacion/reenviar/route');
 const { POST: postDuplicar } = await import('@/app/api/cotizacion/duplicar/route');
+const { POST: postPdf } = await import('@/app/api/cotizacion/pdf/route');
 const { enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
 const { emitirSesion } = await import('@/lib/sesion');
@@ -590,18 +591,42 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(params.enlace).toBe('https://firmada');
   });
 
-  it('sana el estado a enviada cuando la fila venía de un envío fallido (error)', async () => {
+  it('sana el estado a enviada Y FIJA enviado_at cuando la fila venía de un envío fallido (error), porque nunca había salido antes', async () => {
+    // Ronda de correcciones final (hallazgo importante): la versión anterior
+    // de esta prueba congelaba el caso contrario, con un comentario que
+    // justificaba no tocar `enviado_at` — correcto para una fila que YA
+    // había salido, pero equivocado acá: una fila 'error' nunca tuvo un
+    // envío exitoso, así que `enviado_at` viene nulo (ver route.ts principal:
+    // esa columna solo se fija cuando `correoResultado.ok`). Sin fijarlo acá,
+    // una fila 'enviada' con `enviado_at` nulo no entra nunca en "por vencer"
+    // ni en "vencidas" (lib/cotizador/metricas.ts) — se queda en "sin
+    // respuesta" para siempre y el vendedor nunca recibe la señal de llamar.
     resultadoFila = { data: filaReenviable({ estado: 'error' }), error: null };
     await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
     expect(actualizaciones).toHaveLength(1);
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios.resend_id).toBe('re_9');
     expect(cambios.estado).toBe('enviada');
-    // `enviado_at` define la vigencia que usan las métricas: pisarlo con la
-    // fecha del reenvío las falsea (una cotización vencida de hace 40 días
-    // volvería a verse "fresca").
-    expect(cambios).not.toHaveProperty('enviado_at');
+    expect(typeof cambios.enviado_at).toBe('string');
     expect(filtrosUpdate).toContainEqual(['eq', 'id', ID_VALIDO]);
+  });
+
+  it('NO pisa enviado_at cuando la fila ya estaba enviada (ya tenía una fecha real de envío)', async () => {
+    // El gemelo correcto de la prueba de arriba: acá `enviado_at` sí describe
+    // un envío real que ya ocurrió — pisarlo con la fecha del reenvío
+    // falsearía la vigencia (una cotización vencida de hace 40 días volvería
+    // a verse "fresca").
+    resultadoFila = { data: filaReenviable({ estado: 'enviada' }), error: null };
+    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    const cambios = actualizaciones[0] as Record<string, unknown>;
+    expect(cambios).not.toHaveProperty('enviado_at');
+  });
+
+  it('limpia correo_error al reenviar con éxito: un fallo anterior ya no describe esta fila', async () => {
+    resultadoFila = { data: filaReenviable({ estado: 'error' }), error: null };
+    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    const cambios = actualizaciones[0] as Record<string, unknown>;
+    expect(cambios.correo_error).toBeNull();
   });
 
   // Ronda de correcciones 2 (hallazgo importante): antes `estado` pasaba a
@@ -815,6 +840,72 @@ describe('POST /api/cotizacion/duplicar', () => {
     const { cookie } = emitirSesion();
     const valor = cookie.split(';')[0];
     const res = await postDuplicar(peticion('http://localhost/api/cotizacion/duplicar', { id: ID_VALIDO }, { cookie: valor }));
+    expect(res.status).toBe(200);
+  });
+});
+
+// Ronda de correcciones final (hallazgo importante): "ver el PDF" es la
+// única de las cinco acciones del diseño que nunca se construyó. Ruta de
+// solo lectura dedicada, mismo patrón que /duplicar: firma el enlace de un
+// PDF que ya existe en Storage.
+describe('POST /api/cotizacion/pdf', () => {
+  it('rechaza sin credencial', async () => {
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'otra', id: ID_VALIDO }));
+    expect(res.status).toBe(401);
+  });
+
+  it('rechaza un id que no es UUID', async () => {
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: 'cot-1' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('devuelve el enlace firmado del PDF guardado', async () => {
+    resultadoFila = { data: { pdf_ruta: '2026/COT-2026-0001-cot-1.pdf' }, error: null };
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.ok).toBe(true);
+    expect(cuerpo.url).toBe('https://firmada');
+    expect(enlaceFirmado).toHaveBeenCalledWith('2026/COT-2026-0001-cot-1.pdf', expect.anything());
+  });
+
+  it('404 si la cotización no existe', async () => {
+    resultadoFila = { data: null, error: null };
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_INEXISTENTE }));
+    expect(res.status).toBe(404);
+  });
+
+  it('falla claro si la fila no tiene pdf_ruta: no hay nada que ver', async () => {
+    resultadoFila = { data: { pdf_ruta: null }, error: null };
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    expect(res.status).toBe(400);
+    const cuerpo = await res.json();
+    expect(cuerpo.ok).toBe(false);
+    expect(cuerpo.error.toLowerCase()).toContain('pdf');
+  });
+
+  it('errores de base dan 500 con mensaje genérico', async () => {
+    resultadoFila = { data: null, error: { message: 'la base está caída' } };
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    expect(res.status).toBe(500);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toContain('la base está caída');
+  });
+
+  it('500 con mensaje genérico si no se puede firmar el enlace', async () => {
+    resultadoFila = { data: { pdf_ruta: '2026/COT-2026-0001-cot-1.pdf' }, error: null };
+    vi.mocked(enlaceFirmado).mockResolvedValueOnce({ ok: false, error: 'bucket lleno' });
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    expect(res.status).toBe(500);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).not.toContain('bucket lleno');
+  });
+
+  it('funciona por cookie de sesión, sin exigir el token anti-CSRF: es de solo lectura', async () => {
+    resultadoFila = { data: { pdf_ruta: '2026/COT-2026-0001-cot-1.pdf' }, error: null };
+    const { cookie } = emitirSesion();
+    const valor = cookie.split(';')[0];
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }, { cookie: valor }));
     expect(res.status).toBe(200);
   });
 });

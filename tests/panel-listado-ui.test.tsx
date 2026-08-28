@@ -34,6 +34,7 @@ const FILA_ABIERTA = {
   motivo_cierre: null,
   ghl_estimate_id: 'est-10',
   ghl_error: null,
+  correo_error: null,
 };
 
 // Creada hace 25 días respecto de "ahora": con 30 días de vigencia, vence
@@ -72,6 +73,9 @@ type OpcionesFetch = {
   duplicarLineas?: { skuId: string; cantidad: number }[];
   duplicarStatus?: number;
   listado401?: boolean;
+  pdfUrl?: string;
+  pdfStatus?: number;
+  pdfError?: string;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -107,6 +111,14 @@ function mockFetch(opciones: OpcionesFetch = {}) {
           ? { ok: true, resendId: 're_1', vencida: false, actualizado: true }
           : { ok: false, error: 'Token anti-CSRF inválido.' });
       return new Response(JSON.stringify(cuerpoRespuesta), { status });
+    }
+
+    if (url.endsWith('/api/cotizacion/pdf')) {
+      const status = opciones.pdfStatus ?? 200;
+      if (status !== 200) {
+        return new Response(JSON.stringify({ ok: false, error: opciones.pdfError ?? 'No se pudo firmar el enlace del PDF.' }), { status });
+      }
+      return new Response(JSON.stringify({ ok: true, url: opciones.pdfUrl ?? 'https://firmada/pdf' }), { status: 200 });
     }
 
     if (url.endsWith('/api/cotizacion/duplicar')) {
@@ -235,6 +247,47 @@ describe('VistaListado', () => {
   // dejaba las 645 pruebas anteriores en verde. Dentro del iframe la sesión
   // es por cookie: sin este token, el servidor responde 401 y el vendedor
   // rebota a la pantalla de clave cada vez que aprieta "Reenviar".
+  // Ronda de correcciones final (hallazgo crítico): `cerrar()` y
+  // `reenviar()` habían dejado de mandar `clave` en el cuerpo, dependiendo
+  // enteramente de la cookie + el token anti-CSRF — sin respaldo si el
+  // navegador rechazaba la cookie (nadie lo había probado todavía dentro de
+  // un iframe real de GoHighLevel). El servidor la sigue aceptando
+  // (`autenticarPeticion`); estas dos pruebas comprueban que la pantalla
+  // vuelva a mandarla.
+  it('"Ganada" manda la clave en el cuerpo, como respaldo de la cookie', async () => {
+    const { llamadas } = mockFetch();
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /^ganada$/i }));
+
+    await waitFor(() => {
+      const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/cerrar'));
+      expect(llamada).toBeDefined();
+      const cuerpo = JSON.parse(llamada!.init!.body as string);
+      expect(cuerpo.clave).toBe('correcta');
+    });
+  });
+
+  it('"Reenviar" manda la clave en el cuerpo, como respaldo de la cookie', async () => {
+    const { llamadas } = mockFetch();
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+
+    await waitFor(() => {
+      const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/reenviar'));
+      expect(llamada).toBeDefined();
+      const cuerpo = JSON.parse(llamada!.init!.body as string);
+      expect(cuerpo.clave).toBe('correcta');
+    });
+  });
+
   it('"Reenviar" manda el token anti-CSRF en la cabecera', async () => {
     const { llamadas } = mockFetch();
     const usuario = userEvent.setup();
@@ -342,6 +395,99 @@ describe('VistaListado', () => {
         lineas: [{ skuId: 'set-600-king', cantidad: 12 }],
       });
     });
+  });
+
+  // Ronda de correcciones final (hallazgo importante): el diseño lista cinco
+  // acciones por fila y "ver el PDF" era la única que nunca se construyó —
+  // hoy la única forma de ver un PDF ya guardado era reenviárselo al
+  // cliente. Cuando un hotel llama preguntando por su cotización, el
+  // vendedor no tenía forma de abrirla.
+  it('"Ver PDF" pide el enlace firmado y lo abre en una pestaña nueva', async () => {
+    mockFetch({ pdfUrl: 'https://firmada/cot-1.pdf' });
+    const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /ver pdf/i }));
+
+    await waitFor(() => {
+      expect(abrir).toHaveBeenCalledWith('https://firmada/cot-1.pdf', '_blank', 'noopener,noreferrer');
+    });
+  });
+
+  it('"Ver PDF" no aparece en una fila sin pdf_ruta', async () => {
+    mockFetch({ filas: [{ ...FILA_ABIERTA, pdf_ruta: null }] });
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    expect(within(fila).queryByRole('button', { name: /ver pdf/i })).not.toBeInTheDocument();
+  });
+
+  it('un error al pedir el PDF se muestra en la fila, no se abre ninguna pestaña', async () => {
+    mockFetch({ pdfStatus: 400, pdfError: 'Esta cotización no tiene un PDF guardado.' });
+    const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /ver pdf/i }));
+
+    await waitFor(() => {
+      expect(within(fila).getByText(/no tiene un pdf guardado/i)).toBeInTheDocument();
+    });
+    expect(abrir).not.toHaveBeenCalled();
+  });
+
+  it('un 401 al ver el PDF llama a onSesionInvalida', async () => {
+    mockFetch({ pdfStatus: 401 });
+    const usuario = userEvent.setup();
+    const { onSesionInvalida } = renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await usuario.click(within(fila).getByRole('button', { name: /ver pdf/i }));
+
+    await waitFor(() => {
+      expect(onSesionInvalida).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Ronda de correcciones final (hallazgo importante): el diseño promete
+  // "las que fallaron, con su error" — antes la vista de fallidas mostraba
+  // una píldora roja que decía "Error" y nada más, aunque `ghl_error` y
+  // `motivo_cierre` ya viajaran al navegador en la misma respuesta.
+  it('una fila en error muestra el error del correo (correo_error), no solo la palabra "Error"', async () => {
+    mockFetch({
+      filas: [{ ...FILA_ABIERTA, estado: 'error', correo_error: 'Falta RESEND_API_KEY: no se pudo enviar el correo.' }],
+    });
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    expect(screen.getByText(/falta resend_api_key/i)).toBeInTheDocument();
+  });
+
+  it('una fila perdida muestra el motivo_cierre', async () => {
+    mockFetch({
+      filas: [{ ...FILA_GANADA, estado: 'perdida', motivo_cierre: 'Escogió a otro proveedor.' }],
+    });
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/carla gómez/i)).toBeInTheDocument());
+    expect(screen.getByText(/escogió a otro proveedor/i)).toBeInTheDocument();
+  });
+
+  it('una fila con ghl_error lo muestra, aparte del error del correo', async () => {
+    mockFetch({
+      filas: [{ ...FILA_ABIERTA, ghl_error: 'GHL estimate 500: boom' }],
+    });
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    expect(screen.getByText(/boom/i)).toBeInTheDocument();
   });
 
   it('hay un enlace a la ficha del contacto en GoHighLevel cuando la fila tiene contact_id', async () => {

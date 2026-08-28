@@ -12,6 +12,19 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 
+// Ronda de correcciones final (hallazgo importante): es la única ruta de
+// app/api/cotizacion/* que escribe sin declarar `maxDuration` — y la que más
+// tiempo puede tomar: insert, hasta cuatro llamadas HTTP a GoHighLevel,
+// render del PDF, subida a Storage, firma del enlace, correo con adjunto por
+// Resend y nota en el contacto, antes del update final. Sin esto, la función
+// corre con el límite por defecto de Vercel (10 s) — corto de sobra para esa
+// cadena — y si expira a mitad, la fila queda parada en 'borrador': no
+// aparece en fallidas (esas son 'error'), `/cerrar` la rechaza (no está en
+// `ESTADOS_CIERRE_INICIAL`) y `/reenviar` también (no tiene `pdf_ruta`). Un
+// huérfano sin salida. Mismo criterio que app/api/ghl/webhook/route.ts, que
+// enfrenta el mismo problema con una cadena de llamadas de red parecida.
+export const maxDuration = 60;
+
 // Mismo valor que `DIAS_VIGENCIA` en lib/cotizador/ghl.ts (no exportado de
 // ahí, se duplica acá por la misma razón que las notas de documento.tsx/
 // correo.ts): cuántos días queda vigente el precio cotizado. El PDF y el
@@ -67,7 +80,15 @@ export async function POST(request: Request) {
   const { data, error } = await supabaseAdmin()
     .from('cotizaciones')
     .insert({
-      origen: 'humano',
+      // Ronda de correcciones final (hallazgo crítico): antes esto era
+      // siempre 'humano', incluso cuando `datos.borradorId` probaba que la
+      // cotización nació de un borrador que dejó el agente de WhatsApp. Como
+      // esas filas quedan en 'convertida' (ver el update de abajo) y
+      // `calcularMetricas` (lib/cotizador/metricas.ts) excluye ese estado de
+      // todo, `porOrigen.agente` salía en cero siempre — la métrica de
+      // "Origen" (Métricas #6) le decía al vendedor que el agente no aporta
+      // nada, aunque toda la cotización viniera de él.
+      origen: datos.borradorId ? 'agente' : 'humano',
       estado: 'borrador',
       cliente: datos.cliente,
       lineas: cotizacion.lineas,
@@ -280,8 +301,15 @@ export async function POST(request: Request) {
       ...(ghl.ok ? { ghl_estimate_id: ghl.estimateId, ghl_error: ghlError } : { ghl_error: ghlError }),
       ...(pdfRuta ? { pdf_ruta: pdfRuta } : {}),
       ...(correoResultado.ok
-        ? { enviado_at: new Date().toISOString(), resend_id: correoResultado.resendId }
-        : {}),
+        ? { enviado_at: new Date().toISOString(), resend_id: correoResultado.resendId, correo_error: null }
+        // Ronda de correcciones final (hallazgo importante): el diseño
+        // promete "las que fallaron, con su error" (ver la vista de
+        // fallidas) — pero el error del correo nunca se guardaba en ningún
+        // lado. `correoResultado.error` cubre las tres formas de fallar de
+        // arriba: sin PDF (falló `renderizarCotizacion`), sin guardar (falló
+        // `guardarPdf`) y sin enviar (falló `enviarCotizacion` — p. ej. sin
+        // RESEND_API_KEY configurada, el caso de hoy).
+        : { correo_error: correoResultado.error }),
     })
     .eq('id', data.id);
 

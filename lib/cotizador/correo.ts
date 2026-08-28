@@ -85,6 +85,13 @@ export async function enviarCotizacion(
   const { apiKey, remitente, fetchImpl = fetch } = deps;
 
   if (!apiKey) return { ok: false, error: 'Falta RESEND_API_KEY: no se pudo enviar el correo.' };
+  // Ronda de correcciones final (hallazgo menor): el remitente no se
+  // validaba temprano como sí se valida la llave. Con la variable vacía,
+  // `cuerpo.from` salía como `''` y Resend devolvía un error opaco (algo
+  // como "from must not be empty") en vez de decir qué faltaba configurar —
+  // y es literalmente lo primero que va a pasar el día que se configure
+  // Resend si alguien olvida `LUXE_CORREO_REMITENTE`.
+  if (!remitente) return { ok: false, error: 'Falta LUXE_CORREO_REMITENTE: no se pudo enviar el correo.' };
 
   const cuerpo = {
     from: remitente,

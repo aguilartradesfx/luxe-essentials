@@ -40,6 +40,7 @@ type FilaListado = {
   motivo_cierre: string | null;
   ghl_estimate_id: string | null;
   ghl_error: string | null;
+  correo_error: string | null;
 };
 
 type Mensaje = { tipo: 'ok' | 'aviso' | 'error'; texto: string };
@@ -269,7 +270,14 @@ export function VistaListado({
           // Regla de seguridad 1: /cerrar escribe, exige el token anti-CSRF.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
-        body: JSON.stringify({ id, estado, ...(motivo ? { motivo } : {}) }),
+        // Ronda de correcciones final (hallazgo crítico): `clave` vuelve al
+        // cuerpo de las tres rutas que escriben (ver el comentario de
+        // `conClave`, arriba) — antes solo `duplicar()` (de lectura) la
+        // llevaba, y las que escriben dependían enteramente de la cookie +
+        // el token anti-CSRF, sin respaldo si el navegador rechazaba la
+        // cookie (algo que nadie había probado todavía dentro de un iframe
+        // real de GoHighLevel).
+        body: JSON.stringify(conClave(clave, { id, estado, ...(motivo ? { motivo } : {}) })),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {
@@ -290,6 +298,37 @@ export function VistaListado({
     }
   }
 
+  // Ronda de correcciones final (hallazgo importante): la única acción del
+  // diseño que nunca se construyó. Antes de esto, la única forma de ver un
+  // PDF ya guardado era reenviárselo al cliente — cuando un hotel llama
+  // preguntando por su cotización, el vendedor no tenía forma de abrirla.
+  // `/api/cotizacion/pdf` firma el enlace de un PDF que ya existe en
+  // Storage; acá solo se abre en una pestaña nueva.
+  async function verPdf(fila: FilaListado) {
+    setProcesandoId(fila.id);
+    try {
+      const res = await fetch('/api/cotizacion/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(conClave(clave, { id: fila.id })),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        if (res.status === 401) {
+          onSesionInvalida();
+          return;
+        }
+        setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: datos.error ?? `Error ${res.status}` } }));
+        return;
+      }
+      window.open(datos.url, '_blank', 'noopener,noreferrer');
+    } catch {
+      setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: 'Fallo de red.' } }));
+    } finally {
+      setProcesandoId(null);
+    }
+  }
+
   async function reenviar(id: string) {
     setProcesandoId(id);
     try {
@@ -301,7 +340,9 @@ export function VistaListado({
           // Regla de seguridad 1: /reenviar también escribe.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
-        body: JSON.stringify({ id }),
+        // Mismo motivo que en `cerrar()`, arriba: `clave` vuelve al cuerpo
+        // como respaldo de la cookie + CSRF.
+        body: JSON.stringify(conClave(clave, { id })),
       });
       const datos = await res.json();
       // OJO — contrato de /reenviar (task-8-report.md): `res.ok` NO
@@ -466,6 +507,22 @@ export function VistaListado({
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${estiloEstado(fila.estado)}`}>
                         {ETIQUETAS_ESTADO[fila.estado] ?? fila.estado}
                       </span>
+                      {/* Ronda de correcciones final (hallazgo importante): el
+                          diseño promete "las que fallaron, con su error" —
+                          antes esta píldora era todo lo que se veía, sin el
+                          motivo de fondo. `correo_error` (persistido recién,
+                          ver app/api/cotizacion/route.ts) explica por qué no
+                          llegó al cliente; `motivo_cierre` es el que ya
+                          escribe el vendedor al marcar "Perdida". */}
+                      {fila.estado === 'error' && fila.correo_error && (
+                        <p className="mt-1 max-w-[16rem] text-xs text-red-700">{fila.correo_error}</p>
+                      )}
+                      {fila.motivo_cierre && (
+                        <p className="mt-1 max-w-[16rem] text-xs text-teal">{fila.motivo_cierre}</p>
+                      )}
+                      {fila.ghl_error && (
+                        <p className="mt-1 max-w-[16rem] text-xs text-teal/80">GoHighLevel: {fila.ghl_error}</p>
+                      )}
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div className="flex flex-wrap items-center gap-2">
@@ -488,6 +545,16 @@ export function VistaListado({
                         >
                           Perdida
                         </button>
+                        {fila.pdf_ruta && (
+                          <button
+                            type="button"
+                            disabled={enProceso}
+                            onClick={() => void verPdf(fila)}
+                            className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                          >
+                            Ver PDF
+                          </button>
+                        )}
                         {fila.pdf_ruta && (
                           <button
                             type="button"

@@ -94,6 +94,30 @@ describe('sesión', () => {
       vi.setSystemTime(ahoraReal); // vuelve al presente real: emitidoEn queda en el futuro.
       expect(sesionValida(conCookie(valor))).toBe(false);
     });
+
+    // Ronda de correcciones final (hallazgo menor): sin tolerancia de reloj,
+    // el desvío normal entre el reloj del proceso que emite la cookie y el
+    // que la valida (unos pocos segundos, típico incluso con NTP) bastaría
+    // para rechazar una cookie recién emitida y legítima.
+    it('acepta una sesión emitida hasta 60 segundos en el futuro (tolerancia de reloj)', () => {
+      vi.useFakeTimers();
+      const ahoraReal = Date.now();
+      vi.setSystemTime(ahoraReal + 60 * 1000); // "emitida" 60s adelantada.
+      const { cookie } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      vi.setSystemTime(ahoraReal);
+      expect(sesionValida(conCookie(valor))).toBe(true);
+    });
+
+    it('rechaza una sesión emitida más de 60 segundos en el futuro (fuera de la tolerancia)', () => {
+      vi.useFakeTimers();
+      const ahoraReal = Date.now();
+      vi.setSystemTime(ahoraReal + 61 * 1000); // "emitida" 61s adelantada: justo pasado el margen.
+      const { cookie } = emitirSesion();
+      const valor = cookie.split(';')[0];
+      vi.setSystemTime(ahoraReal);
+      expect(sesionValida(conCookie(valor))).toBe(false);
+    });
   });
 
   // --- Ronda de correcciones 1 (Tarea 9, hallazgo crítico) ---

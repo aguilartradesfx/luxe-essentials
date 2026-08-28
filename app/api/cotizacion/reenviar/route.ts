@@ -152,9 +152,27 @@ export async function POST(request: Request) {
   const cambios: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     resend_id: correoResultado.resendId,
+    // El correo salió: cualquier error de un intento anterior (guardado en
+    // `correo_error` por app/api/cotizacion/route.ts) ya no describe el
+    // estado real de esta fila.
+    correo_error: null,
   };
   if (filaTipada.estado === 'error') {
     cambios.estado = 'enviada';
+    // Ronda de correcciones final (hallazgo importante): la decisión
+    // anterior de NO pisar `enviado_at` al reenviar era correcta para una
+    // cotización que YA había salido (ese valor es el de la primera vez, y
+    // pisarlo con la fecha del reenvío falsearía la vigencia). Pero acá el
+    // valor es nulo porque el correo NUNCA salió — sin credenciales de
+    // Resend, toda cotización nace en 'error' (ver correo.ts) — así que
+    // esto no pisa nada: es la primera vez que se registra. Sin esto, una
+    // fila 'enviada' con `enviado_at` nulo no entra nunca en "por vencer" ni
+    // en "vencidas" (lib/cotizador/metricas.ts las calcula a partir de esa
+    // columna): se queda en "sin respuesta" para siempre y el vendedor jamás
+    // recibe la señal de llamar. El día que se configure Resend y el
+    // vendedor rescate la cola de fallidas, sin este fix el histórico entero
+    // quedaría ciego.
+    cambios.enviado_at = new Date().toISOString();
   }
 
   const { error: errorActualizacion } = await db.from('cotizaciones').update(cambios).eq('id', datos.id);

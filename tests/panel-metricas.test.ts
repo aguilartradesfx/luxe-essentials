@@ -57,6 +57,23 @@ describe('calcularMetricas', () => {
     expect(m.ganado.mesActual.diasPromedio).toBe(10);
   });
 
+  // Ronda de correcciones final (hallazgo crítico): el promedio dividía la
+  // suma de días entre TODAS las cotizaciones del mes, no solo las que
+  // tienen las dos fechas. Con una ganada sin `enviado_at` (no mide) y otra
+  // medible en 10 días, el bug daba 5 (10 dividido entre 2 filas); el
+  // resultado correcto es 10 (10 dividido entre 1 fila medible).
+  it('promedia los días solo entre las cotizaciones medibles (con enviado_at), no entre todas las cerradas', () => {
+    const m = calcularMetricas(
+      [
+        fila({ id: 'sin-fecha-envio', estado: 'ganada', enviado_at: null, cerrada_at: '2026-08-15T12:00:00Z' }),
+        fila({ id: 'medible', estado: 'ganada', enviado_at: '2026-08-01T00:00:00Z', cerrada_at: '2026-08-11T00:00:00Z' }),
+      ],
+      HOY,
+    );
+    expect(m.ganado.mesActual.cantidad).toBe(2);
+    expect(m.ganado.mesActual.diasPromedio).toBe(10);
+  });
+
   it('suma el descuento otorgado y su promedio', () => {
     const m = calcularMetricas([fila(), fila({ id: 'y' })], HOY);
     expect(m.descuento.monto).toBe(144000 * 2);

@@ -67,6 +67,60 @@ async function extraerTexto(buf: Buffer) {
 }
 
 describe('renderizarCotizacion', () => {
+  // Ronda de correcciones final (hallazgo menor): el documento no decía a
+  // quién responderle. Estas pruebas limpian las tres variables antes y
+  // después de cada una (no solo las que tocan): otro archivo de esta suite
+  // podría dejarlas puestas si corre en el mismo worker, y sin esta limpieza
+  // el caso "ninguna definida" podría pasar en falso.
+  const VARS_CONTACTO = ['LUXE_CONTACTO_TELEFONO', 'LUXE_CONTACTO_CORREO', 'LUXE_CONTACTO_SITIO'] as const;
+  function limpiarVarsContacto() {
+    for (const v of VARS_CONTACTO) delete process.env[v];
+  }
+
+  it('sin ninguna variable de contacto definida, el documento no menciona consultas ni deja marcadores', async () => {
+    limpiarVarsContacto();
+    try {
+      const buf = await renderizarCotizacion(base);
+      const { text } = await extraerTexto(buf);
+      // Ni la frase del pie de contacto ni un placeholder tipo "Tel: ___".
+      // (No se busca "tel." ni "correo:" sueltos: el propio correo del
+      // cliente en el documento, "ana@hotel.com", contiene "tel." como
+      // substring de "hotel.com" — un falso positivo que no tiene nada que
+      // ver con esta pieza.)
+      expect(text).not.toMatch(/consultas sobre esta cotizaci[oó]n/i);
+    } finally {
+      limpiarVarsContacto();
+    }
+  });
+
+  it('con las tres variables de contacto definidas, el documento las muestra', async () => {
+    limpiarVarsContacto();
+    process.env.LUXE_CONTACTO_TELEFONO = '+506 2222-3333';
+    process.env.LUXE_CONTACTO_CORREO = 'ventas@luxeessentialscr.com';
+    process.env.LUXE_CONTACTO_SITIO = 'luxeessentialscr.com';
+    try {
+      const buf = await renderizarCotizacion(base);
+      const { text } = await extraerTexto(buf);
+      expect(text).toContain('+506 2222-3333');
+      expect(text).toContain('ventas@luxeessentialscr.com');
+      expect(text).toContain('luxeessentialscr.com');
+    } finally {
+      limpiarVarsContacto();
+    }
+  });
+
+  it('con solo una variable definida, muestra esa y no inventa las otras', async () => {
+    limpiarVarsContacto();
+    process.env.LUXE_CONTACTO_CORREO = 'ventas@luxeessentialscr.com';
+    try {
+      const buf = await renderizarCotizacion(base);
+      const { text } = await extraerTexto(buf);
+      expect(text).toContain('ventas@luxeessentialscr.com');
+    } finally {
+      limpiarVarsContacto();
+    }
+  });
+
   it('produce un PDF válido', async () => {
     const buf = await renderizarCotizacion(base);
     expect(Buffer.isBuffer(buf)).toBe(true);

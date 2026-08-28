@@ -93,4 +93,16 @@ describe('enviarCotizacion', () => {
     expect(r.ok).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  // Ronda de correcciones final (hallazgo menor): el remitente no se
+  // validaba temprano como sí se valida la llave — con la variable vacía,
+  // Resend recibía `from: ''` y devolvía un error opaco en vez de uno que
+  // dijera qué faltaba configurar.
+  it('falla claro si falta el remitente, sin llegar a llamar a Resend', async () => {
+    const fetchImpl = vi.fn();
+    const r = await enviarCotizacion(params, { apiKey: deps.apiKey, remitente: '', fetchImpl });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/LUXE_CORREO_REMITENTE/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

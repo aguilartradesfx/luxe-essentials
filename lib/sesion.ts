@@ -25,6 +25,15 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 const NOMBRE_COOKIE = 'luxe_sesion';
 const MAX_EDAD_SEGUNDOS = 60 * 60 * 24 * 30; // 30 días.
 const MAX_EDAD_MS = MAX_EDAD_SEGUNDOS * 1000;
+// Margen de tolerancia de reloj para el chequeo de "emitida en el futuro",
+// más abajo. El servidor que emite la cookie y el que la valida pueden no
+// ser el mismo proceso (o el mismo momento exacto), y un reloj de sistema
+// nunca está perfectamente sincronizado — sin margen, una diferencia de
+// pocos segundos entre relojes bastaría para rechazar una cookie recién
+// emitida y legítima. 60 segundos es generoso frente al desvío típico de NTP
+// sin abrir una ventana real para una cookie forjada (ver el comentario de
+// `sesionValida`, abajo: seguiría exigiendo la firma correcta).
+const TOLERANCIA_RELOJ_MS = 60 * 1000;
 
 function secreto(): string {
   // Firmar con la misma clave del taller: si `LUXE_TALLER_CLAVE` cambia,
@@ -138,8 +147,10 @@ export function sesionValida(request: Request): boolean {
   // es la marca de una cookie forjada con una firma que de casualidad
   // coincidiera, o una manipulación del reloj. Se corta acá, no solo por
   // higiene — sin este freno, una fecha en el año 3000 sería válida para
-  // siempre.
-  if (emitidoEn > ahora) return false;
+  // siempre. `TOLERANCIA_RELOJ_MS` da un margen de 60 segundos: sin él, el
+  // desvío normal entre relojes de dos procesos rechazaría una cookie recién
+  // emitida y perfectamente legítima.
+  if (emitidoEn > ahora + TOLERANCIA_RELOJ_MS) return false;
 
   if (ahora - emitidoEn > MAX_EDAD_MS) return false;
 
