@@ -1,24 +1,16 @@
 import { NextResponse } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
+import { claveValida } from '@/lib/autenticacion-cotizador';
 import { emitirSesion } from '@/lib/sesion';
 
 export const runtime = 'nodejs';
-
-// Mismo criterio que app/api/cotizacion/route.ts: comparación en tiempo
-// constante y antes de tocar el resto del cuerpo.
-function claveValida(recibida: string | null): boolean {
-  const esperada = process.env.LUXE_TALLER_CLAVE;
-  if (!esperada || !recibida) return false;
-  const a = Buffer.from(recibida);
-  const b = Buffer.from(esperada);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
 
 // Único punto de entrada del panel embebido: la pantalla dentro del iframe de
 // GoHighLevel pide la clave una vez acá, cambia esa clave por una cookie de
 // sesión (Tarea 6) y ya no vuelve a pedirla en cada carga. Las demás rutas de
 // este directorio siguen aceptando la clave en el cuerpo tal cual — esto no
-// la reemplaza, es una segunda forma de autenticarse.
+// la reemplaza, es una segunda forma de autenticarse. A diferencia de esas
+// rutas, esta no acepta una sesión ya abierta: es precisamente donde una se
+// consigue.
 export async function POST(request: Request) {
   let crudo: unknown;
   try {
@@ -31,7 +23,17 @@ export async function POST(request: Request) {
     typeof crudo === 'object' && crudo !== null && 'clave' in crudo
       ? (crudo as { clave?: unknown }).clave
       : undefined;
-  if (!claveValida(typeof claveRecibida === 'string' ? claveRecibida : null)) {
+  if (!claveValida(claveRecibida)) {
+    // Ronda de correcciones 1: no hay límite de intentos acá —eso necesita
+    // almacenamiento compartido entre invocaciones y es otro subsistema—,
+    // pero sin este registro un intento de fuerza bruta contra este endpoint
+    // es completamente invisible. Sin datos sensibles: ni la clave recibida
+    // ni la esperada quedan en el log, solo la señal de que alguien golpeó
+    // la puerta sin la llave correcta.
+    console.error(
+      '[cotizador] Intento de acceso a /api/cotizacion/entrar con clave incorrecta.',
+      request.headers.get('x-forwarded-for') ?? 'ip desconocida',
+    );
     return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
   }
 

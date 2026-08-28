@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
-import { sesionValida, csrfValido } from '@/lib/sesion';
+import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
@@ -18,15 +17,6 @@ export const runtime = 'nodejs';
 // correo tienen que decir la misma fecha que el Estimate de GoHighLevel.
 const DIAS_VIGENCIA = 30;
 
-// Mismo criterio que app/api/q7m4/route.ts: comparación en tiempo constante.
-function claveValida(recibida: string | null): boolean {
-  const esperada = process.env.LUXE_TALLER_CLAVE;
-  if (!esperada || !recibida) return false;
-  const a = Buffer.from(recibida);
-  const b = Buffer.from(esperada);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export async function POST(request: Request) {
   let crudo: unknown;
   try {
@@ -35,31 +25,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  // La clave (o la sesión) se revisa antes que el esquema: si alguien sin
-  // credenciales manda un cuerpo mal formado, no debe recibir mensajes de
-  // validación que revelen la forma esperada del cuerpo. Mismo orden que
-  // app/api/q7m4/route.ts.
-  const claveRecibida =
-    typeof crudo === 'object' && crudo !== null && 'clave' in crudo
-      ? (crudo as { clave?: unknown }).clave
-      : undefined;
-  const porClave = claveValida(typeof claveRecibida === 'string' ? claveRecibida : null);
-  // La sesión por cookie (Tarea 6) es la segunda vía: no reemplaza la clave
-  // en el cuerpo, se suma para el panel embebido en GoHighLevel.
-  const porSesion = !porClave && sesionValida(request);
-  if (!porClave && !porSesion) {
-    return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
-  }
-  // Esta ruta escribe (inserta la cotización): entrar por cookie exige el
-  // token anti-CSRF en la cabecera, porque `SameSite=None` hace que la
-  // cookie viaje sola en peticiones que origina cualquier otro sitio que el
-  // vendedor visite. Entrar por clave en el cuerpo no lo necesita — un sitio
-  // ajeno no conoce la clave.
-  if (porSesion) {
-    const csrfRecibido = request.headers.get('x-csrf-token') ?? undefined;
-    if (!csrfValido(request, csrfRecibido)) {
-      return NextResponse.json({ ok: false, error: 'Token anti-CSRF inválido.' }, { status: 401 });
-    }
+  // La credencial se revisa antes que el esquema: si alguien sin ella manda
+  // un cuerpo mal formado, no debe recibir mensajes de validación que
+  // revelen la forma esperada del cuerpo. Mismo orden que app/api/q7m4/route.ts.
+  // Esta ruta escribe (inserta la cotización): `requiereCsrf: true` exige el
+  // token anti-CSRF cuando se entra por cookie (ver lib/autenticacion-cotizador.ts).
+  const auth = autenticarPeticion(request, crudo, { requiereCsrf: true });
+  if (!auth.ok) {
+    return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }
 
   const parseado = cotizacionSchema.safeParse(crudo);

@@ -20,7 +20,14 @@ export const leadSchema = z.object({
 export type LeadInput = z.infer<typeof leadSchema>;
 
 export const cotizacionSchema = z.object({
-  clave: z.string().min(1, 'Falta la clave.'),
+  // Opcional a propósito (Tarea 6, ronda de correcciones 1): esta clave ya
+  // no es la única prueba de identidad. `autenticarPeticion`
+  // (lib/autenticacion-cotizador.ts) exige clave O sesión por cookie ANTES
+  // de llegar acá — si ninguna de las dos vale, la ruta ya respondió 401 y
+  // este esquema ni se evalúa. Exigirla como `min(1)` bloquearía por
+  // completo el flujo por cookie: el panel embebido en GoHighLevel no
+  // manda ninguna clave una vez que tiene sesión.
+  clave: z.string().optional(),
   cliente: z.object({
     nombre: z.string().trim().min(1, 'Escribe el nombre del cliente.').max(120, 'Escribe un nombre más corto.'),
     empresa: z.string().trim().max(120, 'Escribe un nombre de empresa más corto.').optional(),
@@ -77,7 +84,9 @@ export type CotizacionInput = z.infer<typeof cotizacionSchema>;
 // `.min(1)` en `lineas`: la pantalla previsualiza también con el carrito
 // vacío (total en cero), antes de que el vendedor agregue el primer SKU.
 export const previsualizarSchema = z.object({
-  clave: z.string().min(1, 'Falta la clave.'),
+  // Mismo motivo que en `cotizacionSchema`: la clave ya no es la única
+  // vía, la valida `autenticarPeticion` antes de llegar acá.
+  clave: z.string().optional(),
   lineas: z
     .array(
       z.object({
