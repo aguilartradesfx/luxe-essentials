@@ -250,14 +250,26 @@ describe('POST /api/cotizacion/entrar', () => {
     process.env.LUXE_TALLER_CLAVE = 'secreto-de-firma';
   });
 
-  it('emite una sesión con el nombre del vendedor', async () => {
-    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas' });
+  // Ronda de correcciones 1: el nombre moqueado es 'Marta Vargas' —
+  // deliberadamente distinto del 'Guillermo Rojas' que usa el resto del
+  // archivo (y que fue el valor fijo provisional de esta misma ruta antes de
+  // esta tarea). Si alguien reintrodujera `emitirSesion('Guillermo Rojas')` a
+  // mano en la ruta, esta prueba (y sólo esta, entre las de este archivo) lo
+  // notaría: es la única que compara `vendedor` contra un nombre que no
+  // coincide con esa regresión. El `toHaveBeenCalledWith` además fija el
+  // ORDEN de los argumentos: invertir `usuario`/`clave` en la llamada a
+  // `autenticarUsuario` (que en producción significa "nadie puede entrar")
+  // pasaba en verde antes de este ajuste, porque el mock resuelve igual sin
+  // mirar con qué lo llamaron.
+  it('emite una sesión con el nombre real del vendedor autenticado, en el orden correcto de argumentos', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Marta Vargas' });
     const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
-    expect(cuerpo.vendedor).toBe('Guillermo Rojas');
+    expect(cuerpo.vendedor).toBe('Marta Vargas');
     expect(typeof cuerpo.csrf).toBe('string');
     expect(res.headers.get('set-cookie')).toContain('luxe_sesion=');
+    expect(autenticarUsuario).toHaveBeenCalledWith('guillermo', 'x', expect.anything());
   });
 
   it('rechaza credenciales incorrectas con 401', async () => {

@@ -53,9 +53,15 @@ export async function POST(request: Request) {
   }
 
   if (!resultado.ok) {
+    // El usuario NO se registra completo: el modo de fallo más común de un
+    // formulario de acceso es que la persona escriba la clave en el campo de
+    // usuario por error. Si eso pasa acá, la clave real de un vendedor
+    // quedaría en texto plano en los logs de Vercel, retenida y buscable.
+    // Los primeros 3 caracteres alcanzan para distinguir intentos contra
+    // cuentas distintas sin exponer una credencial completa.
     console.error(
       '[cotizador] Entrada rechazada al panel.',
-      'usuario:', parseado.data.usuario,
+      'usuario (primeros 3 caracteres):', parseado.data.usuario.slice(0, 3),
       'motivo:', resultado.motivo,
       request.headers.get('x-forwarded-for') ?? 'ip desconocida',
     );

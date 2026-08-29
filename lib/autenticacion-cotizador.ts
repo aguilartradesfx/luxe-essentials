@@ -22,7 +22,14 @@ export function autenticarPeticion(
 ): ResultadoAutenticacion {
   const vendedor = nombreDeSesion(request);
   if (!vendedor) {
-    return { ok: false, status: 401, error: 'Tu sesión venció. Volvé a entrar.' };
+    // Dentro del iframe con las cookies de terceros bloqueadas, el vendedor
+    // nunca llegó a tener sesión — no es que "venció". Un mensaje que sólo
+    // dice "venció" lo manda a reintentar en círculo, como si volver a
+    // escribir la clave fuera a arreglar algo que el navegador está
+    // bloqueando de entrada. No se distingue el caso exacto (nunca hubo
+    // sesión vs. expiró de verdad) a propósito: decírselo por separado le
+    // diría a quien prueba con una cookie forjada cuál parte acertó.
+    return { ok: false, status: 401, error: 'Tu sesión no está activa o venció. Volvé a entrar.' };
   }
 
   // La cookie necesita `SameSite=None` para vivir dentro del iframe de
