@@ -139,17 +139,40 @@ export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
   const valor = `${contenido}.${firma}`;
   const csrf = derivarCsrf(valor);
 
-  const cookie = [
+  return { cookie: armarCookie(valor, MAX_EDAD_SEGUNDOS), csrf };
+}
+
+// Una sola fábrica para las dos cookies que emite este módulo — la de entrada
+// y la de salida. El navegador sólo reemplaza (o borra) una cookie si el
+// `Set-Cookie` nuevo trae exactamente los mismos atributos de identidad que el
+// viejo: nombre, `Path`, y en este caso también `Secure`, `SameSite=None` y
+// `Partitioned`, porque una cookie particionada vive en un frasco distinto del
+// de una que no lo está. Armarlas por separado era la forma más fácil de
+// escribir un "Salir" que no borra nada dentro del iframe de GoHighLevel.
+function armarCookie(valor: string, maxEdadSegundos: number): string {
+  return [
     `${NOMBRE_COOKIE}=${valor}`,
     'Path=/',
-    `Max-Age=${MAX_EDAD_SEGUNDOS}`,
+    `Max-Age=${maxEdadSegundos}`,
     'HttpOnly',
     'Secure',
     'SameSite=None',
     'Partitioned',
   ].join('; ');
+}
 
-  return { cookie, csrf };
+// Revisión final, Importante 3: no existía ninguna ruta que caducara la
+// cookie. En una computadora compartida —la recepción, la oficina— el segundo
+// vendedor no tenía forma de dejar de ser el primero, y sus cotizaciones
+// quedaban firmadas con el nombre equivocado de forma permanente e
+// indistinguible: la fase había cambiado "una cotización no tiene autor" por
+// algo peor, "tiene un autor, y es el equivocado".
+//
+// `Max-Age=0` es la forma estándar de pedirle al navegador que la borre ya. El
+// valor va vacío para que, si algún navegador ignorara el `Max-Age`, lo que
+// quede tampoco valide: una cadena vacía no pasa el formato de tres partes.
+export function cookieDeCierre(): string {
+  return armarCookie('', 0);
 }
 
 // Devuelve el vendedor de la sesión, o null si no hay una válida. Es la función

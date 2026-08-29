@@ -287,6 +287,38 @@ export default function Panel() {
     setPidiendoClave(true);
   }
 
+  // Revisión final, Importante 3: "Salir". Sin esto, en una computadora
+  // compartida —la recepción, la oficina— el segundo vendedor no tenía forma
+  // de dejar de ser el primero: la cookie dura 30 días y es `HttpOnly`, así
+  // que ni siquiera se podía borrar desde acá. Sus cotizaciones quedaban
+  // firmadas con el nombre equivocado, de forma permanente e indistinguible.
+  //
+  // El servidor caduca la cookie (`/api/cotizacion/salir`); acá se limpia el
+  // token anti-CSRF guardado y se devuelve la pantalla de acceso. `dentro` NO
+  // se toca, por el mismo motivo que en `onSesionInvalida`: la pantalla de
+  // clave se superpone y `VistaCrear` sigue montada. Lo que sí se borra es el
+  // vendedor — dejar el nombre anterior pintado detrás del formulario sería
+  // decirle a quien va a entrar que la sesión de la otra persona sigue viva.
+  //
+  // Si el `fetch` falla (sin red), igual se pide la clave: no dejar salir
+  // porque la red está caída es el peor de los dos errores. El servidor
+  // seguirá aceptando esa cookie hasta que venza — eso se documenta en el
+  // README junto al procedimiento de dar de baja a alguien.
+  async function onSalir() {
+    try {
+      await fetch('/api/cotizacion/salir', { method: 'POST' });
+    } catch (e) {
+      console.error(
+        '[cotizador] No se pudo cerrar la sesión en el servidor (fallo de red).',
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+    limpiarCsrf();
+    setVendedor(null);
+    setMensajePantallaClave(null);
+    setPidiendoClave(true);
+  }
+
   // "Duplicar" (Tarea 10): `VistaListado` ya resolvió el dato (cliente +
   // líneas, sin precios); acá solo se guarda para el próximo montaje de
   // `VistaCrear` y se salta a la pestaña "Crear".
@@ -349,8 +381,22 @@ export default function Panel() {
             {/* Tarea 5 (usuarios del panel): antes había una sola clave compartida
                 para todo el equipo, así que no había con qué llenar esto. Ahora
                 cada vendedor entra con su propia cuenta — mostrar de quién es la
-                sesión hace visible con qué credencial se está trabajando. */}
-            {vendedor && <p className="mt-1 text-xs text-teal">Sesión de {vendedor}</p>}
+                sesión hace visible con qué credencial se está trabajando.
+                Revisión final (Importante 3): "Salir" va justo al lado, porque
+                el momento en que alguien lee de quién es la sesión es el mismo
+                en que descubre que no es la suya. */}
+            {vendedor && (
+              <p className="mt-1 flex items-center gap-2 text-xs text-teal">
+                <span>Sesión de {vendedor}</span>
+                <button
+                  type="button"
+                  onClick={onSalir}
+                  className="underline underline-offset-2 hover:text-navy"
+                >
+                  Salir
+                </button>
+              </p>
+            )}
           </header>
 
           {/* Tres pestañas (Tarea 9): solo "Crear" tiene contenido hoy —lo que ya

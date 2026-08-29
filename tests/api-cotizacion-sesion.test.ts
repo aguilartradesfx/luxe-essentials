@@ -306,6 +306,50 @@ describe('POST /api/cotizacion/entrar', () => {
   });
 });
 
+// Revisión final, Importante 3: no existía ninguna ruta que caducara la
+// cookie. En una computadora compartida el segundo vendedor no tenía forma de
+// dejar de ser el primero — la cookie es `HttpOnly`, dura 30 días, y ningún
+// código del navegador podía borrarla.
+describe('POST /api/cotizacion/salir', () => {
+  beforeEach(() => {
+    process.env.LUXE_SESION_SECRETO = 'secreto-de-firma';
+  });
+
+  it('caduca la cookie con Max-Age=0 y los mismos atributos con que se emitió', async () => {
+    const { POST: postSalir } = await import('@/app/api/cotizacion/salir/route');
+    const { cookie: emitida } = emitirSesion('Guillermo Rojas');
+
+    const res = await postSalir();
+
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain('luxe_sesion=');
+    expect(setCookie).toMatch(/Max-Age=0\b/);
+
+    // Los atributos de identidad tienen que coincidir con los de la cookie de
+    // entrada: si `Path`, `Secure`, `SameSite` o `Partitioned` no son los
+    // mismos, el navegador la trata como otra cookie y no borra nada — que
+    // dentro del iframe de GoHighLevel (donde `Partitioned` es obligatoria)
+    // sería un "Salir" que no saca a nadie.
+    for (const atributo of ['Path=/', 'HttpOnly', 'Secure', 'SameSite=None', 'Partitioned']) {
+      expect(setCookie).toContain(atributo);
+      expect(emitida).toContain(atributo);
+    }
+  });
+
+  it('el valor que deja no vale como sesión ni siquiera si el navegador ignora Max-Age', async () => {
+    const { POST: postSalir } = await import('@/app/api/cotizacion/salir/route');
+    const res = await postSalir();
+    const valor = (res.headers.get('set-cookie') ?? '').split(';')[0];
+
+    const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado', {
+      headers: { cookie: valor },
+    });
+    const { sesionValida } = await import('@/lib/sesion');
+    expect(sesionValida(req)).toBe(false);
+  });
+});
+
 describe('autenticarPeticion', () => {
   it('devuelve el vendedor de la sesión', async () => {
     const { emitirSesion } = await import('@/lib/sesion');

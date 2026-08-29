@@ -179,6 +179,15 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       return new Response(JSON.stringify({ ok: true, csrf, vendedor: 'Guillermo Rojas' }), { status: 200 });
     }
 
+    if (url.endsWith('/api/cotizacion/salir')) {
+      // Revisión final (Importante 3): el servidor caduca la cookie. Acá eso
+      // se simula apagando `cookieEstablecida`, que es lo que decide si
+      // `/catalogo` responde 200 — así una sonda posterior se comporta como
+      // en un navegador que de verdad borró la cookie.
+      cookieEstablecida = false;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
     if (url.endsWith('/api/cotizacion/borradores')) {
       // Tarea 10: se llama justo al entrar. Vacío salvo que la prueba pida
       // otra cosa vía `opciones.borradores`.
@@ -355,6 +364,63 @@ describe('Cotizador', () => {
     // prueba de `sesionActiva: true`, más abajo). Mata el mutante "comentar
     // el `setVendedor` de `onEntrar`".
     expect(screen.getByText(/sesión de guillermo rojas/i)).toBeInTheDocument();
+  });
+
+  // Revisión final, Importante 3: hasta acá no existía forma de salir ni de
+  // cambiar de usuario. En una computadora compartida —la recepción, la
+  // oficina— el segundo vendedor no podía dejar de ser el primero, y sus
+  // cotizaciones quedaban firmadas con el nombre equivocado de forma
+  // permanente e indistinguible: peor que no tener autor.
+  describe('Salir', () => {
+    it('caduca la sesión en el servidor, borra el token guardado y devuelve la pantalla de acceso', async () => {
+      const fetchEspiado = mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+      expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBe(CSRF_TOKEN_DE_PRUEBA);
+
+      await usuario.click(screen.getByRole('button', { name: /^salir$/i }));
+
+      // 1. Le pidió al servidor que caduque la cookie. Es la única parte que
+      //    de verdad cierra la sesión: la cookie es `HttpOnly` y dura 30
+      //    días, así que limpiar sólo el estado del navegador dejaría al
+      //    siguiente vendedor entrando solo con recargar.
+      const llamadaSalir = fetchEspiado.mock.calls.find(([input]) =>
+        (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/salir'),
+      );
+      expect(llamadaSalir).toBeDefined();
+      expect((llamadaSalir![1] as RequestInit).method).toBe('POST');
+
+      // 2. Volvió la pantalla de acceso, y sin el nombre del vendedor
+      //    anterior colgando detrás.
+      expect(await screen.findByLabelText(/usuario/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByText(/sesión de guillermo rojas/i)).not.toBeInTheDocument();
+      });
+
+      // 3. El token anti-CSRF guardado se fue con ella: si quedara, la
+      //    siguiente persona heredaría el permiso de escribir de la anterior
+      //    en cuanto la cookie volviera a existir.
+      expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
+    });
+
+    it('si el servidor no contesta, igual devuelve la pantalla de acceso', async () => {
+      // No dejar salir porque la red está caída es el peor de los dos
+      // errores: la persona se levanta de la computadora igual.
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+      await usuario.click(screen.getByRole('button', { name: /^salir$/i }));
+
+      expect(await screen.findByLabelText(/usuario/i)).toBeInTheDocument();
+      expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
+      consoleError.mockRestore();
+    });
   });
 
   it('filtra el catálogo al escribir en el buscador', async () => {
