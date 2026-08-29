@@ -100,6 +100,14 @@ crea con el script antes de desplegar.
 **Esto es un corte, no una transición gradual**, y es a propósito: dejar las dos vías vivas
 mantendría el hueco que esta fase existe para cerrar.
 
+Antes de desplegar, con la migración ya aplicada:
+
+    npm run db:migrate
+    npm run usuarios -- alta guillermo "Guillermo Rojas" '<clave>'
+    npm run usuarios -- listar
+
+Si esto no se hace, nadie entra al panel: la clave compartida ya no sirve.
+
 ## Riesgos declarados
 
 **Si el equipo no crea usuarios antes de desplegar, nadie entra.** El script tiene que correrse

@@ -12,7 +12,8 @@
     "build": "next build",
     "start": "next start",
     "images": "node scripts/optimize-images.mjs",
-    "db:migrate": "node scripts/db.mjs migrate"
+    "db:migrate": "node scripts/db.mjs migrate",
+    "usuarios": "node scripts/usuarios.mjs"
   },
   "keywords": [],
   "author": "",
