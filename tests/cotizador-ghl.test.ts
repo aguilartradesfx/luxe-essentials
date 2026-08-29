@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { crearEstimate, ETAPA_CALIFICADA_ID, ETAPA_PROPUESTA_ID } from '@/lib/cotizador/ghl';
+import { crearEstimate, notaDeCotizacion, ETAPA_CALIFICADA_ID, ETAPA_PROPUESTA_ID } from '@/lib/cotizador/ghl';
 import type { Cotizacion } from '@/lib/cotizador/tipos';
 
 const cotizacion: Cotizacion = {
@@ -522,5 +522,66 @@ describe('crearEstimate', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+// Tarea 12 — el texto de la nota que queda en el contacto de GoHighLevel. Es
+// el único rastro de que a este hotel se le cotizó: el correo con el PDF
+// sale por Resend, por fuera del CRM, así que la conversación del contacto
+// ahí no lo muestra.
+describe('notaDeCotizacion', () => {
+  const params = {
+    numero: 'COT-2026-0001',
+    total: 1464480,
+    vence: new Date('2026-09-25T12:00:00Z'),
+    enlace: 'https://enlace.firmado/cotizaciones/COT-2026-0001.pdf',
+  };
+
+  it('incluye el número, el monto formateado, la fecha de vencimiento y el enlace', () => {
+    const nota = notaDeCotizacion(params);
+    expect(nota).toContain('COT-2026-0001');
+    expect(nota).toContain('₡1.464.480');
+    // Mismos nombres de mes de Costa Rica que el resto del sistema
+    // (lib/cotizador/fechas.ts): "setiembre", no "septiembre".
+    expect(nota).toContain('25 de setiembre de 2026');
+    expect(nota).toContain(params.enlace);
+  });
+
+  it('lo importante —monto y vigencia— va en la primera línea, sin encabezados', () => {
+    // La lee un vendedor entre otras notas del contacto: tiene que poder ver
+    // cuánto y hasta cuándo sin abrir la nota entera.
+    const [primeraLinea] = notaDeCotizacion(params).split('\n');
+    expect(primeraLinea).toContain('₡1.464.480');
+    expect(primeraLinea).toContain('25 de setiembre de 2026');
+  });
+
+  it('el enlace va en su propia línea, para poder abrir el PDF desde la ficha del contacto', () => {
+    const lineas = notaDeCotizacion(params).split('\n');
+    expect(lineas.some((linea) => linea.includes(params.enlace))).toBe(true);
+  });
+
+  it('nunca menciona métodos de pago', () => {
+    // Misma restricción que `termsNotes` en `crearEstimate` (ver arriba,
+    // "nunca menciona método de pago").
+    const nota = notaDeCotizacion(params);
+    expect(nota).not.toMatch(/paymentMethod|pasarela|payNow|tarjeta|sinpe|transferencia/i);
+  });
+
+  it('formatea los colones con punto de miles, igual que el resto del sistema', () => {
+    // Mutante que esto mata: usar `toLocaleString`/`Intl.NumberFormat`
+    // directo, cuyo separador para es-CR varía entre versiones de ICU.
+    const nota = notaDeCotizacion({ ...params, total: 90000 });
+    expect(nota).toContain('₡90.000');
+  });
+
+  it('omite la línea del PDF si no hay enlace (Storage caído justo al firmar)', () => {
+    // Ronda de correcciones 1: mismo criterio que `cuerpoHtml` en
+    // lib/cotizador/correo.ts, que omite el párrafo del enlace entero en vez
+    // de mandar uno vacío. Antes, esta nota quedaba con "PDF: " seguido de
+    // nada.
+    const nota = notaDeCotizacion({ ...params, enlace: '' });
+    expect(nota).not.toContain('PDF:');
+    expect(nota.split('\n')).toHaveLength(1);
+    expect(nota).toContain('₡1.464.480');
   });
 });

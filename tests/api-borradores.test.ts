@@ -28,17 +28,26 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 const { POST } = await import('@/app/api/cotizacion/borradores/route');
+const { emitirSesion } = await import('@/lib/sesion');
 
-function peticion(cuerpo: unknown) {
+function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/api/cotizacion/borradores', {
     method: 'POST',
+    headers: cabeceras,
     body: JSON.stringify(cuerpo),
   });
 }
 
+// Fase 3: la clave compartida ya no autentica; esta ruta es de solo lectura y
+// no exige CSRF, así que basta con la cookie de sesión.
+function peticionAutenticada(cuerpo: unknown) {
+  const { cookie } = emitirSesion('Guillermo Rojas');
+  return peticion(cuerpo, { cookie: cookie.split(';')[0] });
+}
+
 describe('POST /api/cotizacion/borradores', () => {
   beforeEach(() => {
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
     // `filtros` vive fuera del módulo mockeado (es del propio archivo de
     // prueba), así que sin este reset se va acumulando entre pruebas: la de
     // "devuelve los borradores pendientes" ya deja dos entradas antes de que
@@ -47,13 +56,13 @@ describe('POST /api/cotizacion/borradores', () => {
     filtros.length = 0;
   });
 
-  it('rechaza sin clave', async () => {
-    const res = await POST(peticion({ clave: 'otra' }));
+  it('rechaza sin sesión', async () => {
+    const res = await POST(peticion({}));
     expect(res.status).toBe(401);
   });
 
   it('devuelve los borradores pendientes', async () => {
-    const res = await POST(peticion({ clave: 'secreta' }));
+    const res = await POST(peticionAutenticada({}));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.borradores).toHaveLength(1);
@@ -70,7 +79,7 @@ describe('POST /api/cotizacion/borradores', () => {
   it('filtra por estado borrador y por origen agente', async () => {
     // Sin el filtro de origen, una cotización humana en vuelo hacia GoHighLevel
     // aparecería en la cola del agente.
-    await POST(peticion({ clave: 'secreta' }));
+    await POST(peticionAutenticada({}));
     expect(filtros).toEqual([
       ['estado', 'borrador'],
       ['origen', 'agente'],

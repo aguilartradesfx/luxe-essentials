@@ -1,31 +1,26 @@
 import { NextResponse } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
+import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 
-// Mismo criterio que el resto de app/api/cotizacion/*: comparación en tiempo
-// constante, y es POST —no GET— porque la clave viaja en el cuerpo. Una
-// clave en la barra de direcciones queda en el historial del navegador y en
-// los registros del servidor.
-function claveValida(recibida: unknown): boolean {
-  const esperada = process.env.LUXE_TALLER_CLAVE;
-  if (!esperada || typeof recibida !== 'string') return false;
-  const a = Buffer.from(recibida);
-  const b = Buffer.from(esperada);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
+// Es POST —no GET— por consistencia con el resto de app/api/cotizacion/*, que
+// nació así cuando la credencial viajaba en el cuerpo. Desde la fase 3 la
+// credencial es la cookie y no hay nada secreto en este cuerpo, pero cambiar
+// el método ahora sería tocar la pantalla sin ganar nada.
 export async function POST(request: Request) {
-  let cuerpo: { clave?: unknown };
+  let cuerpo: unknown;
   try {
     cuerpo = await request.json();
   } catch {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  if (!claveValida(cuerpo.clave)) {
-    return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
+  // Ruta de solo lectura (SELECT): la sesión por cookie basta, sin exigir el
+  // token anti-CSRF que sí piden las que escriben.
+  const auth = autenticarPeticion(request, cuerpo, { requiereCsrf: false });
+  if (!auth.ok) {
+    return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }
 
   const { data, error } = await supabaseAdmin()

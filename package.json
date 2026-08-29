@@ -12,7 +12,8 @@
     "build": "next build",
     "start": "next start",
     "images": "node scripts/optimize-images.mjs",
-    "db:migrate": "node scripts/db.mjs migrate"
+    "db:migrate": "node scripts/db.mjs migrate",
+    "usuarios": "node scripts/usuarios.mjs"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
   "type": "module",
   "private": "true",
   "dependencies": {
+    "@react-pdf/renderer": "^4.9.0",
     "@supabase/supabase-js": "^2.112.3",
     "next": "^16.3.1",
     "react": "^19.2.8",
@@ -38,6 +40,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "dotenv": "^17.4.2",
     "jsdom": "^30.0.1",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.23.0",
     "sharp": "^0.35.3",
     "tailwindcss": "^4.3.3",

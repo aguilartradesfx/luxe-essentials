@@ -1,5 +1,6 @@
 import type { Cotizacion } from '@/lib/cotizador/tipos';
 import { escribirContactoSinPisar } from '@/lib/ghl-contacto';
+import { formatearFechaLargaCR } from '@/lib/cotizador/fechas';
 
 const BASE = 'https://services.leadconnectorhq.com';
 const VERSION = '2021-07-28';
@@ -383,4 +384,42 @@ export async function crearEstimate(
   return opportunityError
     ? { ok: true, estimateId, contactId, opportunityError }
     : { ok: true, estimateId, contactId };
+}
+
+// Tarea 12 — el texto de la nota que registra, en el contacto de
+// GoHighLevel, que a este cliente se le mandó una cotización. El correo con
+// el PDF sale por Resend (`enviarCotizacion` en lib/cotizador/correo.ts),
+// por fuera de GoHighLevel: la conversación del contacto ahí no lo muestra,
+// y sin esta nota no queda ningún rastro de que se cotizó, cuándo ni por
+// cuánto. `app/api/cotizacion/route.ts` la agrega vía `agregarNota`
+// (lib/agente/acciones.ts) después de que el correo sale.
+//
+// La lee un vendedor entre otras notas del contacto, así que va corta y con
+// lo importante — monto y vigencia — en la primera línea, sin encabezados.
+// El enlace va en su propia línea para poder abrir el PDF desde la ficha del
+// contacto sin salir del CRM. Nunca menciona métodos de pago: misma
+// restricción que `termsNotes` arriba.
+//
+// `colones()` duplica a propósito `formatearColones` de
+// app/cotizador/formato.ts en vez de importarla: ese archivo es de cliente
+// (sin `server-only`) y este módulo corre en el servidor. Mismo criterio de
+// duplicación que ya usan `lib/cotizador/documento.tsx` y
+// `lib/cotizador/correo.ts` para no cruzar esa frontera por un formateador
+// de una línea.
+function colones(valor: number): string {
+  return `₡${Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+}
+
+export function notaDeCotizacion(p: {
+  numero: string;
+  total: number;
+  vence: Date;
+  enlace: string;
+}): string {
+  const primeraLinea =
+    `Cotización ${p.numero}: ${colones(p.total)}, vigente hasta el ${formatearFechaLargaCR(p.vence)}.`;
+  // Mismo criterio que `cuerpoHtml` en lib/cotizador/correo.ts: sin enlace
+  // firmado (Storage caído justo en ese momento), se omite la línea entera
+  // en vez de imprimir "PDF: " seguido de nada.
+  return p.enlace ? `${primeraLinea}\nPDF: ${p.enlace}` : primeraLinea;
 }
