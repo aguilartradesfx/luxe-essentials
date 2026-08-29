@@ -289,7 +289,7 @@ describe('PantallaClave', () => {
     expect(onEntrar).toHaveBeenCalledWith('guillermo', 'Turrialba-2026');
   });
 
-  it('muestra el mensaje que devuelve el servidor cuando la cuenta está bloqueada', async () => {
+  it('muestra el mensaje que devuelve el servidor cuando la cuenta está bloqueada, anunciado con role="alert"', async () => {
     const onEntrar = vi.fn().mockResolvedValue('Cuenta bloqueada por intentos fallidos. Probá en 15 minutos.');
     const usuario = userEvent.setup();
     render(<PantallaClave onEntrar={onEntrar} />);
@@ -298,7 +298,22 @@ describe('PantallaClave', () => {
     await usuario.type(screen.getByLabelText(/^clave$/i), 'mala');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
 
-    expect(await screen.findByText(/bloqueada/i)).toBeInTheDocument();
+    // Ronda de correcciones 1 (Tarea 5, hallazgo menor): `getByRole('alert')`
+    // sólo encuentra el mensaje si lleva `role="alert"` — sin él, un lector
+    // de pantalla no anuncia cuál de los dos motivos de rechazo le tocó al
+    // vendedor ("clave incorrecta" vs. "cuenta bloqueada 15 minutos").
+    const aviso = await screen.findByRole('alert');
+    expect(aviso).toHaveTextContent(/bloqueada/i);
+  });
+
+  // Ronda de correcciones 1 (hallazgo menor): sin esto, quitar cualquiera de
+  // los dos `autoComplete` no ponía nada en rojo — estaban bien puestos,
+  // pero sin ninguna prueba que los sostuviera.
+  it('lleva autoComplete de usuario y clave, para que el navegador ofrezca autocompletar', () => {
+    render(<PantallaClave onEntrar={vi.fn()} />);
+
+    expect(screen.getByLabelText(/usuario/i)).toHaveAttribute('autoComplete', 'username');
+    expect(screen.getByLabelText(/^clave$/i)).toHaveAttribute('autoComplete', 'current-password');
   });
 });
 
@@ -334,6 +349,12 @@ describe('Cotizador', () => {
     render(<Cotizador />);
     await entrar(usuario);
     expect(screen.getByText(/₡0/)).toBeInTheDocument();
+    // Ronda de correcciones 1 (Tarea 5, hallazgo menor): el vendedor que
+    // devuelve `/entrar` también debe guardarse y mostrarse — no sólo el que
+    // devuelve la sonda de `/catalogo` al montar (esa mitad la cubre la
+    // prueba de `sesionActiva: true`, más abajo). Mata el mutante "comentar
+    // el `setVendedor` de `onEntrar`".
+    expect(screen.getByText(/sesión de guillermo rojas/i)).toBeInTheDocument();
   });
 
   it('filtra el catálogo al escribir en el buscador', async () => {
@@ -1257,7 +1278,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
   });
 
-  it('si la sesión ya está viva al montar (cookie), entra directo sin pedir usuario ni clave', async () => {
+  it('si la sesión ya está viva al montar (cookie), entra directo sin pedir usuario ni clave, y muestra de quién es la sesión', async () => {
     // Mata el mutante "la sonda nunca entra": con `sesionActiva`,
     // `/api/cotizacion/catalogo` responde bien a la sonda porque hay una
     // cookie válida — la pantalla de acceso no debería aparecer en ningún
@@ -1271,6 +1292,15 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     expect(screen.queryByLabelText(/usuario/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^clave$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^entrar$/i })).not.toBeInTheDocument();
+
+    // Ronda de correcciones 1 (Tarea 5, hallazgo menor): el requisito "Panel
+    // guarda el vendedor al MONTAR, no sólo al entrar" es funcional, no
+    // cosmético — sin esto, tras recargar la página el panel perdería de
+    // vista con qué cuenta se está trabajando. Mata el mutante "comentar los
+    // dos `setVendedor`": sin ellos, la cabecera nunca dice de quién es la
+    // sesión (verificado a mano comentándolos y viendo esta aserción ponerse
+    // roja).
+    expect(await screen.findByText(/sesión de guillermo rojas/i)).toBeInTheDocument();
 
     // La cola de borradores —que se pide sola al montar `VistaCrear`— no
     // manda ninguna credencial en el cuerpo: la sesión por cookie ya

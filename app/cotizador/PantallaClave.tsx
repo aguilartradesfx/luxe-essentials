@@ -83,7 +83,16 @@ export function PantallaClave({ onEntrar, mensaje }: Props) {
           placeholder="Clave"
           className="mt-2 w-full rounded-lg border border-[var(--carta-border)] bg-white px-4 py-3 text-sm text-navy placeholder:text-teal/60"
         />
-        {claveError && <p className="mt-2 text-sm text-red-700">{claveError}</p>}
+        {/* Ronda de correcciones 1 (Tarea 5, hallazgo menor): este mensaje es
+            el que distingue "clave incorrecta" de "cuenta bloqueada, probá en
+            15 minutos" — sin `role="alert"`, quien usa un lector de pantalla
+            no se entera de cuál de las dos le tocó, porque el texto aparece
+            después del envío, sin mover el foco. */}
+        {claveError && (
+          <p role="alert" className="mt-2 text-sm text-red-700">
+            {claveError}
+          </p>
+        )}
         <button
           type="submit"
           disabled={entrando}

@@ -203,6 +203,17 @@ export default function Panel() {
   // sonda de sesión al montar): si el servidor la valida, la cookie de
   // verdad llegó, y esa misma respuesta trae el catálogo, el token anti-CSRF
   // y el vendedor.
+  //
+  // Ronda de correcciones 1 (Tarea 5, hallazgo menor) — acoplamiento a tener
+  // en cuenta: la condición de abajo exige `typeof datosVerificacion.csrf ===
+  // 'string'`, y `/api/cotizacion/catalogo` retiene el `csrf` a propósito
+  // cuando la petición llega con `Sec-Fetch-Site: cross-site` (ver ese
+  // archivo). Antes de esta tarea esa combinación sólo significaba "no
+  // guardo token"; desde acá también significa "no entrás", con este mismo
+  // mensaje de iframe. Hoy no es alcanzable — este `fetch` sale del propio
+  // documento del panel y viaja como `same-origin` —, pero quien toque ese
+  // endurecimiento anti-CSRF más adelante debe saber que ahora también es la
+  // puerta de entrada, no sólo una protección de la sesión ya abierta.
   async function establecerSesion(
     usuario: string,
     claveIngresada: string,
@@ -233,11 +244,19 @@ export default function Panel() {
         };
       }
       guardarCsrf(datosVerificacion.csrf);
-      return {
-        ok: true,
-        skus: datosVerificacion.skus,
-        vendedor: typeof datosVerificacion.vendedor === 'string' ? datosVerificacion.vendedor : datos.vendedor,
-      };
+      // Ronda de correcciones 1 (Tarea 5, hallazgo menor): tanto `datos`
+      // (`/entrar`) como `datosVerificacion` (`/catalogo`) llegan como `any`
+      // — sin este guard explícito, un `vendedor` ausente en las dos
+      // respuestas colaría `undefined` en un campo tipado `string`. Hoy es
+      // inocuo (`{vendedor && …}` en el render no pinta nada con `''`), pero
+      // el tipo no debe mentir.
+      const vendedor =
+        typeof datosVerificacion.vendedor === 'string'
+          ? datosVerificacion.vendedor
+          : typeof datos.vendedor === 'string'
+            ? datos.vendedor
+            : '';
+      return { ok: true, skus: datosVerificacion.skus, vendedor };
     } catch (e) {
       console.error(
         '[cotizador] No se pudo establecer la sesión por cookie (fallo de red).',
