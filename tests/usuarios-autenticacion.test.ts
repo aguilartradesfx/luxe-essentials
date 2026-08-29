@@ -22,7 +22,10 @@ import { autenticarUsuario, MAX_INTENTOS, BLOQUEO_MINUTOS } from '@/lib/cotizado
 // Lo que sí queda anclado sobre el código de producción es el contrato —qué
 // función se llama y con qué argumentos, y que no se emite ninguna escritura
 // de contador por fuera—; ver el describe 'el contador es atómico', más abajo.
-function db(fila: Record<string, unknown> | null) {
+function db(
+  fila: Record<string, unknown> | null,
+  opciones: { errorDeEscritura?: string } = {},
+) {
   const escrituras: Record<string, unknown>[] = [];
   const llamadasRpc: { nombre: string; argumentos: Record<string, unknown> }[] = [];
   const cliente = {
@@ -33,7 +36,11 @@ function db(fila: Record<string, unknown> | null) {
         maybeSingle: async () => ({ data: fila, error: null }),
         update(cambios: Record<string, unknown>) {
           escrituras.push(cambios);
-          return { eq: async () => ({ error: null }) };
+          return {
+            eq: async () => ({
+              error: opciones.errorDeEscritura ? { message: opciones.errorDeEscritura } : null,
+            }),
+          };
         },
       };
     },
@@ -150,6 +157,30 @@ describe('autenticarUsuario', () => {
       bloqueado_hasta: null,
       ultimo_acceso: '2026-08-28T10:00:00.000Z',
     });
+  });
+
+  // Diferido T2, de la Tarea 2: "un fallo de escritura no lanza" no tenía
+  // prueba — el doble siempre resolvía `update()` con `{ error: null }`, así
+  // que si alguien hiciera que `escribir()` relanzara, ninguna prueba se
+  // ponía roja. `escribir()` es lo único que anota el último acceso y lo que
+  // reinicia el contador al entrar bien: si empezara a lanzar, `/entrar`
+  // devolvería 500 en cada entrada CORRECTA, que es el peor momento posible
+  // para fallar.
+  it('si la escritura de la base falla, la entrada igual se concede', async () => {
+    const ahora = new Date('2026-08-28T10:00:00Z');
+    const { cliente, escrituras } = db(await filaDe('Turrialba-2026', { intentos: 3 }), {
+      errorDeEscritura: 'no se pudo escribir',
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const r = await autenticarUsuario('guillermo', 'Turrialba-2026', cliente, ahora);
+
+    expect(r).toEqual({ ok: true, nombre: 'Guillermo Rojas' });
+    // Se intentó anotar, y el fallo quedó registrado ruidosamente: la
+    // anotación se pierde, pero no en silencio.
+    expect(escrituras).toHaveLength(1);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   // Revisión final, Importante 2. Estas cuatro pruebas son las que atan el
