@@ -1,6 +1,6 @@
 // tests/panel-sesion.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { emitirSesion, sesionValida, csrfValido, csrfDeSesion } from '@/lib/sesion';
+import { emitirSesion, sesionValida, csrfValido, csrfDeSesion, nombreDeSesion } from '@/lib/sesion';
 
 function conCookie(valor: string, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/x', { headers: { cookie: valor, ...cabeceras } });
@@ -12,19 +12,19 @@ describe('sesión', () => {
   });
 
   it('la cookie es httpOnly, secure y sameSite=none', () => {
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('Secure');
     expect(cookie).toMatch(/SameSite=None/i);
   });
 
   it('dura 30 días', () => {
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     expect(cookie).toMatch(/Max-Age=2592000/);
   });
 
   it('acepta una sesión que ella misma emitió', () => {
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     expect(sesionValida(conCookie(valor))).toBe(true);
   });
@@ -38,14 +38,14 @@ describe('sesión', () => {
   });
 
   it('rechaza una sesión firmada con otra clave', () => {
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     process.env.LUXE_TALLER_CLAVE = 'otra';
     expect(sesionValida(conCookie(valor))).toBe(false);
   });
 
   it('el token anti-CSRF debe coincidir con el de la sesión', () => {
-    const { cookie, csrf } = emitirSesion();
+    const { cookie, csrf } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     expect(csrfValido(conCookie(valor), csrf)).toBe(true);
     expect(csrfValido(conCookie(valor), 'otro')).toBe(false);
@@ -53,7 +53,7 @@ describe('sesión', () => {
   });
 
   it('la cookie lleva Partitioned (CHIPS): sin esto es de terceros dentro del iframe y Safari/Chrome pueden bloquearla', () => {
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     expect(cookie).toMatch(/Partitioned/i);
   });
 
@@ -70,7 +70,7 @@ describe('sesión', () => {
 
     it('rechaza una sesión firmada hace más de 30 días', () => {
       vi.useFakeTimers();
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       // 30 días + 1 segundo: justo pasado el borde de Max-Age.
       vi.advanceTimersByTime(2592000 * 1000 + 1000);
@@ -79,7 +79,7 @@ describe('sesión', () => {
 
     it('acepta una sesión firmada hace 29 días (dentro de los 30)', () => {
       vi.useFakeTimers();
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       vi.advanceTimersByTime(29 * 24 * 60 * 60 * 1000);
       expect(sesionValida(conCookie(valor))).toBe(true);
@@ -89,7 +89,7 @@ describe('sesión', () => {
       vi.useFakeTimers();
       const ahoraReal = Date.now();
       vi.setSystemTime(ahoraReal + 60 * 60 * 1000); // "ahora" adelantado 1 hora.
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal); // vuelve al presente real: emitidoEn queda en el futuro.
       expect(sesionValida(conCookie(valor))).toBe(false);
@@ -103,7 +103,7 @@ describe('sesión', () => {
       vi.useFakeTimers();
       const ahoraReal = Date.now();
       vi.setSystemTime(ahoraReal + 60 * 1000); // "emitida" 60s adelantada.
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal);
       expect(sesionValida(conCookie(valor))).toBe(true);
@@ -113,7 +113,7 @@ describe('sesión', () => {
       vi.useFakeTimers();
       const ahoraReal = Date.now();
       vi.setSystemTime(ahoraReal + 61 * 1000); // "emitida" 61s adelantada: justo pasado el margen.
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal);
       expect(sesionValida(conCookie(valor))).toBe(false);
@@ -127,7 +127,7 @@ describe('sesión', () => {
     });
 
     it('con cookie válida, devuelve el mismo token que csrfValido acepta', () => {
-      const { cookie, csrf } = emitirSesion();
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const derivado = csrfDeSesion(conCookie(valor));
       expect(derivado).toBe(csrf);
@@ -143,10 +143,62 @@ describe('sesión', () => {
     });
 
     it('con una sesión firmada con otra clave, devuelve null', () => {
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       process.env.LUXE_TALLER_CLAVE = 'otra';
       expect(csrfDeSesion(conCookie(valor))).toBeNull();
     });
+  });
+});
+
+// Ayuda: convierte la cabecera Set-Cookie en una cabecera Cookie de petición.
+function pedirCon(cookie: string): Request {
+  const valor = cookie.split(';')[0];
+  return new Request('https://luxeessentialscr.com/api/cotizacion/listado', {
+    headers: { cookie: valor },
+  });
+}
+
+describe('la sesión recuerda al vendedor', () => {
+  it('devuelve el nombre con el que se emitió', () => {
+    const { cookie } = emitirSesion('Guillermo Rojas');
+    expect(nombreDeSesion(pedirCon(cookie))).toBe('Guillermo Rojas');
+  });
+
+  it('conserva tildes y eñes', () => {
+    const { cookie } = emitirSesion('José Peña');
+    expect(nombreDeSesion(pedirCon(cookie))).toBe('José Peña');
+  });
+
+  it('rechaza una cookie con el nombre alterado', () => {
+    const { cookie } = emitirSesion('Guillermo Rojas');
+    const valor = cookie.split(';')[0].split('=')[1];
+    const [emitido, , firma] = valor.split('.');
+    const otro = Buffer.from('Gerente General', 'utf8').toString('base64url');
+    const falsa = `luxe_sesion=${emitido}.${otro}.${firma}`;
+    const req = new Request('https://luxeessentialscr.com/x', { headers: { cookie: falsa } });
+    expect(nombreDeSesion(req)).toBeNull();
+    expect(sesionValida(req)).toBe(false);
+  });
+
+  // Las cookies del formato viejo (`<emitidoEn>.<firma>`) no traen vendedor.
+  // Aceptarlas dejaría entrar con la clave compartida a quien tuviera una
+  // guardada, que es justo el hueco que esta fase cierra.
+  it('rechaza una cookie del formato anterior, de dos partes', () => {
+    const req = new Request('https://luxeessentialscr.com/x', {
+      headers: { cookie: 'luxe_sesion=1756000000000.deadbeef' },
+    });
+    expect(sesionValida(req)).toBe(false);
+    expect(nombreDeSesion(req)).toBeNull();
+  });
+
+  it('no emite una sesión sin nombre', () => {
+    expect(() => emitirSesion('')).toThrow();
+    expect(() => emitirSesion('   ')).toThrow();
+  });
+
+  it('sigue entregando el token anti-CSRF de la sesión', () => {
+    const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+    expect(csrfDeSesion(pedirCon(cookie))).toBe(csrf);
   });
 });

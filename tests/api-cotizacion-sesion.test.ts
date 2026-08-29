@@ -87,7 +87,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
 
   describe('POST /api/cotizacion (escribe): exige CSRF cuando entra por cookie', () => {
     it('mata el mutante 1: cookie válida SIN el token anti-CSRF en la cabecera → 401', async () => {
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, { cookie: valor }),
@@ -96,7 +96,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('cookie válida con un token anti-CSRF que no coincide → 401', async () => {
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, {
@@ -108,7 +108,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('cookie válida CON el token anti-CSRF correcto → pasa (200)', async () => {
-      const { cookie, csrf } = emitirSesion();
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, {
@@ -134,14 +134,14 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
 
   describe('rutas de solo lectura: aceptan la cookie sin exigir CSRF', () => {
     it('mata el mutante 3: /catalogo con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await postCatalogo(peticion('http://localhost/api/cotizacion/catalogo', {}, { cookie: valor }));
       expect(res.status).toBe(200);
     });
 
     it('/previsualizar con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await postPrevisualizar(
         peticion('http://localhost/api/cotizacion/previsualizar', previsualizarValida, { cookie: valor }),
@@ -150,7 +150,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('/borradores con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await postBorradores(
         peticion('http://localhost/api/cotizacion/borradores', {}, { cookie: valor }),

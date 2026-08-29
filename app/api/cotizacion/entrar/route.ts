@@ -37,7 +37,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
   }
 
-  const { cookie, csrf } = emitirSesion();
+  // TODO(Tarea siguiente): esta ruta se reescribe para usar el nombre real
+  // del usuario autenticado (ver lib/cotizador/usuarios.ts). Por ahora un
+  // valor fijo mantiene la firma nueva de emitirSesion() compilando.
+  const { cookie, csrf } = emitirSesion('Guillermo Rojas');
   const respuesta = NextResponse.json({ ok: true, csrf });
   respuesta.headers.set('Set-Cookie', cookie);
   return respuesta;

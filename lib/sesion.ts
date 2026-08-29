@@ -6,6 +6,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 // el cuerpo (que sigue siendo válida — la usan las rutas y sus pruebas) se
 // suma esta sesión por cookie.
 //
+// Tarea 3 (usuarios del panel): la cookie ya no solo prueba que hubo una
+// entrada válida — identifica a qué vendedor pertenece la sesión. El nombre
+// viaja dentro del propio valor firmado (ver `emitirSesion` y
+// `nombreDeSesion`, más abajo).
+//
 // La cookie necesita `SameSite=None` para que el navegador la mande dentro
 // de un iframe de otro origen (app.gohighlevel.com). Esa es justo la
 // condición que abre la puerta a CSRF: cualquier sitio que el vendedor
@@ -79,22 +84,42 @@ function derivarCsrf(valorCookie: string): string {
   return firmar(`csrf.${valorCookie}`);
 }
 
-export function emitirSesion(): { cookie: string; csrf: string } {
-  // Sin secreto no hay firma que valga nada: emitir de todos modos daría una
-  // cookie de aspecto normal que `sesionValida` rechazaría (ella sí tenía
-  // esta guarda), pero es mejor fallar acá, fuerte y temprano, que dejar
-  // circular una cookie que nunca va a servir. Hoy es inalcanzable —
-  // `/api/cotizacion/entrar` ya exige la clave antes de llamar a esta
-  // función, y sin `LUXE_TALLER_CLAVE` esa validación siempre falla— pero la
-  // gemela (`sesionValida`) tiene esta misma guarda y no hay razón para que
-  // esta no la tenga.
+// El nombre viaja dentro del valor firmado y no en una cookie aparte: una
+// segunda cookie sin firmar sería editable por el cliente, y "quién armó esta
+// cotización" pasaría a ser un dato que el propio cliente elige. Va en
+// `base64url` porque un nombre real trae tildes, espacios y a veces un punto —
+// y el punto es el separador de este formato.
+function codificarNombre(nombre: string): string {
+  return Buffer.from(nombre, 'utf8').toString('base64url');
+}
+
+function decodificarNombre(codificado: string): string | null {
+  try {
+    const nombre = Buffer.from(codificado, 'base64url').toString('utf8');
+    // Un `base64url` inválido no lanza: Buffer descarta lo que no reconoce y
+    // devuelve algo. Se comprueba el viaje de ida y vuelta para no aceptar
+    // basura que decodifique a un nombre vacío o distinto.
+    if (!nombre || codificarNombre(nombre) !== codificado) return null;
+    return nombre;
+  } catch {
+    return null;
+  }
+}
+
+export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
   if (!secreto()) {
     throw new Error('LUXE_TALLER_CLAVE no está configurada: no se puede emitir una sesión.');
   }
+  // Una sesión sin vendedor no puede existir: firmaría cotizaciones con nadie.
+  if (typeof nombre !== 'string' || nombre.trim().length === 0) {
+    throw new Error('No se puede emitir una sesión sin el nombre del vendedor.');
+  }
 
   const emitidoEn = String(Date.now());
-  const firma = firmar(emitidoEn);
-  const valor = `${emitidoEn}.${firma}`;
+  const codificado = codificarNombre(nombre.trim());
+  const contenido = `${emitidoEn}.${codificado}`;
+  const firma = firmar(contenido);
+  const valor = `${contenido}.${firma}`;
   const csrf = derivarCsrf(valor);
 
   const cookie = [
@@ -104,57 +129,45 @@ export function emitirSesion(): { cookie: string; csrf: string } {
     'HttpOnly',
     'Secure',
     'SameSite=None',
-    // `SameSite=None` sin esto hace que, dentro del iframe de GoHighLevel,
-    // la cookie sea "de terceros": Safari la bloquea de plano y Chrome puede
-    // hacerlo. El síntoma sería que la sesión nunca persiste y el panel pide
-    // la clave en cada carga — justo el problema que esta tarea existe para
-    // resolver. `Partitioned` (CHIPS) la particiona por sitio de nivel
-    // superior en vez de tratarla como third-party clásica.
     'Partitioned',
   ].join('; ');
 
   return { cookie, csrf };
 }
 
-export function sesionValida(request: Request): boolean {
+// Devuelve el vendedor de la sesión, o null si no hay una válida. Es la función
+// de verdad: `sesionValida` es su versión booleana. Las mismas comprobaciones
+// de siempre —firma, caducidad real en el servidor, emisión no futura— más el
+// formato de tres partes.
+export function nombreDeSesion(request: Request): string | null {
   const esperado = secreto();
-  if (!esperado) return false;
+  if (!esperado) return null;
 
   const valor = obtenerCookie(request, NOMBRE_COOKIE);
-  if (!valor) return false;
+  if (!valor) return null;
 
-  const separador = valor.indexOf('.');
-  if (separador === -1) return false;
-  const emitidoEnTexto = valor.slice(0, separador);
-  const firma = valor.slice(separador + 1);
-  if (!emitidoEnTexto || !firma) return false;
+  // Tres partes exactas. Una cookie del formato anterior (dos partes) no trae
+  // vendedor: aceptarla dejaría entrar a quien conserve una emitida con la
+  // clave compartida, que es justo el hueco que esta fase cierra.
+  const partes = valor.split('.');
+  if (partes.length !== 3) return null;
+  const [emitidoEnTexto, codificado, firma] = partes;
+  if (!emitidoEnTexto || !codificado || !firma) return null;
 
-  if (!igualesEnTiempoConstante(firma, firmar(emitidoEnTexto))) return false;
+  if (!igualesEnTiempoConstante(firma, firmar(`${emitidoEnTexto}.${codificado}`))) return null;
 
-  // Ronda de correcciones 1 (hallazgo crítico): la firma por sí sola no
-  // caduca nada — solo prueba que esta app emitió la cookie en algún
-  // momento. `Max-Age` es una instrucción para el navegador, no una que el
-  // servidor pueda confiar en que se respetó (una cookie reenviada a mano,
-  // o un navegador que la conserva más de la cuenta, la manda igual). La
-  // caducidad real vive acá.
   const emitidoEn = Number(emitidoEnTexto);
-  if (!Number.isFinite(emitidoEn)) return false;
+  if (!Number.isFinite(emitidoEn)) return null;
 
   const ahora = Date.now();
+  if (emitidoEn > ahora + TOLERANCIA_RELOJ_MS) return null;
+  if (ahora - emitidoEn > MAX_EDAD_MS) return null;
 
-  // Una fecha de emisión posterior a "ahora" no tiene explicación legítima
-  // (el reloj del servidor no retrocede entre la emisión y la validación):
-  // es la marca de una cookie forjada con una firma que de casualidad
-  // coincidiera, o una manipulación del reloj. Se corta acá, no solo por
-  // higiene — sin este freno, una fecha en el año 3000 sería válida para
-  // siempre. `TOLERANCIA_RELOJ_MS` da un margen de 60 segundos: sin él, el
-  // desvío normal entre relojes de dos procesos rechazaría una cookie recién
-  // emitida y perfectamente legítima.
-  if (emitidoEn > ahora + TOLERANCIA_RELOJ_MS) return false;
+  return decodificarNombre(codificado);
+}
 
-  if (ahora - emitidoEn > MAX_EDAD_MS) return false;
-
-  return true;
+export function sesionValida(request: Request): boolean {
+  return nombreDeSesion(request) !== null;
 }
 
 export function csrfValido(request: Request, enviado: string | undefined): boolean {

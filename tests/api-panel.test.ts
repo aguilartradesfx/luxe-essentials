@@ -271,7 +271,7 @@ describe('POST /api/cotizacion/listado', () => {
 
   it('funciona por cookie de sesión, sin exigir el token anti-CSRF', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postListado(peticion('http://localhost/api/cotizacion/listado', {}, { cookie: valor }));
     expect(res.status).toBe(200);
@@ -348,7 +348,7 @@ describe('POST /api/cotizacion/metricas', () => {
 
   it('funciona por cookie de sesión, sin exigir el token anti-CSRF', async () => {
     resultadoLista = { data: [], error: null };
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postMetricas(peticion('http://localhost/api/cotizacion/metricas', {}, { cookie: valor }));
     expect(res.status).toBe(200);
@@ -430,7 +430,7 @@ describe('POST /api/cotizacion/cerrar', () => {
   });
 
   it('rechaza sin token anti-CSRF cuando se entra por cookie', async () => {
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postCerrar(
       peticion('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }, { cookie: valor }),
@@ -440,7 +440,7 @@ describe('POST /api/cotizacion/cerrar', () => {
   });
 
   it('con cookie y el token anti-CSRF correcto, pasa', async () => {
-    const { cookie, csrf } = emitirSesion();
+    const { cookie, csrf } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postCerrar(
       peticion(
@@ -674,7 +674,7 @@ describe('POST /api/cotizacion/reenviar', () => {
 
   it('rechaza sin token anti-CSRF cuando se entra por cookie', async () => {
     resultadoFila = { data: filaReenviable(), error: null };
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postReenviar(
       peticion('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }, { cookie: valor }),
@@ -837,7 +837,7 @@ describe('POST /api/cotizacion/duplicar', () => {
 
   it('funciona por cookie de sesión, sin exigir el token anti-CSRF: es de solo lectura', async () => {
     resultadoFila = { data: { lineas: [] }, error: null };
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postDuplicar(peticion('http://localhost/api/cotizacion/duplicar', { id: ID_VALIDO }, { cookie: valor }));
     expect(res.status).toBe(200);
@@ -903,7 +903,7 @@ describe('POST /api/cotizacion/pdf', () => {
 
   it('funciona por cookie de sesión, sin exigir el token anti-CSRF: es de solo lectura', async () => {
     resultadoFila = { data: { pdf_ruta: '2026/COT-2026-0001-cot-1.pdf' }, error: null };
-    const { cookie } = emitirSesion();
+    const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
     const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }, { cookie: valor }));
     expect(res.status).toBe(200);

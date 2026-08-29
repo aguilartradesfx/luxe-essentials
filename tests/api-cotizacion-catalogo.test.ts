@@ -81,7 +81,7 @@ describe('POST /api/cotizacion/catalogo', () => {
     });
 
     it('con cookie válida y sin clave, la respuesta trae el csrf que le corresponde a esa cookie', async () => {
-      const { cookie, csrf } = emitirSesion();
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({}, { cookie: valor }));
       expect(res.status).toBe(200);
@@ -103,7 +103,7 @@ describe('POST /api/cotizacion/catalogo', () => {
       // eso. Sin impacto de seguridad (quien ya tiene la cookie válida no
       // gana ninguna capacidad nueva), pero el reporte de la ronda anterior
       // decía "nunca por la vía de la clave", que esta prueba desmiente.
-      const { cookie, csrf } = emitirSesion();
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({ clave: 'secreta' }, { cookie: valor }));
       expect(res.status).toBe(200);
@@ -117,7 +117,7 @@ describe('POST /api/cotizacion/catalogo', () => {
       // su JavaScript), pero este chequeo no depende de que eso siga siendo
       // cierto para siempre. La petición en sí sigue pasando (200, con los
       // SKUs) — lo único que se retiene es el token.
-      const { cookie } = emitirSesion();
+      const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({}, { cookie: valor, 'sec-fetch-site': 'cross-site' }));
       expect(res.status).toBe(200);
@@ -127,7 +127,7 @@ describe('POST /api/cotizacion/catalogo', () => {
     });
 
     it('con Sec-Fetch-Site: same-origin, sí devuelve el csrf (uso normal del panel)', async () => {
-      const { cookie, csrf } = emitirSesion();
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({}, { cookie: valor, 'sec-fetch-site': 'same-origin' }));
       const cuerpo = await res.json();
