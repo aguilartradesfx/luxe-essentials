@@ -89,6 +89,10 @@ entrar:
 npm run db:migrate                              # crea usuarios_panel y la función de intentos
 npm run usuarios -- alta guillermo "Guillermo Rojas"   # pide la clave por consola
 npm run usuarios -- listar                      # confirma que la fila quedó
+# Verifica el bloqueo tras 5 intentos (única prueba de esa función; sin ella, errores silenciosos)
+# Entrar 5 veces a http://localhost:3000/cotizador con usuario guillermo + clave incorrecta
+# La quinta intenta debe bloquear con "Cuenta bloqueada"; luego limpiar:
+npm run usuarios -- desbloquear guillermo
 ```
 
 **Sin dar de alta a alguien, el panel no abre para nadie.** La tabla arranca vacía y la clave
