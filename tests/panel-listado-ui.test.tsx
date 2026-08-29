@@ -35,6 +35,7 @@ const FILA_ABIERTA = {
   ghl_estimate_id: 'est-10',
   ghl_error: null,
   correo_error: null,
+  vendedor: 'Guillermo Rojas',
 };
 
 // Creada hace 25 días respecto de "ahora": con 30 días de vigencia, vence
@@ -166,6 +167,27 @@ describe('VistaListado', () => {
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
     expect(within(fila).getByText(/₡565\.000/)).toBeInTheDocument();
     expect(within(fila).getByText(/enviada/i)).toBeInTheDocument();
+  });
+
+  // Tarea 6: cierra el objetivo de la fase -- cada cotización dice quién la
+  // armó.
+  it('muestra quién armó cada cotización', async () => {
+    mockFetch();
+    renderVista();
+
+    const fila = await screen.findByText(/ana pérez/i);
+    expect(within(fila.closest('tr') as HTMLElement).getByText('Guillermo Rojas')).toBeInTheDocument();
+  });
+
+  it('una cotización de antes de esta fase (vendedor null) muestra un guion, sin inventar un nombre', async () => {
+    mockFetch({ filas: [{ ...FILA_ABIERTA, vendedor: null }] });
+    renderVista();
+
+    await waitFor(() => {
+      expect(screen.getByText(/ana pérez/i)).toBeInTheDocument();
+    });
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    expect(within(fila).getByText('—')).toBeInTheDocument();
   });
 
   it('muestra cuáles vencen pronto, de forma visible', async () => {

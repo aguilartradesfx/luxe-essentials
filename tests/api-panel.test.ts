@@ -212,6 +212,7 @@ const filaListado = {
   motivo_cierre: null,
   ghl_estimate_id: 'est-1',
   ghl_error: null,
+  vendedor: 'Guillermo Rojas',
 };
 
 describe('POST /api/cotizacion/listado', () => {
@@ -254,6 +255,16 @@ describe('POST /api/cotizacion/listado', () => {
     const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     const cuerpo = await res.json();
     expect(cuerpo.cotizaciones[0].contact_id).toBe('contacto-ghl-1');
+  });
+
+  // Tarea 6: quien armó la cotización tiene que llegar hasta la pantalla —
+  // sin pedir la columna acá, el listado nunca podría mostrarlo.
+  it('pide (e incluye) la columna vendedor, para que el listado sepa quién armó cada cotización', async () => {
+    resultadoLista = { data: [filaListado], error: null };
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
+    const cuerpo = await res.json();
+    expect(columnasSeleccionadas[0]).toMatch(/\bvendedor\b/);
+    expect(cuerpo.cotizaciones[0].vendedor).toBe('Guillermo Rojas');
   });
 
   // Tarea 10: el enlace a GoHighLevel se arma como

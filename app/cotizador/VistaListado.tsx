@@ -41,6 +41,12 @@ type FilaListado = {
   ghl_estimate_id: string | null;
   ghl_error: string | null;
   correo_error: string | null;
+  // Quién armó la cotización. Se guarda el nombre, no una llave foránea al
+  // usuario (ver app/api/cotizacion/route.ts) — así una cotización de hace
+  // un año sigue diciendo quién la hizo aunque esa persona ya no exista en
+  // el sistema. Las filas anteriores a esta fase quedan en null a
+  // propósito: no se inventa un nombre para ellas, se muestra un guion.
+  vendedor: string | null;
 };
 
 type Mensaje = { tipo: 'ok' | 'aviso' | 'error'; texto: string };
@@ -437,6 +443,7 @@ export function VistaListado({
               <tr>
                 <th className="px-3 py-2">Cliente</th>
                 <th className="px-3 py-2">Número</th>
+                <th className="px-3 py-2">Vendedor</th>
                 <th className="px-3 py-2">Fecha</th>
                 <th className="px-3 py-2">Vigencia</th>
                 <th className="px-3 py-2 text-right">Monto</th>
@@ -463,6 +470,7 @@ export function VistaListado({
                       {empresa && <p className="text-xs text-teal">{empresa}</p>}
                     </td>
                     <td className="px-3 py-2 align-top text-navy">{fila.numero ?? '—'}</td>
+                    <td className="px-3 py-2 align-top text-teal">{fila.vendedor ?? '—'}</td>
                     <td className="px-3 py-2 align-top text-teal">{formatearFecha(fila.created_at)}</td>
                     <td className="px-3 py-2 align-top">
                       {proximaAVencer ? (

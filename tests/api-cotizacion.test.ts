@@ -265,6 +265,17 @@ describe('POST /api/cotizacion', () => {
     expect(fila.origen).toBe('humano');
   });
 
+  // Tarea 6: se guarda el nombre del vendedor de la sesión, nunca el id de
+  // su fila de usuario -- dentro de un año esta cotización tiene que seguir
+  // diciendo quién la hizo aunque esa persona se haya dado de baja. Mismo
+  // criterio que `lineas`, que guarda los precios del día y no una
+  // referencia al catálogo.
+  it('guarda el vendedor de la sesión en la cotización', async () => {
+    await POST(peticionAutenticada(valido));
+    const fila = insertado[insertado.length - 1] as Record<string, unknown>;
+    expect(fila).toMatchObject({ vendedor: 'Guillermo Rojas' });
+  });
+
   it('rechaza una cantidad por línea absurdamente grande', async () => {
     // Sin tope, `cantidad: 1e15` pasaría el esquema, `calcular` produciría un
     // total fuera de `Number.isSafeInteger`, y ese número terminaría en el

@@ -90,6 +90,10 @@ export async function POST(request: Request) {
       // nada, aunque toda la cotización viniera de él.
       origen: datos.borradorId ? 'agente' : 'humano',
       estado: 'borrador',
+      // Quién la armó. Se guarda el nombre y no el id del usuario a propósito:
+      // dentro de un año esta fila tiene que seguir diciendo quién la hizo
+      // aunque esa persona se haya dado de baja.
+      vendedor: auth.vendedor,
       cliente: datos.cliente,
       lineas: cotizacion.lineas,
       totales: {

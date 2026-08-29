@@ -18,9 +18,13 @@ const listadoSchema = z.object({
 // de cada fila, y son muchos datos para traer en cada carga. `contact_id` sí
 // viaja: la pantalla lo usa para enlazar a la ficha del contacto en
 // GoHighLevel.
+// `vendedor` viaja tal cual quedó guardado en la fila (columna `vendedor`,
+// Tarea 1): nombre libre, no una llave foránea a un usuario — las filas
+// anteriores a esta fase lo traen en null y así se muestran, sin inventar
+// un nombre (ver VistaListado.tsx).
 const COLUMNAS =
   'id, numero, created_at, updated_at, estado, origen, contact_id, cliente, totales, ' +
-  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error, correo_error';
+  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error, correo_error, vendedor';
 
 export async function POST(request: Request) {
   let crudo: unknown;
