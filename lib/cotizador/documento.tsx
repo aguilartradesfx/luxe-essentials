@@ -115,6 +115,9 @@ function lineaContacto(): string | null {
     process.env.LUXE_CONTACTO_TELEFONO,
     process.env.LUXE_CONTACTO_CORREO,
     process.env.LUXE_CONTACTO_SITIO,
+    // El horario va al final: a un hotel que recibe la cotización un sábado le
+    // ahorra una llamada al vacío.
+    process.env.LUXE_CONTACTO_HORARIO,
   ].filter((v): v is string => Boolean(v && v.trim().length > 0));
   if (partes.length === 0) return null;
   return `¿Consultas sobre esta cotización? ${partes.join(' · ')}`;

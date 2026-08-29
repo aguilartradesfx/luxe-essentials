@@ -72,7 +72,7 @@ describe('renderizarCotizacion', () => {
   // después de cada una (no solo las que tocan): otro archivo de esta suite
   // podría dejarlas puestas si corre en el mismo worker, y sin esta limpieza
   // el caso "ninguna definida" podría pasar en falso.
-  const VARS_CONTACTO = ['LUXE_CONTACTO_TELEFONO', 'LUXE_CONTACTO_CORREO', 'LUXE_CONTACTO_SITIO'] as const;
+  const VARS_CONTACTO = ['LUXE_CONTACTO_TELEFONO', 'LUXE_CONTACTO_CORREO', 'LUXE_CONTACTO_SITIO', 'LUXE_CONTACTO_HORARIO'] as const;
   function limpiarVarsContacto() {
     for (const v of VARS_CONTACTO) delete process.env[v];
   }
@@ -116,6 +116,19 @@ describe('renderizarCotizacion', () => {
       const buf = await renderizarCotizacion(base);
       const { text } = await extraerTexto(buf);
       expect(text).toContain('ventas@luxeessentialscr.com');
+    } finally {
+      limpiarVarsContacto();
+    }
+  });
+
+  it('incluye el horario de atención cuando está configurado', async () => {
+    limpiarVarsContacto();
+    process.env.LUXE_CONTACTO_TELEFONO = '+506 2222-3333';
+    process.env.LUXE_CONTACTO_HORARIO = 'Lunes a viernes, 8:00 a 17:00';
+    try {
+      const buf = await renderizarCotizacion(base);
+      const { text } = await extraerTexto(buf);
+      expect(text).toContain('Lunes a viernes, 8:00 a 17:00');
     } finally {
       limpiarVarsContacto();
     }
