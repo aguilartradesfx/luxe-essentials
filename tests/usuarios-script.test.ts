@@ -21,16 +21,33 @@ describe('construirSql', () => {
     expect(await verificarClave('Turrialba-2026', hash, sal)).toBe(true);
   });
 
-  it('desactivar no borra la fila', async () => {
-    const { texto } = await construirSql('desactivar', ['guillermo']);
-    expect(texto).toContain('update');
-    expect(texto).not.toMatch(/\bdelete\b/i);
+  it('desactivar y activar nunca borran la fila, sólo cambian activo', async () => {
+    const { texto: textoDesactivar } = await construirSql('desactivar', ['guillermo']);
+    expect(textoDesactivar).toContain('update');
+    expect(textoDesactivar).toContain('activo = false');
+    expect(textoDesactivar).not.toMatch(/\bdelete\b/i);
+
+    const { texto: textoActivar } = await construirSql('activar', ['guillermo']);
+    expect(textoActivar).toContain('update');
+    expect(textoActivar).toContain('activo = true');
+    expect(textoActivar).not.toMatch(/\bdelete\b/i);
   });
 
   it('desbloquear limpia el bloqueo y el contador', async () => {
     const { texto } = await construirSql('desbloquear', ['guillermo']);
     expect(texto).toContain('bloqueado_hasta = null');
     expect(texto).toContain('intentos = 0');
+  });
+
+  it('clave deriva un hash nuevo que verifica, y de paso desbloquea la cuenta', async () => {
+    const { texto, valores } = await construirSql('clave', ['guillermo', 'Turrialba-2027']);
+    // Quien cambia la clave de alguien es porque esa persona no puede entrar:
+    // si el cambio no limpia el bloqueo y el contador, la orden no sirve para
+    // lo único que se usa.
+    expect(texto).toContain('bloqueado_hasta = null');
+    expect(texto).toContain('intentos = 0');
+    const [hash, sal] = valores;
+    expect(await verificarClave('Turrialba-2027', hash, sal)).toBe(true);
   });
 
   // La lista es para saber quién tiene acceso, no para exfiltrar hashes.

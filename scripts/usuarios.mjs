@@ -163,6 +163,10 @@ async function main() {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// `process.argv[1]` falta en contextos como `node --input-type=module -e
+// "import ..."`: ahí no hay invocación directa que detectar, así que la
+// ausencia se trata como "no es invocación directa" y no como una excepción
+// que tumbaría el import antes de llegar a comparar nada.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
