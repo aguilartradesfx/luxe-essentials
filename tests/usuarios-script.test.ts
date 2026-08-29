@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { construirSql } from '../scripts/usuarios.mjs';
+import { describe, it, expect, vi } from 'vitest';
+import { construirSql, completarArgumentos } from '../scripts/usuarios.mjs';
 import { verificarClave } from '@/lib/cotizador/credenciales.mjs';
 
 describe('construirSql', () => {
@@ -64,5 +64,65 @@ describe('construirSql', () => {
   it('exige los argumentos de cada orden', async () => {
     await expect(construirSql('alta', ['guillermo'])).rejects.toThrow();
     await expect(construirSql('desactivar', [])).rejects.toThrow();
+  });
+});
+
+// Revisión final, M2: pasar la clave como argumento la deja en
+// `~/.zsh_history` y visible en `ps` mientras el comando corre. La forma con
+// argumento se conserva (la usan las pruebas de arriba, y sirve para
+// automatizar), pero la recomendada es la interactiva.
+describe('completarArgumentos', () => {
+  it('pide la clave del alta por consola cuando no viene como argumento', async () => {
+    const pedir = vi.fn().mockResolvedValue('Turrialba-2026');
+    const completos = await completarArgumentos('alta', ['guillermo', 'Guillermo Rojas'], pedir);
+
+    expect(completos).toEqual(['guillermo', 'Guillermo Rojas', 'Turrialba-2026']);
+    // Dos veces: sin eco, una clave mal tecleada no se ve, y el síntoma llega
+    // días después como "no puedo entrar" de alguien que sí la escribió bien.
+    expect(pedir).toHaveBeenCalledTimes(2);
+  });
+
+  it('pide la clave nueva de `clave` por consola cuando no viene como argumento', async () => {
+    const pedir = vi.fn().mockResolvedValue('Turrialba-2027');
+    const completos = await completarArgumentos('clave', ['guillermo'], pedir);
+    expect(completos).toEqual(['guillermo', 'Turrialba-2027']);
+  });
+
+  it('no pregunta nada si la clave sí vino como argumento', async () => {
+    const pedir = vi.fn();
+    const completos = await completarArgumentos('alta', ['guillermo', 'G R', 'ya-la-tengo'], pedir);
+    expect(completos).toEqual(['guillermo', 'G R', 'ya-la-tengo']);
+    expect(pedir).not.toHaveBeenCalled();
+  });
+
+  it('no pregunta nada en las órdenes que no llevan clave', async () => {
+    const pedir = vi.fn();
+    for (const orden of ['listar', 'desactivar', 'activar', 'desbloquear']) {
+      await completarArgumentos(orden, ['guillermo'], pedir);
+    }
+    expect(pedir).not.toHaveBeenCalled();
+  });
+
+  it('rechaza si las dos veces no coinciden, sin tocar nada', async () => {
+    const pedir = vi.fn().mockResolvedValueOnce('una').mockResolvedValueOnce('otra');
+    await expect(
+      completarArgumentos('alta', ['guillermo', 'Guillermo Rojas'], pedir),
+    ).rejects.toThrow(/no coinciden/i);
+  });
+
+  it('rechaza una clave vacía sin llegar a preguntar la segunda vez', async () => {
+    const pedir = vi.fn().mockResolvedValue('');
+    await expect(
+      completarArgumentos('alta', ['guillermo', 'Guillermo Rojas'], pedir),
+    ).rejects.toThrow(/vacía/i);
+    expect(pedir).toHaveBeenCalledTimes(1);
+  });
+
+  // Si faltan los argumentos previos, la orden va a fallar igual: preguntar
+  // una clave antes de eso haría teclear un secreto para nada.
+  it('no pregunta si faltan los argumentos anteriores a la clave', async () => {
+    const pedir = vi.fn();
+    await completarArgumentos('alta', ['guillermo'], pedir);
+    expect(pedir).not.toHaveBeenCalled();
   });
 });

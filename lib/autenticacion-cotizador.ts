@@ -11,6 +11,29 @@ import { nombreDeSesion, csrfValido } from '@/lib/sesion';
 // única credencial, y el modo de fallo es mejor que el de antes: se falla al
 // entrar, con un mensaje claro, en vez de dejar un panel que se lee entero y
 // no escribe nada.
+// Revisión final, Importante 1 — LIMITACIÓN CONOCIDA Y ACEPTADA: dar de baja a
+// alguien NO es inmediato.
+//
+// Esta función sólo mira la firma de la cookie; nunca vuelve a consultar la
+// tabla. `activo` se comprueba una única vez, en `/entrar`. Así que
+// `npm run usuarios -- desactivar <usuario>` impide entradas FUTURAS y deja a
+// la persona desactivada trabajando con la sesión que ya tiene, hasta 30 días.
+//
+// Se aceptó a propósito. La alternativa correcta —meter el id del usuario en la
+// cookie y consultar `activo` en cada petición— vuelve `autenticarPeticion`
+// asíncrona en las doce rutas que la usan, y agrega una lectura a la base por
+// cada llamada del panel, incluidas las que hoy no tocan la base. Es más
+// trabajo y más latencia de los que esta fase necesita para un equipo de cinco
+// personas.
+//
+// El remedio existe y está documentado: para sacar a alguien de verdad hay que
+// `desactivar` Y ADEMÁS rotar `LUXE_SESION_SECRETO` en Vercel, lo que invalida
+// todas las cookies vivas de una vez. Con cinco personas, que todos vuelvan a
+// entrar una vez es trivial; y desde que la firma dejó de salir de
+// `LUXE_TALLER_CLAVE` (Crítico 1), esa rotación ya no toca a `/q7m4`. El
+// procedimiento está en README.md, y el propio script lo dice en consola al
+// desactivar — lo que NO era defendible era dejarlo sin decidir, con un script
+// que ofrece `desactivar` y quien lo corre creyendo que ya está.
 export type ResultadoAutenticacion =
   | { ok: true; vendedor: string }
   | { ok: false; status: number; error: string };
