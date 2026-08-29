@@ -153,6 +153,20 @@ function peticion(url: string, cuerpo: unknown, cabeceras: Record<string, string
   });
 }
 
+// Fase 3: la clave compartida ya no autentica — la única credencial es la
+// cookie de sesión, más el token anti-CSRF en las rutas que escriben
+// (/cerrar, /reenviar). `conSesion` cubre las de solo lectura; `conSesionYCsrf`
+// las que escriben.
+function conSesion(url: string, cuerpo: unknown, cabeceras: Record<string, string> = {}) {
+  const { cookie } = emitirSesion('Guillermo Rojas');
+  return peticion(url, cuerpo, { cookie: cookie.split(';')[0], ...cabeceras });
+}
+
+function conSesionYCsrf(url: string, cuerpo: unknown, cabeceras: Record<string, string> = {}) {
+  const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+  return peticion(url, cuerpo, { cookie: cookie.split(';')[0], 'x-csrf-token': csrf, ...cabeceras });
+}
+
 beforeEach(() => {
   process.env.LUXE_TALLER_CLAVE = 'secreta';
   process.env.RESEND_API_KEY = 'llave';
@@ -201,14 +215,14 @@ const filaListado = {
 };
 
 describe('POST /api/cotizacion/listado', () => {
-  it('rechaza sin credencial', async () => {
-    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'otra' }));
+  it('rechaza sin sesión', async () => {
+    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', {}));
     expect(res.status).toBe(401);
   });
 
   it('devuelve las filas con su estado', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.cotizaciones).toHaveLength(1);
@@ -217,19 +231,19 @@ describe('POST /api/cotizacion/listado', () => {
 
   it('filtra por estado cuando se le pasa uno', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta', estado: 'enviada' }));
+    await postListado(conSesion('http://localhost/api/cotizacion/listado', { estado: 'enviada' }));
     expect(filtrosSelect).toEqual([['eq', 'estado', 'enviada']]);
   });
 
   it('no filtra por estado cuando no se le pasa uno', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     expect(filtrosSelect).toEqual([]);
   });
 
   it('no pide (ni por lo tanto devuelve) las lineas completas: son muchos datos por fila', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     const cuerpo = await res.json();
     expect(columnasSeleccionadas[0]).not.toMatch(/\blineas\b/);
     expect(cuerpo.cotizaciones[0].lineas).toBeUndefined();
@@ -237,7 +251,7 @@ describe('POST /api/cotizacion/listado', () => {
 
   it('incluye el contact_id para poder enlazar a GoHighLevel', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     const cuerpo = await res.json();
     expect(cuerpo.cotizaciones[0].contact_id).toBe('contacto-ghl-1');
   });
@@ -249,14 +263,14 @@ describe('POST /api/cotizacion/listado', () => {
   // consulta con la frecuencia suficiente como para llevarlo.
   it('incluye el locationId de GoHighLevel, leído del servidor', async () => {
     resultadoLista = { data: [filaListado], error: null };
-    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     const cuerpo = await res.json();
     expect(cuerpo.locationId).toBe('location-de-prueba');
   });
 
   it('nunca pide más de 200 filas, aunque se pida un límite mayor', async () => {
     resultadoLista = { data: [], error: null };
-    await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta', limite: 500 }));
+    await postListado(conSesion('http://localhost/api/cotizacion/listado', { limite: 500 }));
     expect(limitesSeleccionados).toEqual([200]);
   });
 
@@ -265,7 +279,7 @@ describe('POST /api/cotizacion/listado', () => {
   // fueran las que se piden primero.
   it('pide las filas más recientes primero', async () => {
     resultadoLista = { data: [], error: null };
-    await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     expect(ordenesSeleccionados).toEqual([['created_at', false]]);
   });
 
@@ -279,7 +293,7 @@ describe('POST /api/cotizacion/listado', () => {
 
   it('errores de base dan 500 con mensaje genérico', async () => {
     resultadoLista = { data: null, error: { message: 'la base está caída' } };
-    const res = await postListado(peticion('http://localhost/api/cotizacion/listado', { clave: 'secreta' }));
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toContain('la base está caída');
@@ -287,8 +301,8 @@ describe('POST /api/cotizacion/listado', () => {
 });
 
 describe('POST /api/cotizacion/metricas', () => {
-  it('rechaza sin credencial', async () => {
-    const res = await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'otra' }));
+  it('rechaza sin sesión', async () => {
+    const res = await postMetricas(peticion('http://localhost/api/cotizacion/metricas', {}));
     expect(res.status).toBe(401);
   });
 
@@ -314,7 +328,7 @@ describe('POST /api/cotizacion/metricas', () => {
       const { calcularMetricas } = await import('@/lib/cotizador/metricas');
       const esperado = calcularMetricas(filas as never, new Date());
 
-      const res = await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
+      const res = await postMetricas(conSesion('http://localhost/api/cotizacion/metricas', {}));
       expect(res.status).toBe(200);
       const cuerpo = await res.json();
       expect(cuerpo.metricas).toEqual(JSON.parse(JSON.stringify(esperado)));
@@ -325,13 +339,13 @@ describe('POST /api/cotizacion/metricas', () => {
 
   it('no filtra por estado en la consulta: el criterio es de calcularMetricas, no de la ruta', async () => {
     resultadoLista = { data: [], error: null };
-    await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
+    await postMetricas(conSesion('http://localhost/api/cotizacion/metricas', {}));
     expect(filtrosSelect).toEqual([]);
   });
 
   it('pide un tope explícito de filas', async () => {
     resultadoLista = { data: [], error: null };
-    await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
+    await postMetricas(conSesion('http://localhost/api/cotizacion/metricas', {}));
     expect(limitesSeleccionados).toHaveLength(1);
     expect(limitesSeleccionados[0]).toBeGreaterThanOrEqual(1000);
   });
@@ -342,7 +356,7 @@ describe('POST /api/cotizacion/metricas', () => {
   // en la respuesta.
   it('ordena por created_at descendente antes de aplicar el tope', async () => {
     resultadoLista = { data: [], error: null };
-    await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
+    await postMetricas(conSesion('http://localhost/api/cotizacion/metricas', {}));
     expect(ordenesSeleccionados).toEqual([['created_at', false]]);
   });
 
@@ -356,7 +370,7 @@ describe('POST /api/cotizacion/metricas', () => {
 
   it('errores de base dan 500 con mensaje genérico', async () => {
     resultadoLista = { data: null, error: { message: 'la base está caída' } };
-    const res = await postMetricas(peticion('http://localhost/api/cotizacion/metricas', { clave: 'secreta' }));
+    const res = await postMetricas(conSesion('http://localhost/api/cotizacion/metricas', {}));
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toContain('la base está caída');
@@ -364,16 +378,16 @@ describe('POST /api/cotizacion/metricas', () => {
 });
 
 describe('POST /api/cotizacion/cerrar', () => {
-  it('rechaza sin credencial', async () => {
+  it('rechaza sin sesión', async () => {
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'otra', id: ID_VALIDO, estado: 'ganada' }),
+      peticion('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
     );
     expect(res.status).toBe(401);
   });
 
   it('marca ganada con cerrada_at, filtrando por los estados de cierre inicial', async () => {
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
     );
     expect(res.status).toBe(200);
     expect(actualizaciones).toHaveLength(1);
@@ -391,8 +405,7 @@ describe('POST /api/cotizacion/cerrar', () => {
 
   it('marca perdida guardando el motivo_cierre', async () => {
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', {
-        clave: 'secreta',
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', {
         id: ID_VALIDO,
         estado: 'perdida',
         motivo: 'Escogió a otro proveedor.',
@@ -407,7 +420,7 @@ describe('POST /api/cotizacion/cerrar', () => {
 
   it('ganada no escribe motivo_cierre', async () => {
     await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
     );
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios).not.toHaveProperty('motivo_cierre');
@@ -415,7 +428,7 @@ describe('POST /api/cotizacion/cerrar', () => {
 
   it('rechaza un estado que no sea ganada ni perdida', async () => {
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'enviada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'enviada' }),
     );
     expect(res.status).toBe(400);
     expect(actualizaciones).toHaveLength(0);
@@ -423,7 +436,7 @@ describe('POST /api/cotizacion/cerrar', () => {
 
   it('rechaza un id que no es UUID, sin llegar a tocar la base', async () => {
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: 'cot-1', estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: 'cot-1', estado: 'ganada' }),
     );
     expect(res.status).toBe(400);
     expect(actualizaciones).toHaveLength(0);
@@ -470,8 +483,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     };
 
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', {
-        clave: 'secreta',
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', {
         id: ID_VALIDO,
         estado: 'perdida',
         motivo: 'Se fue con otro proveedor.',
@@ -498,7 +510,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     };
 
     await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'perdida' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'perdida' }),
     );
 
     const cambiosCorreccion = actualizaciones[1] as Record<string, unknown>;
@@ -509,7 +521,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     resultadoActualizacionConSelect = { data: [], error: null };
     resultadoFila = { data: { estado: 'borrador' }, error: null };
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
     );
     expect(res.status).toBe(409);
     const cuerpo = await res.json();
@@ -521,7 +533,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     resultadoActualizacionConSelect = { data: [], error: null };
     resultadoFila = { data: { estado: 'convertida' }, error: null };
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
     );
     expect(res.status).toBe(409);
     const cuerpo = await res.json();
@@ -532,7 +544,7 @@ describe('POST /api/cotizacion/cerrar', () => {
     resultadoActualizacionConSelect = { data: [], error: null };
     resultadoFila = { data: null, error: null };
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_INEXISTENTE, estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_INEXISTENTE, estado: 'ganada' }),
     );
     expect(res.status).toBe(404);
   });
@@ -540,7 +552,7 @@ describe('POST /api/cotizacion/cerrar', () => {
   it('errores de base dan 500 con mensaje genérico', async () => {
     resultadoActualizacionConSelect = { data: null, error: { message: 'la base está caída' } };
     const res = await postCerrar(
-      peticion('http://localhost/api/cotizacion/cerrar', { clave: 'secreta', id: ID_VALIDO, estado: 'ganada' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
     );
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
@@ -562,16 +574,16 @@ function filaReenviable(extra: Record<string, unknown> = {}) {
 }
 
 describe('POST /api/cotizacion/reenviar', () => {
-  it('rechaza sin credencial', async () => {
+  it('rechaza sin sesión', async () => {
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'otra', id: ID_VALIDO }),
+      peticion('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(401);
   });
 
   it('rechaza un id que no es UUID, sin llegar a tocar la base', async () => {
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: 'cot-1' }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: 'cot-1' }),
     );
     expect(res.status).toBe(400);
     expect(enviarCotizacion).not.toHaveBeenCalled();
@@ -580,7 +592,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('vuelve a firmar el enlace y a mandar el correo', async () => {
     resultadoFila = { data: filaReenviable(), error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
     expect(enlaceFirmado).toHaveBeenCalledWith('2026/COT-2026-0001-cot-1.pdf', expect.anything());
@@ -602,7 +614,7 @@ describe('POST /api/cotizacion/reenviar', () => {
     // ni en "vencidas" (lib/cotizador/metricas.ts) — se queda en "sin
     // respuesta" para siempre y el vendedor nunca recibe la señal de llamar.
     resultadoFila = { data: filaReenviable({ estado: 'error' }), error: null };
-    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    await postReenviar(conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }));
     expect(actualizaciones).toHaveLength(1);
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios.resend_id).toBe('re_9');
@@ -617,14 +629,14 @@ describe('POST /api/cotizacion/reenviar', () => {
     // falsearía la vigencia (una cotización vencida de hace 40 días volvería
     // a verse "fresca").
     resultadoFila = { data: filaReenviable({ estado: 'enviada' }), error: null };
-    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    await postReenviar(conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }));
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios).not.toHaveProperty('enviado_at');
   });
 
   it('limpia correo_error al reenviar con éxito: un fallo anterior ya no describe esta fila', async () => {
     resultadoFila = { data: filaReenviable({ estado: 'error' }), error: null };
-    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    await postReenviar(conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }));
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios.correo_error).toBeNull();
   });
@@ -634,7 +646,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   // tampoco había ninguna prueba que dijera qué se esperaba.
   it('si ya estaba enviada, no vuelve a escribir el estado', async () => {
     resultadoFila = { data: filaReenviable({ estado: 'enviada' }), error: null };
-    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    await postReenviar(conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }));
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios).not.toHaveProperty('estado');
   });
@@ -645,7 +657,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('si la cotización ya está ganada, reenviar no la reabre', async () => {
     resultadoFila = { data: filaReenviable({ estado: 'ganada' }), error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
     const cambios = actualizaciones[0] as Record<string, unknown>;
@@ -654,7 +666,7 @@ describe('POST /api/cotizacion/reenviar', () => {
 
   it('si la cotización ya está perdida, reenviar no la reabre', async () => {
     resultadoFila = { data: filaReenviable({ estado: 'perdida' }), error: null };
-    await postReenviar(peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }));
+    await postReenviar(conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }));
     const cambios = actualizaciones[0] as Record<string, unknown>;
     expect(cambios).not.toHaveProperty('estado');
   });
@@ -662,7 +674,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('falla claro si la fila no tiene pdf_ruta: no hay nada que reenviar', async () => {
     resultadoFila = { data: filaReenviable({ pdf_ruta: null }), error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(400);
     const cuerpo = await res.json();
@@ -686,7 +698,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('cotización no encontrada da 404, no una excepción', async () => {
     resultadoFila = { data: null, error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_INEXISTENTE }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_INEXISTENTE }),
     );
     expect(res.status).toBe(404);
   });
@@ -699,7 +711,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('un error de base en la consulta inicial da 500, no 404', async () => {
     resultadoFila = { data: null, error: { message: 'la base está caída' } };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
@@ -711,7 +723,7 @@ describe('POST /api/cotizacion/reenviar', () => {
     resultadoFila = { data: filaReenviable(), error: null };
     vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'Resend 500: caído' });
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(502);
     const cuerpo = await res.json();
@@ -728,7 +740,7 @@ describe('POST /api/cotizacion/reenviar', () => {
     resultadoFila = { data: filaReenviable(), error: null };
     resultadoActualizacion = { error: { message: 'la base está caída' } };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
@@ -742,7 +754,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('cuando todo sale bien, la respuesta confirma que sí se actualizó', async () => {
     resultadoFila = { data: filaReenviable(), error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     const cuerpo = await res.json();
     expect(cuerpo.actualizado).toBe(true);
@@ -753,7 +765,7 @@ describe('POST /api/cotizacion/reenviar', () => {
     haceCuarentaDias.setDate(haceCuarentaDias.getDate() - 40);
     resultadoFila = { data: filaReenviable({ created_at: haceCuarentaDias.toISOString() }), error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
@@ -763,7 +775,7 @@ describe('POST /api/cotizacion/reenviar', () => {
   it('avisa vencida: false cuando el precio todavía corre', async () => {
     resultadoFila = { data: filaReenviable({ created_at: new Date().toISOString() }), error: null };
     const res = await postReenviar(
-      peticion('http://localhost/api/cotizacion/reenviar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
@@ -775,16 +787,16 @@ describe('POST /api/cotizacion/reenviar', () => {
 // a propósito (ver su describe más arriba) — esta ruta las trae, pero solo
 // para una fila puntual y despojadas de todo precio.
 describe('POST /api/cotizacion/duplicar', () => {
-  it('rechaza sin credencial', async () => {
+  it('rechaza sin sesión', async () => {
     const res = await postDuplicar(
-      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'otra', id: ID_VALIDO }),
+      peticion('http://localhost/api/cotizacion/duplicar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(401);
   });
 
   it('rechaza un id que no es UUID', async () => {
     const res = await postDuplicar(
-      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: 'cot-1' }),
+      conSesion('http://localhost/api/cotizacion/duplicar', { id: 'cot-1' }),
     );
     expect(res.status).toBe(400);
   });
@@ -809,7 +821,7 @@ describe('POST /api/cotizacion/duplicar', () => {
       error: null,
     };
     const res = await postDuplicar(
-      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesion('http://localhost/api/cotizacion/duplicar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
@@ -820,7 +832,7 @@ describe('POST /api/cotizacion/duplicar', () => {
   it('404 si la cotización no existe', async () => {
     resultadoFila = { data: null, error: null };
     const res = await postDuplicar(
-      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: ID_INEXISTENTE }),
+      conSesion('http://localhost/api/cotizacion/duplicar', { id: ID_INEXISTENTE }),
     );
     expect(res.status).toBe(404);
   });
@@ -828,7 +840,7 @@ describe('POST /api/cotizacion/duplicar', () => {
   it('errores de base dan 500 con mensaje genérico', async () => {
     resultadoFila = { data: null, error: { message: 'la base está caída' } };
     const res = await postDuplicar(
-      peticion('http://localhost/api/cotizacion/duplicar', { clave: 'secreta', id: ID_VALIDO }),
+      conSesion('http://localhost/api/cotizacion/duplicar', { id: ID_VALIDO }),
     );
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
@@ -849,19 +861,19 @@ describe('POST /api/cotizacion/duplicar', () => {
 // solo lectura dedicada, mismo patrón que /duplicar: firma el enlace de un
 // PDF que ya existe en Storage.
 describe('POST /api/cotizacion/pdf', () => {
-  it('rechaza sin credencial', async () => {
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'otra', id: ID_VALIDO }));
+  it('rechaza sin sesión', async () => {
+    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }));
     expect(res.status).toBe(401);
   });
 
   it('rechaza un id que no es UUID', async () => {
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: 'cot-1' }));
+    const res = await postPdf(conSesion('http://localhost/api/cotizacion/pdf', { id: 'cot-1' }));
     expect(res.status).toBe(400);
   });
 
   it('devuelve el enlace firmado del PDF guardado', async () => {
     resultadoFila = { data: { pdf_ruta: '2026/COT-2026-0001-cot-1.pdf' }, error: null };
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    const res = await postPdf(conSesion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.ok).toBe(true);
@@ -871,13 +883,13 @@ describe('POST /api/cotizacion/pdf', () => {
 
   it('404 si la cotización no existe', async () => {
     resultadoFila = { data: null, error: null };
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_INEXISTENTE }));
+    const res = await postPdf(conSesion('http://localhost/api/cotizacion/pdf', { id: ID_INEXISTENTE }));
     expect(res.status).toBe(404);
   });
 
   it('falla claro si la fila no tiene pdf_ruta: no hay nada que ver', async () => {
     resultadoFila = { data: { pdf_ruta: null }, error: null };
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    const res = await postPdf(conSesion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }));
     expect(res.status).toBe(400);
     const cuerpo = await res.json();
     expect(cuerpo.ok).toBe(false);
@@ -886,7 +898,7 @@ describe('POST /api/cotizacion/pdf', () => {
 
   it('errores de base dan 500 con mensaje genérico', async () => {
     resultadoFila = { data: null, error: { message: 'la base está caída' } };
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    const res = await postPdf(conSesion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }));
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toContain('la base está caída');
@@ -895,7 +907,7 @@ describe('POST /api/cotizacion/pdf', () => {
   it('500 con mensaje genérico si no se puede firmar el enlace', async () => {
     resultadoFila = { data: { pdf_ruta: '2026/COT-2026-0001-cot-1.pdf' }, error: null };
     vi.mocked(enlaceFirmado).mockResolvedValueOnce({ ok: false, error: 'bucket lleno' });
-    const res = await postPdf(peticion('http://localhost/api/cotizacion/pdf', { clave: 'secreta', id: ID_VALIDO }));
+    const res = await postPdf(conSesion('http://localhost/api/cotizacion/pdf', { id: ID_VALIDO }));
     expect(res.status).toBe(500);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toContain('bucket lleno');

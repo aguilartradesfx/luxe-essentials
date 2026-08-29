@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Tarea 4 (fase 3): el endpoint de entrada ya no acepta la clave compartida:
+// la cambia por la tabla de usuarios. Se moquea `@/lib/cotizador/usuarios`
+// para probar la ruta sin base de datos — la lógica de intentos ya tiene sus
+// propias pruebas en tests/usuarios-autenticacion.test.ts.
+vi.mock('@/lib/cotizador/usuarios', () => ({
+  autenticarUsuario: vi.fn(),
+}));
+
 // Ronda de correcciones 1 (Tarea 6): las siete pruebas de panel-sesion.test.ts
 // son unitarias sobre lib/sesion.ts — no ejercitan ni una sola ruta real. El
 // revisor probó tres mutantes sobre el código de las rutas y las 529 pruebas
@@ -64,6 +72,7 @@ const { POST: postPrevisualizar } = await import('@/app/api/cotizacion/previsual
 const { POST: postBorradores } = await import('@/app/api/cotizacion/borradores/route');
 const { POST: postEntrar } = await import('@/app/api/cotizacion/entrar/route');
 const { emitirSesion } = await import('@/lib/sesion');
+const { autenticarUsuario } = await import('@/lib/cotizador/usuarios');
 
 function peticion(url: string, cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request(url, {
@@ -119,11 +128,16 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
       expect(res.status).toBe(200);
     });
 
-    it('clave en el cuerpo SIN cookie ni CSRF sigue pasando: la clave no lo exige', async () => {
+    // Fase 3: la clave compartida ya no es una credencial. Antes esta prueba
+    // confirmaba que mandarla en el cuerpo bastaba para saltarse la cookie y
+    // el CSRF (era el respaldo documentado en autenticarPeticion). Esa vía se
+    // cerró a propósito con esta tarea: mandarla ahora no hace nada, y la
+    // petición cae en el mismo 401 que sin ningún dato de sesión.
+    it('la clave en el cuerpo ya no autentica: sin cookie, sigue dando 401', async () => {
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', { ...cotizacionValida, clave: 'secreta' }),
       );
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(401);
     });
 
     it('sin clave y sin cookie → 401', async () => {
@@ -173,15 +187,32 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
   });
 
+  // Fase 3: /entrar ya no valida una clave compartida contra `LUXE_TALLER_CLAVE`
+  // — autentica contra la tabla de usuarios (`autenticarUsuario`, moqueada
+  // arriba). Las pruebas de forma del endpoint (400/401/429/500, csrf y
+  // vendedor en la respuesta) viven en el describe de más abajo
+  // ('POST /api/cotizacion/entrar'); estas tres se conservan porque cubren
+  // algo que ese describe no repite: que un rechazo NO deja Set-Cookie, que
+  // un éxito trae SameSite=None, y que un rechazo queda en el log.
   describe('POST /api/cotizacion/entrar', () => {
-    it('con clave incorrecta → 401 y sin cabecera Set-Cookie', async () => {
-      const res = await postEntrar(peticion('http://localhost/api/cotizacion/entrar', { clave: 'otra' }));
+    beforeEach(() => {
+      vi.mocked(autenticarUsuario).mockReset();
+    });
+
+    it('con credenciales incorrectas → 401 y sin cabecera Set-Cookie', async () => {
+      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
+      const res = await postEntrar(
+        peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'otra' }),
+      );
       expect(res.status).toBe(401);
       expect(res.headers.get('set-cookie')).toBeNull();
     });
 
-    it('con clave correcta → 200, con csrf en el cuerpo y Set-Cookie con SameSite=None', async () => {
-      const res = await postEntrar(peticion('http://localhost/api/cotizacion/entrar', { clave: 'secreta' }));
+    it('con credenciales correctas → 200, con csrf en el cuerpo y Set-Cookie con SameSite=None', async () => {
+      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas' });
+      const res = await postEntrar(
+        peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'secreta' }),
+      );
       expect(res.status).toBe(200);
       const cuerpo = await res.json();
       expect(cuerpo.ok).toBe(true);
@@ -193,11 +224,92 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
       expect(setCookie).toMatch(/SameSite=None/i);
     });
 
-    it('registra en consola un intento con clave incorrecta (hace visible un ataque de fuerza bruta)', async () => {
+    it('registra en consola un rechazo de credenciales (hace visible un ataque de fuerza bruta)', async () => {
+      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await postEntrar(peticion('http://localhost/api/cotizacion/entrar', { clave: 'otra' }));
+      await postEntrar(peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'otra' }));
       expect(consoleError).toHaveBeenCalled();
       consoleError.mockRestore();
     });
+  });
+});
+
+// Tarea 4 (fase 3): `autenticarUsuario` y `postEntrar` ya están importados
+// arriba, junto con el resto de las rutas de este archivo — se reutilizan acá
+// en vez de reimportarlos con otro nombre.
+function peticionEntrada(cuerpo: unknown) {
+  return new Request('https://luxeessentialscr.com/api/cotizacion/entrar', {
+    method: 'POST',
+    body: JSON.stringify(cuerpo),
+  });
+}
+
+describe('POST /api/cotizacion/entrar', () => {
+  beforeEach(() => {
+    vi.mocked(autenticarUsuario).mockReset();
+    process.env.LUXE_TALLER_CLAVE = 'secreto-de-firma';
+  });
+
+  it('emite una sesión con el nombre del vendedor', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas' });
+    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.vendedor).toBe('Guillermo Rojas');
+    expect(typeof cuerpo.csrf).toBe('string');
+    expect(res.headers.get('set-cookie')).toContain('luxe_sesion=');
+  });
+
+  it('rechaza credenciales incorrectas con 401', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
+    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'mala' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('distingue una cuenta bloqueada, con 429 y un mensaje propio', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'bloqueado' });
+    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toMatch(/bloquead/i);
+  });
+
+  // La clave compartida era la credencial de entrada hasta esta fase. Que siga
+  // sirviendo dejaría abierto exactamente el hueco que la fase cierra.
+  it('ya no acepta la clave compartida', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
+    const res = await postEntrar(peticionEntrada({ clave: 'secreto-de-firma' }));
+    expect(res.status).toBe(400);
+    expect(vi.mocked(autenticarUsuario)).not.toHaveBeenCalled();
+  });
+
+  it('rechaza un cuerpo sin usuario con 400', async () => {
+    const res = await postEntrar(peticionEntrada({ usuario: '', clave: 'x' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('devuelve 500, no 401, si la base falla', async () => {
+    vi.mocked(autenticarUsuario).mockRejectedValue(new Error('conexión caída'));
+    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    expect(res.status).toBe(500);
+  });
+});
+
+describe('autenticarPeticion', () => {
+  it('devuelve el vendedor de la sesión', async () => {
+    const { emitirSesion } = await import('@/lib/sesion');
+    const { autenticarPeticion } = await import('@/lib/autenticacion-cotizador');
+    const { cookie } = emitirSesion('Guillermo Rojas');
+    const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado', {
+      headers: { cookie: cookie.split(';')[0] },
+    });
+    const r = autenticarPeticion(req, {}, { requiereCsrf: false });
+    expect(r).toEqual({ ok: true, vendedor: 'Guillermo Rojas' });
+  });
+
+  it('ya no acepta la clave compartida en el cuerpo', async () => {
+    const { autenticarPeticion } = await import('@/lib/autenticacion-cotizador');
+    const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado');
+    const r = autenticarPeticion(req, { clave: 'secreto-de-firma' }, { requiereCsrf: false });
+    expect(r.ok).toBe(false);
   });
 });

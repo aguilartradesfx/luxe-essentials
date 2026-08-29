@@ -66,16 +66,24 @@ const { agregarNota } = await import('@/lib/agente/acciones');
 const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
 const { guardarPdf, enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
+const { emitirSesion } = await import('@/lib/sesion');
 
-function peticion(cuerpo: unknown) {
+function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/api/cotizacion', {
     method: 'POST',
+    headers: cabeceras,
     body: JSON.stringify(cuerpo),
   });
 }
 
+// Fase 3: la clave compartida ya no autentica. Esta ruta escribe: exige
+// cookie de sesión Y el token anti-CSRF derivado de ella.
+function peticionAutenticada(cuerpo: unknown) {
+  const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+  return peticion(cuerpo, { cookie: cookie.split(';')[0], 'x-csrf-token': csrf });
+}
+
 const valido = {
-  clave: 'secreta',
   cliente: { nombre: 'Ana Pérez', empresa: 'Hotel Papagayo', email: 'ana@hotel.com' },
   lineas: [{ skuId: 'set-600-king', cantidad: 16 }],
 };
@@ -114,20 +122,18 @@ describe('POST /api/cotizacion', () => {
     vi.mocked(agregarNota).mockResolvedValue(undefined);
   });
 
-  it('rechaza sin clave', async () => {
-    const res = await POST(peticion({ ...valido, clave: 'otra' }));
+  it('rechaza sin sesión', async () => {
+    const res = await POST(peticion(valido));
     expect(res.status).toBe(401);
   });
 
-  it('rechaza con clave incorrecta antes de mirar la forma del cuerpo (401, no 400)', async () => {
+  it('rechaza sin sesión antes de mirar la forma del cuerpo (401, no 400)', async () => {
     // El cuerpo está estructuralmente roto (lineas no es un arreglo, cliente
     // no es un objeto): si el endpoint validara el esquema antes que la
-    // clave, esto daría 400 y filtraría por qué campo falló. Debe dar 401
+    // sesión, esto daría 400 y filtraría por qué campo falló. Debe dar 401
     // sin que Zod llegue a mirarlo. Esto es la red de la corrección de orden
-    // clave-antes-que-esquema: si un refactor la deshace, esta prueba lo nota.
-    const res = await POST(
-      peticion({ clave: 'otra', cliente: 'no soy un objeto', lineas: 'tampoco un arreglo' }),
-    );
+    // sesión-antes-que-esquema: si un refactor la deshace, esta prueba lo nota.
+    const res = await POST(peticion({ cliente: 'no soy un objeto', lineas: 'tampoco un arreglo' }));
     expect(res.status).toBe(401);
   });
 
@@ -139,12 +145,12 @@ describe('POST /api/cotizacion', () => {
   });
 
   it('rechaza un correo inválido', async () => {
-    const res = await POST(peticion({ ...valido, cliente: { ...valido.cliente, email: 'roto' } }));
+    const res = await POST(peticionAutenticada({ ...valido, cliente: { ...valido.cliente, email: 'roto' } }));
     expect(res.status).toBe(400);
   });
 
   it('rechaza una cotización sin líneas', async () => {
-    const res = await POST(peticion({ ...valido, lineas: [] }));
+    const res = await POST(peticionAutenticada({ ...valido, lineas: [] }));
     expect(res.status).toBe(400);
   });
 
@@ -152,7 +158,7 @@ describe('POST /api/cotizacion', () => {
     // Ronda 2: los mensajes de las reglas (min/max) ya estaban en español,
     // pero los de tipo (invalid_type) seguían en el inglés por defecto de
     // Zod. Un vendedor autenticado con un front roto vería ese inglés.
-    const res = await POST(peticion({ ...valido, cliente: 'no soy un objeto' }));
+    const res = await POST(peticionAutenticada({ ...valido, cliente: 'no soy un objeto' }));
     expect(res.status).toBe(400);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toMatch(/invalid input|expected/i);
@@ -160,7 +166,7 @@ describe('POST /api/cotizacion', () => {
   });
 
   it('avisa en español si "lineas" no es un arreglo', async () => {
-    const res = await POST(peticion({ ...valido, lineas: 'tampoco un arreglo' }));
+    const res = await POST(peticionAutenticada({ ...valido, lineas: 'tampoco un arreglo' }));
     expect(res.status).toBe(400);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toMatch(/invalid input|expected/i);
@@ -168,7 +174,7 @@ describe('POST /api/cotizacion', () => {
   });
 
   it('avisa en español si "bordadoEspecial" no es booleano', async () => {
-    const res = await POST(peticion({ ...valido, bordadoEspecial: 'si' }));
+    const res = await POST(peticionAutenticada({ ...valido, bordadoEspecial: 'si' }));
     expect(res.status).toBe(400);
     const cuerpo = await res.json();
     expect(cuerpo.error).not.toMatch(/invalid input|expected/i);
@@ -176,12 +182,12 @@ describe('POST /api/cotizacion', () => {
   });
 
   it('rechaza un sku que no existe', async () => {
-    const res = await POST(peticion({ ...valido, lineas: [{ skuId: 'fantasma', cantidad: 1 }] }));
+    const res = await POST(peticionAutenticada({ ...valido, lineas: [{ skuId: 'fantasma', cantidad: 1 }] }));
     expect(res.status).toBe(400);
   });
 
   it('devuelve el cálculo y guarda la fila', async () => {
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.ok).toBe(true);
@@ -208,7 +214,7 @@ describe('POST /api/cotizacion', () => {
         },
       ],
     };
-    const res = await POST(peticion(conBasura));
+    const res = await POST(peticionAutenticada(conBasura));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
 
@@ -248,13 +254,13 @@ describe('POST /api/cotizacion', () => {
   // (lib/cotizador/metricas.ts, ESTADOS_REALES), `porOrigen.agente` daba cero
   // siempre — la métrica de "Origen" mentía.
   it('guarda origen "agente" cuando el envío trae borradorId', async () => {
-    await POST(peticion({ ...valido, borradorId: 'borrador-20' }));
+    await POST(peticionAutenticada({ ...valido, borradorId: 'borrador-20' }));
     const fila = insertado[insertado.length - 1] as Record<string, unknown>;
     expect(fila.origen).toBe('agente');
   });
 
   it('guarda origen "humano" cuando el envío no trae borradorId', async () => {
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     const fila = insertado[insertado.length - 1] as Record<string, unknown>;
     expect(fila.origen).toBe('humano');
   });
@@ -265,19 +271,19 @@ describe('POST /api/cotizacion', () => {
     // jsonb y luego en el Estimate. Este es el guardarraíl de cordura, no una
     // regla de negocio.
     const res = await POST(
-      peticion({ ...valido, lineas: [{ skuId: 'set-600-king', cantidad: 1e15 }] }),
+      peticionAutenticada({ ...valido, lineas: [{ skuId: 'set-600-king', cantidad: 1e15 }] }),
     );
     expect(res.status).toBe(400);
   });
 
   it('acepta una tasa de IVA distinta', async () => {
-    const res = await POST(peticion({ ...valido, tasaIva: 0.01 }));
+    const res = await POST(peticionAutenticada({ ...valido, tasaIva: 0.01 }));
     const cuerpo = await res.json();
     expect(cuerpo.cotizacion.tasaIva).toBe(0.01);
   });
 
   it('devuelve el id del estimate de GoHighLevel', async () => {
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
     expect(cuerpo.ghl.estimateId).toBe('est-1');
   });
@@ -289,7 +295,7 @@ describe('POST /api/cotizacion', () => {
     // sigue sin llamar al envío de GoHighLevel, pero ahora existe un envío
     // real (correo con el PDF de Luxe adjunto, vía `enviarCotizacion`).
     // 'enviada' describe eso: la cotización de verdad salió hacia el cliente.
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     expect(actualizados).toHaveLength(1);
     expect(actualizados[0]).toMatchObject({
       estado: 'enviada',
@@ -306,7 +312,7 @@ describe('POST /api/cotizacion', () => {
     // defecto en este archivo), así que un fallo de GoHighLevel debe quedar
     // registrado en `ghl_error` sin bajar el estado.
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
 
     expect(cuerpo.ghl.error).toContain('boom');
@@ -325,7 +331,7 @@ describe('POST /api/cotizacion', () => {
     const { enviarCotizacion } = await import('@/lib/cotizador/correo');
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
     vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
 
     expect(cuerpo.ghl.error).toContain('boom');
@@ -345,7 +351,7 @@ describe('POST /api/cotizacion', () => {
       error: 'GHL estimate 500: boom',
       contactId: 'nuevo-antes-de-fallar',
     });
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     // El correo sigue en éxito por defecto: el contactId se guarda pase lo
     // que pase con GoHighLevel, y el estado no baja por su fallo.
     expect(actualizados[0]).toMatchObject({ estado: 'enviada', contact_id: 'nuevo-antes-de-fallar' });
@@ -362,7 +368,7 @@ describe('POST /api/cotizacion', () => {
       contactId: 'contacto-x',
       opportunityError: 'GHL oportunidad 422: property pipelineStageName should not exist',
     });
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
 
     expect(cuerpo.ghl.estimateId).toBe('est-2');
@@ -378,7 +384,7 @@ describe('POST /api/cotizacion', () => {
     // El dato ya está en la mano en el momento del insert: no debería
     // perderse si `crearEstimate` no lo repite en su resultado.
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: true, estimateId: 'est-3' } as never);
-    await POST(peticion({ ...valido, contactId: 'contacto-del-vendedor' }));
+    await POST(peticionAutenticada({ ...valido, contactId: 'contacto-del-vendedor' }));
     expect(actualizados[0]).toMatchObject({ contact_id: 'contacto-del-vendedor' });
   });
 
@@ -389,7 +395,7 @@ describe('POST /api/cotizacion', () => {
     // en silencio.
     errorAlActualizar = { message: 'conexión perdida' };
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.ghl.estimateId).toBe('est-1');
@@ -408,7 +414,7 @@ describe('POST /api/cotizacion', () => {
     // (lib/cotizador/borrador.ts) no vuelve a registrar una intención de ese
     // contacto jamás, porque esa función corta si ya hay un 'borrador'
     // abierto suyo.
-    await POST(peticion({ ...valido, borradorId: 'borrador-9' }));
+    await POST(peticionAutenticada({ ...valido, borradorId: 'borrador-9' }));
     expect(actualizados).toHaveLength(2);
     expect(actualizados[0]).toMatchObject({ estado: 'convertida' });
   });
@@ -417,13 +423,13 @@ describe('POST /api/cotizacion', () => {
     // Mata el mutante "cerrar el borrador siempre, tenga o no borradorId":
     // sin `borradorId` en el cuerpo, solo debe correr el update final de
     // GoHighLevel — nunca un segundo update de cierre.
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     expect(actualizados).toHaveLength(1);
   });
 
   it('cierra el borrador aunque crearEstimate falle después (el cierre no depende de GoHighLevel)', async () => {
     vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
-    await POST(peticion({ ...valido, borradorId: 'borrador-10' }));
+    await POST(peticionAutenticada({ ...valido, borradorId: 'borrador-10' }));
     expect(actualizados).toHaveLength(2);
     expect(actualizados[0]).toMatchObject({ estado: 'convertida' });
     // El correo sigue en éxito por defecto: el fallo de GoHighLevel queda
@@ -435,7 +441,7 @@ describe('POST /api/cotizacion', () => {
   it('registra en consola si falla el cierre del borrador, sin tumbar la respuesta', async () => {
     errorAlActualizar = { message: 'fila bloqueada' };
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await POST(peticion({ ...valido, borradorId: 'borrador-11' }));
+    const res = await POST(peticionAutenticada({ ...valido, borradorId: 'borrador-11' }));
     expect(res.status).toBe(200);
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining('No se pudo cerrar el borrador'),
@@ -447,14 +453,14 @@ describe('POST /api/cotizacion', () => {
   // --- Tarea 5: el PDF, el guardado y el correo ---
 
   it('genera el PDF, lo guarda y manda el correo', async () => {
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
     expect(cuerpo.pdf.ruta).toBe('2026/COT-1-abc.pdf');
     expect(cuerpo.correo.resendId).toBe('re_1');
   });
 
   it('guarda la ruta del PDF y el id de Resend en la fila', async () => {
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
     expect(actualizado.pdf_ruta).toBe('2026/COT-1-abc.pdf');
     expect(actualizado.resend_id).toBe('re_1');
@@ -464,7 +470,7 @@ describe('POST /api/cotizacion', () => {
   it('si el correo falla, la cotización queda en error y es recuperable', async () => {
     const { enviarCotizacion } = await import('@/lib/cotizador/correo');
     vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
     expect(cuerpo.correo.error).toContain('dominio');
     const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
@@ -478,13 +484,13 @@ describe('POST /api/cotizacion', () => {
   it('guarda el error del correo en correo_error cuando el envío falla', async () => {
     const { enviarCotizacion } = await import('@/lib/cotizador/correo');
     vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
     expect(actualizado.correo_error).toBe('dominio no verificado');
   });
 
   it('no guarda correo_error cuando el envío sale bien', async () => {
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     const actualizado = actualizados[actualizados.length - 1] as Record<string, unknown>;
     expect(actualizado.correo_error).toBeNull();
   });
@@ -493,7 +499,7 @@ describe('POST /api/cotizacion', () => {
     const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
     const { enviarCotizacion } = await import('@/lib/cotizador/correo');
     vi.mocked(renderizarCotizacion).mockRejectedValueOnce(new Error('sin fuentes'));
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     expect((await res.json()).ok).toBe(true);
     expect(enviarCotizacion).not.toHaveBeenCalled();
   });
@@ -501,7 +507,7 @@ describe('POST /api/cotizacion', () => {
   it('si el PDF falla, la respuesta no trae ruta de PDF y el correo queda registrado como error, sin tumbar el endpoint', async () => {
     const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
     vi.mocked(renderizarCotizacion).mockRejectedValueOnce(new Error('sin fuentes'));
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.pdf).toBeNull();
@@ -517,7 +523,7 @@ describe('POST /api/cotizacion', () => {
     // mutante que derive el número del id (`` `COT-2026-${data.id}` `` →
     // 'COT-2026-cot-1') no pueda esconderse detrás de una coincidencia. Esta
     // es exactamente la regla que el brief dedica un párrafo a prohibir.
-    await POST(peticion(valido));
+    await POST(peticionAutenticada(valido));
     expect(vi.mocked(renderizarCotizacion).mock.calls[0][0]).toMatchObject({ numero: 'COT-2026-0001' });
     expect(vi.mocked(guardarPdf).mock.calls[0][0]).toMatchObject({ numero: 'COT-2026-0001' });
     expect(vi.mocked(enviarCotizacion).mock.calls[0][0]).toMatchObject({ numero: 'COT-2026-0001' });
@@ -531,7 +537,7 @@ describe('POST /api/cotizacion', () => {
     // Luxe — el enlace firmado del correo apuntaría a un archivo que no
     // existe.
     vi.mocked(guardarPdf).mockResolvedValueOnce({ ok: false, error: 'bucket lleno' });
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     const cuerpo = await res.json();
     expect(cuerpo.pdf).toBeNull();
     expect(cuerpo.correo.error).toContain('bucket lleno');
@@ -545,7 +551,7 @@ describe('POST /api/cotizacion', () => {
     // El esquema los acepta como opcionales (Tarea 5): la fila guarda
     // exactamente el `cliente` validado, sin recortar estos dos campos.
     const res = await POST(
-      peticion({
+      peticionAutenticada({
         ...valido,
         cliente: { ...valido.cliente, telefono: '+506 8888-8888', direccion: 'Frente al parque, Liberia' },
       }),
@@ -568,7 +574,7 @@ describe('POST /api/cotizacion', () => {
   // el texto que se verifica es el que de verdad calcularía el endpoint.
 
   it('llama a agregarNota con el contacto y el texto real de la cotización cuando el correo sale', async () => {
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     expect(res.status).toBe(200);
 
     expect(agregarNota).toHaveBeenCalledTimes(1);
@@ -585,7 +591,7 @@ describe('POST /api/cotizacion', () => {
 
   it('no llama a agregarNota cuando el correo falla (no hay nada que trazar todavía)', async () => {
     vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
-    const res = await POST(peticion(valido));
+    const res = await POST(peticionAutenticada(valido));
     expect(res.status).toBe(200);
     expect(agregarNota).not.toHaveBeenCalled();
   });

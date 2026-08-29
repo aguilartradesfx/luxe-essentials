@@ -1,16 +1,20 @@
 import { NextResponse } from 'next/server';
-import { claveValida } from '@/lib/autenticacion-cotizador';
+import { z } from 'zod';
+import { autenticarUsuario } from '@/lib/cotizador/usuarios';
 import { emitirSesion } from '@/lib/sesion';
+import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 
-// Único punto de entrada del panel embebido: la pantalla dentro del iframe de
-// GoHighLevel pide la clave una vez acá, cambia esa clave por una cookie de
-// sesión (Tarea 6) y ya no vuelve a pedirla en cada carga. Las demás rutas de
-// este directorio siguen aceptando la clave en el cuerpo tal cual — esto no
-// la reemplaza, es una segunda forma de autenticarse. A diferencia de esas
-// rutas, esta no acepta una sesión ya abierta: es precisamente donde una se
-// consigue.
+// Único punto de entrada del panel embebido. Hasta la fase 2 cambiaba una clave
+// compartida por una cookie; ahora cambia la credencial de una persona. La
+// clave compartida (`LUXE_TALLER_CLAVE`) sigue existiendo, pero sólo como
+// secreto de firma de esa cookie y como clave de `/q7m4`: ya no abre el panel.
+const Entrada = z.object({
+  usuario: z.string().trim().min(1, 'Falta el usuario.').max(64),
+  clave: z.string().min(1, 'Falta la clave.').max(200),
+});
+
 export async function POST(request: Request) {
   let crudo: unknown;
   try {
@@ -19,29 +23,60 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  const claveRecibida =
-    typeof crudo === 'object' && crudo !== null && 'clave' in crudo
-      ? (crudo as { clave?: unknown }).clave
-      : undefined;
-  if (!claveValida(claveRecibida)) {
-    // Ronda de correcciones 1: no hay límite de intentos acá —eso necesita
-    // almacenamiento compartido entre invocaciones y es otro subsistema—,
-    // pero sin este registro un intento de fuerza bruta contra este endpoint
-    // es completamente invisible. Sin datos sensibles: ni la clave recibida
-    // ni la esperada quedan en el log, solo la señal de que alguien golpeó
-    // la puerta sin la llave correcta.
-    console.error(
-      '[cotizador] Intento de acceso a /api/cotizacion/entrar con clave incorrecta.',
-      request.headers.get('x-forwarded-for') ?? 'ip desconocida',
+  const parseado = Entrada.safeParse(crudo);
+  if (!parseado.success) {
+    return NextResponse.json(
+      { ok: false, error: 'Escribí tu usuario y tu clave.' },
+      { status: 400 },
     );
-    return NextResponse.json({ ok: false, error: 'Clave incorrecta.' }, { status: 401 });
   }
 
-  // TODO(Tarea siguiente): esta ruta se reescribe para usar el nombre real
-  // del usuario autenticado (ver lib/cotizador/usuarios.ts). Por ahora un
-  // valor fijo mantiene la firma nueva de emitirSesion() compilando.
-  const { cookie, csrf } = emitirSesion('Guillermo Rojas');
-  const respuesta = NextResponse.json({ ok: true, csrf });
+  let resultado;
+  try {
+    resultado = await autenticarUsuario(
+      parseado.data.usuario,
+      parseado.data.clave,
+      supabaseAdmin(),
+    );
+  } catch (err) {
+    // Un fallo de base es un 500, no un 401: decirle "clave incorrecta" a un
+    // vendedor cuya credencial es correcta lo manda a buscar el problema donde
+    // no está, y esconde una caída real.
+    console.error(
+      '[cotizador] No se pudo autenticar contra la tabla de usuarios.',
+      err instanceof Error ? err.message : String(err),
+    );
+    return NextResponse.json(
+      { ok: false, error: 'No pudimos verificar tu acceso. Intentá de nuevo en un momento.' },
+      { status: 500 },
+    );
+  }
+
+  if (!resultado.ok) {
+    console.error(
+      '[cotizador] Entrada rechazada al panel.',
+      'usuario:', parseado.data.usuario,
+      'motivo:', resultado.motivo,
+      request.headers.get('x-forwarded-for') ?? 'ip desconocida',
+    );
+    // El bloqueo se dice tal cual. Confirma que la cuenta existe, sí — pero el
+    // nombre de usuario de un equipo de cinco personas no es el secreto, la
+    // clave lo es; y un vendedor bloqueado que no puede distinguirlo de "clave
+    // mala" seguiría probando hasta rendirse.
+    if (resultado.motivo === 'bloqueado') {
+      return NextResponse.json(
+        { ok: false, error: 'Cuenta bloqueada por intentos fallidos. Probá en 15 minutos.' },
+        { status: 429 },
+      );
+    }
+    return NextResponse.json(
+      { ok: false, error: 'Usuario o clave incorrectos.' },
+      { status: 401 },
+    );
+  }
+
+  const { cookie, csrf } = emitirSesion(resultado.nombre);
+  const respuesta = NextResponse.json({ ok: true, csrf, vendedor: resultado.nombre });
   respuesta.headers.set('Set-Cookie', cookie);
   return respuesta;
 }

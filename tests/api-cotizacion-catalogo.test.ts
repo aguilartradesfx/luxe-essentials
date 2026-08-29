@@ -11,17 +11,27 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   });
 }
 
+// Fase 3: la clave compartida ya no autentica. Ruta de solo lectura: la
+// cookie de sesión basta, sin token anti-CSRF.
+function peticionAutenticada(cuerpo: unknown) {
+  const { cookie } = emitirSesion('Guillermo Rojas');
+  return peticion(cuerpo, { cookie: cookie.split(';')[0] });
+}
+
 describe('POST /api/cotizacion/catalogo', () => {
   beforeEach(() => {
     process.env.LUXE_TALLER_CLAVE = 'secreta';
   });
 
-  it('rechaza sin clave', async () => {
+  it('rechaza sin sesión', async () => {
     const res = await POST(peticion({}));
     expect(res.status).toBe(401);
   });
 
-  it('rechaza con clave incorrecta', async () => {
+  // Fase 3: la clave compartida ya no es una credencial — mandar cualquier
+  // valor en `clave` (correcto o no, del formato anterior) no cambia nada:
+  // sin cookie sigue dando 401.
+  it('rechaza una clave en el cuerpo, sin sesión', async () => {
     const res = await POST(peticion({ clave: 'otra' }));
     expect(res.status).toBe(401);
   });
@@ -33,7 +43,7 @@ describe('POST /api/cotizacion/catalogo', () => {
     expect(res.status).toBe(400);
   });
 
-  it('con la clave correcta, ningún SKU trae precio ni grupo de descuento', async () => {
+  it('con sesión válida, ningún SKU trae precio ni grupo de descuento', async () => {
     // Este es el hallazgo que motivó la Tarea 8: `CATALOGO` completo lleva
     // `precioLista` y `grupo` (la estructura de márgenes por volumen), y este
     // endpoint es el único punto donde ese catálogo toca una respuesta HTTP.
@@ -41,7 +51,7 @@ describe('POST /api/cotizacion/catalogo', () => {
     // no sobre un ejemplo — así, si alguien cambia el `.map` para devolver
     // el SKU entero (o agrega `precioLista` de vuelta a la proyección), esta
     // prueba se pone roja sin importar qué SKU sea el primero.
-    const res = await POST(peticion({ clave: 'secreta' }));
+    const res = await POST(peticionAutenticada({}));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.ok).toBe(true);
@@ -62,7 +72,7 @@ describe('POST /api/cotizacion/catalogo', () => {
 
   it('devuelve el mismo número de SKUs que el catálogo real', async () => {
     const { CATALOGO } = await import('@/lib/cotizador/catalogo');
-    const res = await POST(peticion({ clave: 'secreta' }));
+    const res = await POST(peticionAutenticada({}));
     const cuerpo = await res.json();
     expect(cuerpo.skus).toHaveLength(CATALOGO.length);
   });
@@ -89,20 +99,25 @@ describe('POST /api/cotizacion/catalogo', () => {
       expect(cuerpo.csrf).toBe(csrf);
     });
 
-    it('con clave correcta y sin cookie, la respuesta NO trae csrf (no hay sesión de la que derivarlo)', async () => {
+    // Fase 3 (hallazgo de esta tarea): esta prueba comprobaba que autenticar
+    // por clave, sin cookie, daba 200 pero sin csrf (no hay sesión de la que
+    // derivarlo). Esa vía ya no existe — la clave dejó de ser una credencial,
+    // así que el mismo cuerpo ahora da 401, no 200. No hay forma de conservar
+    // el escenario original (200 sin csrf) sin una sesión: se reemplaza por
+    // la prueba que sí describe el comportamiento actual.
+    it('sin cookie, una clave en el cuerpo ya no autentica: 401 y sin csrf', async () => {
       const res = await POST(peticion({ clave: 'secreta' }));
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(401);
       const cuerpo = await res.json();
       expect('csrf' in cuerpo).toBe(false);
     });
 
-    it('con clave correcta Y cookie válida, la respuesta también trae el csrf (depende de la cookie, no de cómo se autenticó)', async () => {
+    it('una clave en el cuerpo no interfiere con la cookie: sigue trayendo el csrf que le corresponde', async () => {
       // Ronda de correcciones 2 (hallazgo menor): `csrfDeSesion` no mira
       // `autenticarPeticion` ni cómo pasó la petición — solo si la cookie
-      // presentada es válida. Mandar además una clave correcta no cambia
-      // eso. Sin impacto de seguridad (quien ya tiene la cookie válida no
-      // gana ninguna capacidad nueva), pero el reporte de la ronda anterior
-      // decía "nunca por la vía de la clave", que esta prueba desmiente.
+      // presentada es válida. Mandar además una clave (aunque ya no
+      // autentique nada) no cambia eso: un campo de sobra en el cuerpo no
+      // debe tumbar una sesión por cookie que sí es válida.
       const { cookie, csrf } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({ clave: 'secreta' }, { cookie: valor }));
