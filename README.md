@@ -82,7 +82,7 @@ un iframe de GoHighLevel. Cada vendedor entra con **su propia cuenta**: usuario 
 persona, guardadas cifradas en `public.usuarios_panel`, y cada cotización queda firmada con su
 nombre. Ya no hay una clave compartida.
 
-**Orden de puesta en marcha.** Los tres pasos, en este orden, antes de que alguien intente
+**Orden de puesta en marcha.** Los cuatro pasos, en este orden, antes de que alguien intente
 entrar:
 
 ```bash
