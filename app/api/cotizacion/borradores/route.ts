@@ -4,9 +4,10 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 
-// Es POST —no GET— porque la clave puede viajar en el cuerpo: una clave en
-// la barra de direcciones queda en el historial del navegador y en los
-// registros del servidor.
+// Es POST —no GET— por consistencia con el resto de app/api/cotizacion/*, que
+// nació así cuando la credencial viajaba en el cuerpo. Desde la fase 3 la
+// credencial es la cookie y no hay nada secreto en este cuerpo, pero cambiar
+// el método ahora sería tocar la pantalla sin ganar nada.
 export async function POST(request: Request) {
   let cuerpo: unknown;
   try {

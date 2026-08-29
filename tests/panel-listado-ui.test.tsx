@@ -190,6 +190,22 @@ describe('VistaListado', () => {
     expect(within(fila).getByText('—')).toBeInTheDocument();
   });
 
+  // Revisión final, T6: la celda usaba `??`, que sólo cubre `null` y
+  // `undefined`. Una cadena vacía —el día que alguien rellene las filas viejas
+  // con `''` en vez de `null`— se pintaba en blanco en vez de guion, y una
+  // celda vacía en esa columna se lee como "no hay dato" cuando en realidad es
+  // "el dato es basura". `||` cubre las tres.
+  it('una fila con el vendedor en cadena vacía también muestra el guion', async () => {
+    mockFetch({ filas: [{ ...FILA_ABIERTA, vendedor: '' }] });
+    renderVista();
+
+    await waitFor(() => {
+      expect(screen.getByText(/ana pérez/i)).toBeInTheDocument();
+    });
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    expect(within(fila).getByText('—')).toBeInTheDocument();
+  });
+
   it('muestra cuáles vencen pronto, de forma visible', async () => {
     mockFetch();
     renderVista();

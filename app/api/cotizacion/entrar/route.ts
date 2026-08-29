@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { autenticarUsuario } from '@/lib/cotizador/usuarios';
 import { emitirSesion } from '@/lib/sesion';
@@ -7,9 +8,10 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 export const runtime = 'nodejs';
 
 // Único punto de entrada del panel embebido. Hasta la fase 2 cambiaba una clave
-// compartida por una cookie; ahora cambia la credencial de una persona. La
-// clave compartida (`LUXE_TALLER_CLAVE`) sigue existiendo, pero sólo como
-// secreto de firma de esa cookie y como clave de `/q7m4`: ya no abre el panel.
+// compartida por una cookie; ahora cambia la credencial de una persona.
+// `LUXE_TALLER_CLAVE` sigue existiendo, pero sólo como clave de `/q7m4`: ya no
+// abre el panel ni firma nada (revisión final, Crítico 1 — la cookie se firma
+// con `LUXE_SESION_SECRETO`).
 const Entrada = z.object({
   usuario: z.string().trim().min(1, 'Falta el usuario.').max(64),
   clave: z.string().min(1, 'Falta la clave.').max(200),
@@ -53,15 +55,20 @@ export async function POST(request: Request) {
   }
 
   if (!resultado.ok) {
-    // El usuario NO se registra completo: el modo de fallo más común de un
-    // formulario de acceso es que la persona escriba la clave en el campo de
-    // usuario por error. Si eso pasa acá, la clave real de un vendedor
-    // quedaría en texto plano en los logs de Vercel, retenida y buscable.
-    // Los primeros 3 caracteres alcanzan para distinguir intentos contra
-    // cuentas distintas sin exponer una credencial completa.
+    // El usuario NO se registra, ni entero ni truncado: el modo de fallo más
+    // común de un formulario de acceso es que la persona escriba la clave en
+    // el campo de usuario por error, y en ese caso hasta un prefijo de tres
+    // caracteres deja pedazos de una clave real en los logs de Vercel,
+    // retenidos y buscables (revisión final, M5).
+    //
+    // Lo único que esta línea necesita es poder distinguir intentos contra
+    // cuentas distintas —"¿son cien intentos contra una cuenta o uno contra
+    // cien?"— y para eso un hash corto hace exactamente el mismo trabajo con
+    // fuga cero. No es un secreto que haya que proteger contra fuerza bruta:
+    // es una etiqueta estable para agrupar líneas de log.
     console.error(
       '[cotizador] Entrada rechazada al panel.',
-      'usuario (primeros 3 caracteres):', parseado.data.usuario.slice(0, 3),
+      'usuario (hash):', createHash('sha256').update(parseado.data.usuario).digest('hex').slice(0, 8),
       'motivo:', resultado.motivo,
       request.headers.get('x-forwarded-for') ?? 'ip desconocida',
     );
@@ -81,8 +88,25 @@ export async function POST(request: Request) {
     );
   }
 
-  const { cookie, csrf } = emitirSesion(resultado.nombre);
-  const respuesta = NextResponse.json({ ok: true, csrf, vendedor: resultado.nombre });
-  respuesta.headers.set('Set-Cookie', cookie);
-  return respuesta;
+  // Revisión final, M7: esto estaba fuera de todo `try`. `emitirSesion` lanza
+  // si `LUXE_SESION_SECRETO` falta —el caso exacto de un despliegue nuevo al
+  // que se le olvidó la variable— y sin este bloque Next devolvía un 500
+  // genérico, sin una sola línea que dijera por qué. El síntoma sería
+  // "entramos bien y no pasa nada", con la causa a la vista sólo para quien
+  // fuera a leer el código.
+  try {
+    const { cookie, csrf } = emitirSesion(resultado.nombre);
+    const respuesta = NextResponse.json({ ok: true, csrf, vendedor: resultado.nombre });
+    respuesta.headers.set('Set-Cookie', cookie);
+    return respuesta;
+  } catch (err) {
+    console.error(
+      '[cotizador] No se pudo emitir la sesión del panel. ¿Falta LUXE_SESION_SECRETO?',
+      err instanceof Error ? err.message : String(err),
+    );
+    return NextResponse.json(
+      { ok: false, error: 'No pudimos abrir tu sesión. Avisale a quien administra el sitio.' },
+      { status: 500 },
+    );
+  }
 }

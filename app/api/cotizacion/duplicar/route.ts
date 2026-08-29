@@ -17,7 +17,6 @@ export const runtime = 'nodejs';
 // vía `/api/cotizacion/previsualizar` — igual que si el vendedor hubiera
 // tecleado los SKUs a mano.
 const duplicarSchema = z.object({
-  clave: z.string().optional(),
   // Mismo motivo que en /cerrar y /reenviar: un id sin forma de UUID
   // revienta en Postgres como 500 en vez de 400.
   id: z.uuid('El id de la cotización no es válido.'),

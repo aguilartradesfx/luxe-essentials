@@ -5,9 +5,14 @@
 
 create table if not exists public.usuarios_panel (
   id              uuid primary key default gen_random_uuid(),
-  -- Con lo que entra. En minúsculas y sin espacios: lo normaliza la aplicación
-  -- antes de escribir, y el índice único de abajo lo hace valer aunque alguien
-  -- inserte a mano.
+  -- Con lo que entra. La aplicación lo normaliza antes de escribir y antes de
+  -- consultar: `.trim().toLowerCase()`, o sea minúsculas y sin espacios EN LOS
+  -- EXTREMOS. Los espacios internos NO se prohíben: `alta` acepta
+  -- "guiller mo", y ese usuario entra escribiendo el espacio, porque las dos
+  -- puntas normalizan igual. Es feo, no está roto — se deja dicho acá en vez
+  -- de prometer una regla que el código no cumple (revisión final, M6). El
+  -- índice único de abajo es lo que sí se hace valer aunque alguien inserte a
+  -- mano.
   usuario         text not null,
   -- Lo que firma las cotizaciones y ve el equipo en el listado.
   nombre          text not null,

@@ -32,7 +32,6 @@ const ESTADOS_CIERRE_INICIAL = ['creada', 'enviada', 'error'] as const;
 const ESTADOS_CORRECCION = ['ganada', 'perdida'] as const;
 
 const cerrarSchema = z.object({
-  clave: z.string().optional(),
   // Ronda de correcciones 1: un id que no es UUID revienta en Postgres (el
   // driver rechaza el literal) y eso subía como 500 en vez de 400 — un error
   // de quien llama, no de la base.

@@ -14,7 +14,6 @@ export const runtime = 'nodejs';
 const DIAS_VIGENCIA = 30;
 
 const reenviarSchema = z.object({
-  clave: z.string().optional(),
   // Ronda de correcciones 1: un id que no es UUID revienta en Postgres como
   // 500 en vez de 400 — mismo motivo que en /cerrar.
   id: z.uuid('El id de la cotización no es válido.'),

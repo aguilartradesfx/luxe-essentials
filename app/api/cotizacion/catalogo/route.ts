@@ -19,11 +19,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  // La credencial se revisa antes de tocar el resto del cuerpo: no hay
-  // esquema que validar aquí (solo se espera `clave`), pero el orden se
-  // mantiene igual que en los otros endpoints de este directorio por
-  // consistencia. Ruta de solo lectura: no exige el token anti-CSRF, ese
-  // requisito es de las que escriben (app/api/cotizacion/route.ts).
+  // La credencial se revisa antes de tocar el resto del cuerpo. Acá no hay
+  // esquema que validar —el cuerpo va vacío—, pero el orden se mantiene igual
+  // que en los otros endpoints de este directorio por consistencia. Ruta de
+  // solo lectura: no exige el token anti-CSRF, ese requisito es de las que
+  // escriben (app/api/cotizacion/route.ts).
   const auth = autenticarPeticion(request, crudo, { requiereCsrf: false });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
@@ -43,8 +43,8 @@ export async function POST(request: Request) {
   // Es seguro: `csrfDeSesion` deriva el token de la cookie misma
   // (`HMAC(secreto, "csrf." + valorCookie)`), así que devolvérselo a quien
   // ya la presenta válida no concede nada que esa cookie no demostrara ya.
-  // `null` (y por lo tanto ningún campo `csrf` en la respuesta) si la
-  // entrada fue por clave sin cookie, o si la cookie no es válida.
+  // `null` (y por lo tanto ningún campo `csrf` en la respuesta) si la cookie
+  // no es válida.
   //
   // `Sec-Fetch-Site: cross-site` es la marca de que quien disparó esta
   // petición no es este sitio: con `SameSite=None` (necesaria para el

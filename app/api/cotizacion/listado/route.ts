@@ -8,7 +8,6 @@ export const runtime = 'nodejs';
 const MAX_LIMITE = 200;
 
 const listadoSchema = z.object({
-  clave: z.string().optional(),
   estado: z.string().optional(),
   limite: z.number().int('El límite debe ser un número entero.').positive('El límite debe ser mayor que cero.').optional(),
 });

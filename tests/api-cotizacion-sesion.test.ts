@@ -304,6 +304,41 @@ describe('POST /api/cotizacion/entrar', () => {
     const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
     expect(res.status).toBe(500);
   });
+
+  // Revisión final, M5: el usuario no puede quedar en los logs, ni entero ni
+  // truncado. El modo de fallo clásico de un formulario de acceso es escribir
+  // la clave en el campo de usuario, y en ese caso hasta tres caracteres son
+  // pedazos de una credencial real, retenidos y buscables en Vercel.
+  it('no deja el usuario en el log de rechazo, ni siquiera un prefijo', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Lo que se teclea acá es, en el caso que importa, una clave real.
+    await postEntrar(peticionEntrada({ usuario: 'Turrialba-2026', clave: 'x' }));
+
+    const registrado = consoleError.mock.calls.flat().join(' ');
+    expect(registrado).not.toContain('Turrialba-2026');
+    expect(registrado).not.toContain('Tur');
+    // Sigue habiendo con qué distinguir intentos contra cuentas distintas.
+    expect(registrado).toMatch(/[0-9a-f]{8}/);
+    consoleError.mockRestore();
+  });
+
+  // Revisión final, M7: `emitirSesion` estaba fuera de todo `try`. Si faltara
+  // el secreto en Vercel —el caso exacto de un despliegue nuevo— la ruta
+  // devolvía un 500 genérico de Next, sin una sola línea que dijera por qué.
+  it('si falta LUXE_SESION_SECRETO, devuelve 500 con un diagnóstico explícito en el log', async () => {
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas' });
+    delete process.env.LUXE_SESION_SECRETO;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(consoleError.mock.calls.flat().join(' ')).toContain('LUXE_SESION_SECRETO');
+    consoleError.mockRestore();
+  });
 });
 
 // Revisión final, Importante 3: no existía ninguna ruta que caducara la

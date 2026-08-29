@@ -15,7 +15,6 @@ export const runtime = 'nodejs';
 // dedicada, mismo patrón que app/api/cotizacion/duplicar/route.ts: firma el
 // enlace de un PDF que ya existe en Storage, no genera nada nuevo.
 const pdfSchema = z.object({
-  clave: z.string().optional(),
   // Mismo motivo que en /cerrar, /reenviar y /duplicar: un id sin forma de
   // UUID revienta en Postgres como 500 en vez de 400.
   id: z.uuid('El id de la cotización no es válido.'),

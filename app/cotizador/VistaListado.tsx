@@ -470,7 +470,7 @@ export function VistaListado({
                       {empresa && <p className="text-xs text-teal">{empresa}</p>}
                     </td>
                     <td className="px-3 py-2 align-top text-navy">{fila.numero ?? '—'}</td>
-                    <td className="px-3 py-2 align-top text-teal">{fila.vendedor ?? '—'}</td>
+                    <td className="px-3 py-2 align-top text-teal">{fila.vendedor || '—'}</td>
                     <td className="px-3 py-2 align-top text-teal">{formatearFecha(fila.created_at)}</td>
                     <td className="px-3 py-2 align-top">
                       {proximaAVencer ? (
