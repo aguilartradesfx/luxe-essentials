@@ -1068,7 +1068,9 @@ git commit -m "feat(usuarios): entrar con credencial propia y retirar la clave c
 - Modify: `app/cotizador/PantallaClave.tsx`
 - Modify: `app/cotizador/Panel.tsx`
 - Modify: `app/cotizador/VistaCrear.tsx`, `VistaListado.tsx`, `VistaMetricas.tsx`
-- Test: `tests/cotizador-ui.test.tsx`, `tests/panel-listado-ui.test.tsx` (existentes)
+- Modify: `app/api/cotizacion/catalogo/route.ts:62` — la sonda de sesión devuelve el vendedor
+- Test: `tests/cotizador-ui.test.tsx`, `tests/panel-listado-ui.test.tsx`,
+  `tests/api-cotizacion-catalogo.test.ts` (existentes)
 
 **Interfaces:**
 - Consumes: `POST /api/cotizacion/entrar` con `{ usuario, clave }` → `{ ok, csrf, vendedor }`.
@@ -1131,7 +1133,75 @@ tiene `tests/a11y.test.tsx` y un campo sin etiqueta la rompe.
 Texto del botón y del encabezado: conservar el que ya tenga, salvo que diga "clave" en
 singular donde ahora hay dos campos.
 
-- [ ] **Step 4: Retirar el hilo de `clave` de las vistas**
+- [ ] **Step 4: La sonda de sesión devuelve también el vendedor**
+
+`app/cotizador/Panel.tsx` no puede leer la cookie (es `HttpOnly`), así que al recargar la
+página sabe que hay sesión sólo porque `/api/cotizacion/catalogo` se la valida y le devuelve
+el token anti-CSRF (`csrfDeSesion`, `app/api/cotizacion/catalogo/route.ts:62`). Sin tocar
+esa ruta, tras un refresco el panel tendría sesión pero no sabría de quién: el nombre sólo
+llega en la respuesta de `/entrar`, que ocurre una vez.
+
+En `app/api/cotizacion/catalogo/route.ts`, junto al `csrf` que ya devuelve, añadir el
+vendedor —tomado de la misma autenticación que la ruta ya hace— y en `Panel.tsx` guardarlo
+al montar, no sólo al entrar.
+
+Prueba, en `tests/api-cotizacion-catalogo.test.ts`:
+
+```ts
+it('devuelve el vendedor de la sesión junto al token', async () => {
+  const { cookie } = emitirSesion('Guillermo Rojas');
+  const res = await POST(new Request('https://luxeessentialscr.com/api/cotizacion/catalogo', {
+    method: 'POST',
+    headers: { cookie: cookie.split(';')[0] },
+    body: JSON.stringify({}),
+  }));
+  expect((await res.json()).vendedor).toBe('Guillermo Rojas');
+});
+```
+
+- [ ] **Step 5: Corregir el respaldo que ya no existe**
+
+`Panel.tsx:175-232` (`establecerSesion`) verifica que la cookie haya cuajado de verdad
+dentro del iframe, y **si no cuajó sólo escribe en la consola** y sigue adelante. Eso era
+correcto mientras las rutas que escriben aceptaran la clave en el cuerpo: el vendedor
+quedaba sin cookie pero podía seguir guardando. Después de la Tarea 4 ese respaldo no
+existe, y dejar el comportamiento como está produce el peor modo de fallo posible — un
+panel que se lee entero, no guarda nada, y no dice por qué.
+
+Cambiarlo: si la verificación falla, el panel **no entra**. Muestra un error visible en la
+pantalla de acceso, con el texto:
+
+> No pudimos abrir tu sesión en este navegador. Si estás viendo el panel dentro de
+> GoHighLevel, abrilo en una pestaña aparte.
+
+Y reescribir el comentario de bloque de `establecerSesion` — hoy explica que "las tres
+rutas que escriben también aceptan `clave` en el cuerpo", que a partir de la Tarea 4 es
+falso. Un comentario que describe un respaldo inexistente es peor que ninguno.
+
+Prueba, en `tests/cotizador-ui.test.tsx`:
+
+```tsx
+it('no entra si la cookie no queda establecida en el navegador', async () => {
+  // /entrar responde 200, pero la sonda de verificación falla: es el caso del
+  // iframe que bloquea la cookie de terceros.
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true, csrf: 'tok', vendedor: 'Guillermo Rojas' }) })
+    .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ ok: false }) });
+  vi.stubGlobal('fetch', fetchMock);
+
+  render(<Panel />);
+  await userEvent.type(screen.getByLabelText(/usuario/i), 'guillermo');
+  await userEvent.type(screen.getByLabelText(/clave/i), 'Turrialba-2026');
+  await userEvent.click(screen.getByRole('button', { name: /entrar/i }));
+
+  expect(await screen.findByText(/no pudimos abrir tu sesión/i)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /nueva cotización/i })).not.toBeInTheDocument();
+});
+```
+
+Ajustar el nombre del botón del listado al que realmente exista en `Panel.tsx`.
+
+- [ ] **Step 6: Retirar el hilo de `clave` de las vistas**
 
 En `Panel.tsx`: dejar de guardar y de pasar `clave` a las tres vistas; conservar el
 guardado del token CSRF tal como está. Guardar además el `vendedor` que devuelve `/entrar` y
@@ -1143,15 +1213,15 @@ la prop `clave`, y dejar los cuerpos sin ese campo (`JSON.stringify({})`,
 `JSON.stringify({ id })`, etc.). No tocar la cabecera `x-csrf-token` de las rutas que
 escriben.
 
-- [ ] **Step 5: Correr la suite completa**
+- [ ] **Step 7: Correr la suite completa**
 
 Run: `npm test`
 Expected: verde. Las pruebas de UI que pasaban `clave="x"` como prop deben quedar sin ella.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/cotizador tests/
+git add app/cotizador app/api/cotizacion/catalogo/route.ts tests/
 git commit -m "feat(usuarios): la pantalla de entrada pide usuario y clave"
 ```
 
