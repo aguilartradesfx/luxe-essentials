@@ -2,16 +2,22 @@
 
 import { useState } from 'react';
 
-// Pantalla de clave, extraída de lo que antes vivía al principio de
-// Cotizador.tsx (Tarea 9). No decide ella misma cómo se valida la clave ni
-// qué pasa al entrar — eso es responsabilidad de `Panel`, que le pasa
-// `onEntrar`. Esta pieza solo sabe pedir la clave, mostrar el error que le
-// devuelvan y reflejar el estado "entrando" mientras la promesa está en
-// vuelo. Al estilo de app/q7m4/Taller.tsx.
+// Pantalla de acceso, extraída de lo que antes vivía al principio de
+// Cotizador.tsx (Tarea 9). No decide ella misma cómo se valida el usuario ni
+// la clave ni qué pasa al entrar — eso es responsabilidad de `Panel`, que le
+// pasa `onEntrar`. Esta pieza solo sabe pedir el usuario y la clave, mostrar
+// el error que le devuelvan y reflejar el estado "entrando" mientras la
+// promesa está en vuelo. Al estilo de app/q7m4/Taller.tsx.
+//
+// Tarea 3 (usuarios del panel): antes solo pedía la clave compartida. Ahora
+// el panel identifica a la persona, así que hace falta también el usuario —
+// `onEntrar` manda los dos juntos a `/api/cotizacion/entrar`.
 type Props = {
-  // Devuelve el mensaje de error a mostrar, o `null` si la clave era
-  // correcta y ya se entró. `Panel` es quien decide qué endpoint llamar.
-  onEntrar: (clave: string) => Promise<string | null>;
+  // Devuelve el mensaje de error a mostrar (el que manda el propio
+  // servidor — "usuario o clave incorrectos", "cuenta bloqueada", etc.), o
+  // `null` si la entrada fue correcta y ya se entró. `Panel` es quien
+  // decide qué endpoint llamar y cómo interpretar la respuesta.
+  onEntrar: (usuario: string, clave: string) => Promise<string | null>;
   // Ronda de correcciones 2 (Tarea 9, hallazgo importante): explica POR QUÉ
   // se está pidiendo la clave, cuando no es la primera vez — típicamente
   // porque la sesión venció a mitad de una cotización (`Panel` se la manda
@@ -20,11 +26,12 @@ type Props = {
   // entraste" — el vendedor no tenía forma de saber que lo armado seguía
   // ahí, detrás de este formulario. Distinto de `claveError`: este es
   // informativo (por qué se está viendo el formulario), no un error de la
-  // clave que se acaba de escribir.
+  // credencial que se acaba de escribir.
   mensaje?: string;
 };
 
 export function PantallaClave({ onEntrar, mensaje }: Props) {
+  const [usuario, setUsuario] = useState('');
   const [clave, setClave] = useState('');
   const [claveError, setClaveError] = useState('');
   const [entrando, setEntrando] = useState(false);
@@ -34,7 +41,7 @@ export function PantallaClave({ onEntrar, mensaje }: Props) {
     setClaveError('');
     setEntrando(true);
     try {
-      const error = await onEntrar(clave);
+      const error = await onEntrar(usuario, clave);
       if (error) setClaveError(error);
     } finally {
       setEntrando(false);
@@ -51,14 +58,30 @@ export function PantallaClave({ onEntrar, mensaje }: Props) {
             {mensaje}
           </p>
         )}
+        <label htmlFor="usuario-cotizador" className="mt-6 block text-xs font-medium uppercase tracking-wide text-teal">
+          Usuario
+        </label>
         <input
+          id="usuario-cotizador"
+          type="text"
+          autoComplete="username"
+          value={usuario}
+          onChange={(e) => setUsuario(e.target.value)}
+          placeholder="Usuario"
+          autoFocus
+          className="mt-2 w-full rounded-lg border border-[var(--carta-border)] bg-white px-4 py-3 text-sm text-navy placeholder:text-teal/60"
+        />
+        <label htmlFor="clave-cotizador" className="mt-4 block text-xs font-medium uppercase tracking-wide text-teal">
+          Clave
+        </label>
+        <input
+          id="clave-cotizador"
           type="password"
-          aria-label="Clave"
+          autoComplete="current-password"
           value={clave}
           onChange={(e) => setClave(e.target.value)}
           placeholder="Clave"
-          autoFocus
-          className="mt-6 w-full rounded-lg border border-[var(--carta-border)] bg-white px-4 py-3 text-sm text-navy placeholder:text-teal/60"
+          className="mt-2 w-full rounded-lg border border-[var(--carta-border)] bg-white px-4 py-3 text-sm text-navy placeholder:text-teal/60"
         />
         {claveError && <p className="mt-2 text-sm text-red-700">{claveError}</p>}
         <button

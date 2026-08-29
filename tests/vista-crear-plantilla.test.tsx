@@ -44,7 +44,6 @@ describe('VistaCrear — línea de un producto descontinuado (Tarea 10, ronda de
     render(
       <VistaCrear
         skus={SKUS}
-        clave=""
         obtenerCsrf={() => null}
         onSesionInvalida={vi.fn()}
         plantilla={{
@@ -76,7 +75,6 @@ describe('VistaCrear — línea de un producto descontinuado (Tarea 10, ronda de
     render(
       <VistaCrear
         skus={SKUS}
-        clave=""
         obtenerCsrf={() => null}
         onSesionInvalida={vi.fn()}
         plantilla={{

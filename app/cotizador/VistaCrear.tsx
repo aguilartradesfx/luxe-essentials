@@ -124,50 +124,17 @@ function formatearFecha(iso: string): string {
   return `${dos(f.getDate())}/${dos(f.getMonth() + 1)}/${f.getFullYear()} ${dos(f.getHours())}:${dos(f.getMinutes())}`;
 }
 
-// Ronda de correcciones 1 (Tarea 9, hallazgo menor): cuando la sesión entró
-// por cookie (la sonda de `Panel`, sin clave conocida), `clave` llega como
-// `''` — mandarla igual (`clave: ''`) no es una credencial, es peso muerto
-// que enturbia cuál vía de autenticación se está usando de verdad. Este
-// helper arma el cuerpo de una petición con la clave solo cuando se conoce
-// una — cuando no (sesión por cookie, la clave nunca se tecleó en esta
-// pestaña), la petición depende enteramente de la cookie más el token
-// anti-CSRF.
-//
-// Ronda de correcciones final (hallazgo crítico): antes esto solo se usaba
-// en las rutas de LECTURA — `crear()`, más abajo, dejaba de mandar `clave`
-// por completo, dependiendo solo de la cookie + CSRF. El servidor la sigue
-// aceptando (`autenticarPeticion`, lib/autenticacion-cotizador.ts), así que
-// el respaldo existía; solo el navegador había dejado de usarlo. Eso
-// convierte cualquier rechazo silencioso de la cookie (nadie había probado
-// este panel dentro de un iframe real de GoHighLevel todavía) en un fallo
-// total y disfrazado: el vendedor puede seguir leyendo — catálogo, listado,
-// métricas, todas rutas de lectura que sí mandan la clave — pero nada de lo
-// que escribe funciona jamás, con un mensaje que culpa a una sesión que
-// nunca existió. Mandar la clave acá no debilita nada: un sitio ajeno no la
-// conoce, así que no abre ninguna puerta que el token anti-CSRF no cerrara
-// ya.
-function conClave(clave: string, resto: Record<string, unknown>): Record<string, unknown> {
-  return clave ? { clave, ...resto } : resto;
-}
-
 type Props = {
   // El catálogo (sin precios) que ya bajó `Panel` tras validar la sesión.
   skus: SkuUI[];
-  // La clave escrita al entrar por formulario. Vacía cuando la sesión ya
-  // estaba viva al montar (Tarea 9) — en ese caso las peticiones de esta
-  // vista dependen de la cookie y del token anti-CSRF, no de este valor.
-  // Ronda de correcciones 1: cuando está vacía, ninguna petición manda la
-  // clave en el cuerpo — `clave: ''` no es una credencial, es peso muerto
-  // que solo confunde qué vía se está usando de verdad.
-  clave: string;
   // Lee el token anti-CSRF vigente desde `sessionStorage` (lo guarda `Panel`
   // al validar la clave, o al confirmar una sesión ya viva). `null` si
   // todavía no hay uno.
   obtenerCsrf: () => string | null;
   // Ronda de correcciones 1 (hallazgo crítico): si el envío final vuelve
-  // con 401, el token guardado (o la clave) ya no sirve — quedarse en esta
-  // vista dejaría al vendedor con una pantalla que lee pero nunca puede
-  // volver a escribir. `Panel` limpia la sesión y vuelve a pedir la clave.
+  // con 401, el token guardado ya no sirve — quedarse en esta vista dejaría
+  // al vendedor con una pantalla que lee pero nunca puede volver a escribir.
+  // `Panel` limpia la sesión y vuelve a pedir usuario y clave.
   onSesionInvalida: () => void;
   // Tarea 10 ("Duplicar"): lo que dejó `VistaListado` para arrancar esta
   // vista ya cargada, en vez de en blanco. `null`/`undefined` cuando se
@@ -184,7 +151,6 @@ type Props = {
 // cambia de dónde saca la clave y de dónde consigue el catálogo.
 export function VistaCrear({
   skus,
-  clave,
   obtenerCsrf,
   onSesionInvalida,
   plantilla,
@@ -300,12 +266,11 @@ export function VistaCrear({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- solo debe reaccionar a `plantilla`; `onPlantillaConsumida` no es estable entre renders de Panel.
   }, [plantilla]);
 
-  // La cola de borradores: `/api/cotizacion/borradores` es POST (la clave
-  // puede viajar en el cuerpo, o la sesión por cookie basta) y devuelve solo
-  // lo que el agente capturó — sin líneas ni totales, porque nunca los tuvo.
-  // Un fallo acá no bloquea la pantalla: el vendedor puede seguir armando
-  // cotizaciones a mano aunque la cola no cargue. Ruta de solo lectura: no
-  // lleva el token anti-CSRF.
+  // La cola de borradores: `/api/cotizacion/borradores` es POST (la sesión
+  // por cookie basta) y devuelve solo lo que el agente capturó — sin líneas
+  // ni totales, porque nunca los tuvo. Un fallo acá no bloquea la pantalla:
+  // el vendedor puede seguir armando cotizaciones a mano aunque la cola no
+  // cargue. Ruta de solo lectura: no lleva el token anti-CSRF.
   useEffect(() => {
     let cancelado = false;
     async function cargarBorradores() {
@@ -315,7 +280,7 @@ export function VistaCrear({
         const res = await fetch('/api/cotizacion/borradores', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(conClave(clave, {})),
+          body: JSON.stringify({}),
         });
         const datos = await res.json();
         if (cancelado) return;
@@ -356,7 +321,7 @@ export function VistaCrear({
       fetch('/api/cotizacion/previsualizar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(conClave(clave, { lineas: entradas, tasaIva, bordadoEspecial })),
+        body: JSON.stringify({ lineas: entradas, tasaIva, bordadoEspecial }),
         signal: controlador.signal,
       })
         .then(async (res) => {
@@ -383,7 +348,7 @@ export function VistaCrear({
       controlador.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `entradas` ya está memoizado sobre `lineas`.
-  }, [entradas, tasaIva, bordadoEspecial, clave]);
+  }, [entradas, tasaIva, bordadoEspecial]);
 
   function agregar(skuId: string) {
     setResultado(null);
@@ -473,47 +438,38 @@ export function VistaCrear({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Ronda de correcciones 1 (Tarea 9): esta ruta escribe, y esta
-          // vista ya no manda la clave en el cuerpo (ver más abajo) — la
-          // única credencial que lleva es la cookie de sesión más este
-          // token en la cabecera. Sin uno vigente, el servidor responde 401
-          // y `onSesionInvalida()`, más abajo, saca al vendedor de vuelta a
-          // la pantalla de clave para conseguir uno nuevo.
+          // Esta ruta escribe: la única credencial que lleva es la cookie
+          // de sesión más este token en la cabecera (Fase 3 — ya no hay
+          // clave compartida que mandar como respaldo). Sin un token
+          // vigente, el servidor responde 401 y `onSesionInvalida()`, más
+          // abajo, saca al vendedor de vuelta a la pantalla de acceso para
+          // conseguir uno nuevo.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
-        body: JSON.stringify(
-          // Ronda de correcciones final (hallazgo crítico): `clave` vuelve
-          // al cuerpo cuando se conoce (ver `conClave`, arriba) — el respaldo
-          // que la ronda anterior le había quitado a esta única ruta de
-          // escritura. Con sesión por cookie viva (la vía normal dentro del
-          // iframe), `clave` es `''` y `conClave` no manda nada de más; el
-          // token anti-CSRF sigue siendo la única defensa contra CSRF, esto
-          // no lo reemplaza.
-          conClave(clave, {
-            cliente: {
-              nombre: cliente.nombre.trim(),
-              empresa: cliente.empresa.trim() || undefined,
-              email: cliente.email.trim(),
-              // Opcionales (Tarea 5): `undefined` desaparece al pasar por
-              // `JSON.stringify`, así que enviarlos vacíos no bloquea la
-              // cotización — ver el comentario en `Cliente`, arriba.
-              telefono: cliente.telefono.trim() || undefined,
-              direccion: cliente.direccion.trim() || undefined,
-            },
-            lineas: entradas,
-            tasaIva,
-            bordadoEspecial,
-            // Ronda de correcciones 2 (hallazgo I1): solo van si esta
-            // cotización nació de un borrador del agente. `borradorId` le
-            // dice al servidor qué fila cerrar; `contactId` evita que se dé
-            // de alta un contacto nuevo en GoHighLevel para alguien que ya
-            // existe ahí. `undefined` desaparece al pasar por
-            // `JSON.stringify`, así que una cotización armada desde cero no
-            // manda ninguno de los dos.
-            borradorId: borradorActivo?.id,
-            contactId: borradorActivo?.contactId ?? undefined,
-          }),
-        ),
+        body: JSON.stringify({
+          cliente: {
+            nombre: cliente.nombre.trim(),
+            empresa: cliente.empresa.trim() || undefined,
+            email: cliente.email.trim(),
+            // Opcionales (Tarea 5): `undefined` desaparece al pasar por
+            // `JSON.stringify`, así que enviarlos vacíos no bloquea la
+            // cotización — ver el comentario en `Cliente`, arriba.
+            telefono: cliente.telefono.trim() || undefined,
+            direccion: cliente.direccion.trim() || undefined,
+          },
+          lineas: entradas,
+          tasaIva,
+          bordadoEspecial,
+          // Ronda de correcciones 2 (hallazgo I1): solo van si esta
+          // cotización nació de un borrador del agente. `borradorId` le
+          // dice al servidor qué fila cerrar; `contactId` evita que se dé
+          // de alta un contacto nuevo en GoHighLevel para alguien que ya
+          // existe ahí. `undefined` desaparece al pasar por
+          // `JSON.stringify`, así que una cotización armada desde cero no
+          // manda ninguno de los dos.
+          borradorId: borradorActivo?.id,
+          contactId: borradorActivo?.contactId ?? undefined,
+        }),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {

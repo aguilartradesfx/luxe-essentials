@@ -142,7 +142,6 @@ function renderVista(props: Partial<Parameters<typeof VistaListado>[0]> = {}) {
   const onDuplicar = vi.fn();
   render(
     <VistaListado
-      clave="correcta"
       obtenerCsrf={() => CSRF_TOKEN}
       onSesionInvalida={onSesionInvalida}
       onDuplicar={onDuplicar}
@@ -246,48 +245,17 @@ describe('VistaListado', () => {
   // misma pantalla, sin la misma prueba — quitarle el token a `reenviar`
   // dejaba las 645 pruebas anteriores en verde. Dentro del iframe la sesión
   // es por cookie: sin este token, el servidor responde 401 y el vendedor
-  // rebota a la pantalla de clave cada vez que aprieta "Reenviar".
-  // Ronda de correcciones final (hallazgo crítico): `cerrar()` y
-  // `reenviar()` habían dejado de mandar `clave` en el cuerpo, dependiendo
-  // enteramente de la cookie + el token anti-CSRF — sin respaldo si el
-  // navegador rechazaba la cookie (nadie lo había probado todavía dentro de
-  // un iframe real de GoHighLevel). El servidor la sigue aceptando
-  // (`autenticarPeticion`); estas dos pruebas comprueban que la pantalla
-  // vuelva a mandarla.
-  it('"Ganada" manda la clave en el cuerpo, como respaldo de la cookie', async () => {
-    const { llamadas } = mockFetch();
-    const usuario = userEvent.setup();
-    renderVista();
-
-    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
-    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /^ganada$/i }));
-
-    await waitFor(() => {
-      const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/cerrar'));
-      expect(llamada).toBeDefined();
-      const cuerpo = JSON.parse(llamada!.init!.body as string);
-      expect(cuerpo.clave).toBe('correcta');
-    });
-  });
-
-  it('"Reenviar" manda la clave en el cuerpo, como respaldo de la cookie', async () => {
-    const { llamadas } = mockFetch();
-    const usuario = userEvent.setup();
-    renderVista();
-
-    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
-    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
-
-    await waitFor(() => {
-      const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/reenviar'));
-      expect(llamada).toBeDefined();
-      const cuerpo = JSON.parse(llamada!.init!.body as string);
-      expect(cuerpo.clave).toBe('correcta');
-    });
-  });
-
+  // rebota a la pantalla de acceso cada vez que aprieta "Reenviar".
+  //
+  // Tarea 5 (usuarios del panel): las dos pruebas que antes vivían acá
+  // ("Ganada"/"Reenviar" mandan la clave en el cuerpo, como respaldo de la
+  // cookie) se retiran — no se convierten. Probaban que `cerrar()` y
+  // `reenviar()` mandaban la clave compartida como respaldo de la cookie;
+  // desde la Fase 3 (`autenticarPeticion`, lib/autenticacion-cotizador.ts)
+  // el servidor ignora por completo cualquier `clave` en el cuerpo, así que
+  // ese respaldo ya no existe y no hay nada equivalente que probar en su
+  // lugar — la cookie más el token anti-CSRF son ahora la única credencial,
+  // y eso ya lo cubren las pruebas de la cabecera `x-csrf-token`, abajo.
   it('"Reenviar" manda el token anti-CSRF en la cabecera', async () => {
     const { llamadas } = mockFetch();
     const usuario = userEvent.setup();

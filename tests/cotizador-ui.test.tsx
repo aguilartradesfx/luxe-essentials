@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Cotizador, { CSRF_STORAGE_KEY } from '@/app/cotizador/Panel';
+import { PantallaClave } from '@/app/cotizador/PantallaClave';
 
 // Tarea 8: el catálogo ya no viaja en el bundle. `Cotizador` arranca con una
 // pantalla de clave y solo pide el catálogo (sin precios) a
@@ -118,33 +119,33 @@ type OpcionesFetch = {
   pdfFalla?: boolean;
   // Ronda de correcciones 1 (Tarea 9) — sesión por cookie y CSRF:
   // `sesionActiva` simula que ya hay una cookie válida antes de montar la
-  // pantalla: `/api/cotizacion/catalogo` responde bien aunque el cuerpo no
-  // traiga `clave` (la sonda de `Panel`). `csrf` fija el token que devuelven
-  // `/entrar` y (si `sesionActiva`) `/catalogo`; por defecto,
-  // `CSRF_TOKEN_DE_PRUEBA`. `crear401` hace que `/api/cotizacion` responda
-  // 401 sin importar qué mande la pantalla — simula un token anti-CSRF
-  // rancio, para probar la recuperación.
+  // pantalla: `/api/cotizacion/catalogo` responde bien de entrada (la sonda
+  // de `Panel`). `csrf` fija el token que devuelven `/entrar` y (si
+  // `sesionActiva`) `/catalogo`; por defecto, `CSRF_TOKEN_DE_PRUEBA`.
+  // `crear401` hace que `/api/cotizacion` responda 401 sin importar qué
+  // mande la pantalla — simula un token anti-CSRF rancio, para probar la
+  // recuperación.
   sesionActiva?: boolean;
   csrf?: string;
   crear401?: boolean;
-  // Ronda de correcciones final: simula que el navegador RECHAZA la cookie
-  // que `/entrar` intenta fijar (el escenario declarado en el hallazgo
-  // crítico — nadie había probado este panel dentro de un iframe real de
-  // GoHighLevel todavía). `/entrar` sigue respondiendo 200 con un csrf (el
-  // servidor solo sabe que MANDÓ el `Set-Cookie`, no si el navegador lo
-  // aceptó) pero ninguna lectura posterior sin `clave` en el cuerpo se
-  // reconoce como autenticada por cookie — igual que pasaría de verdad si la
-  // cookie nunca llegó a guardarse.
+  // Tarea 5 (usuarios del panel): simula que el navegador RECHAZA la cookie
+  // que `/entrar` intenta fijar (el escenario del iframe de GoHighLevel que
+  // bloquea cookies de terceros). `/entrar` sigue respondiendo 200 con un
+  // csrf (el servidor solo sabe que MANDÓ el `Set-Cookie`, no si el
+  // navegador lo aceptó) pero la verificación posterior (`/catalogo`, sin
+  // ninguna vía de respaldo desde la Fase 3) falla — y `establecerSesion`
+  // (Panel.tsx) ya no deja entrar en ese caso.
   cookieBloqueada?: boolean;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
-  // Ronda de correcciones final: si `/entrar` responde bien (clave correcta,
-  // sin `cookieBloqueada`), el simulacro trata la cookie como establecida de
+  // Si `/entrar` responde bien (usuario y clave correctos, sin
+  // `cookieBloqueada`), el simulacro trata la cookie como establecida de
   // verdad para el resto del test — es el caso normal, y `establecerSesion`
-  // (Panel.tsx) ahora lo VERIFICA con una lectura sin `clave` antes de
-  // guardar el token anti-CSRF. Empieza en `true` cuando `sesionActiva` ya
-  // simula una cookie viva desde antes de montar.
+  // (Panel.tsx) lo VERIFICA con una lectura a `/catalogo` (que desde la Fase
+  // 3 solo entiende cookie, nunca clave) antes de dejar entrar. Empieza en
+  // `true` cuando `sesionActiva` ya simula una cookie viva desde antes de
+  // montar.
   let cookieEstablecida = opciones.sesionActiva ?? false;
 
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -153,35 +154,29 @@ function mockFetch(opciones: OpcionesFetch = {}) {
     const csrf = opciones.csrf ?? CSRF_TOKEN_DE_PRUEBA;
 
     if (url.endsWith('/api/cotizacion/catalogo')) {
-      if (cuerpo.clave === 'correcta') {
-        return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+      // Fase 3: esta ruta ya no acepta ninguna clave en el cuerpo — solo la
+      // cookie de sesión, simulada acá con `cookieEstablecida`. Es tanto la
+      // sonda que usa `Panel` al montar como la verificación que hace
+      // `establecerSesion` justo después de `/entrar`.
+      if (cookieEstablecida) {
+        return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf, vendedor: 'Guillermo Rojas' }), {
+          status: 200,
+        });
       }
-      // Ronda de correcciones 1 (Tarea 9): la sonda de sesión de `Panel`
-      // llama acá sin `clave`, apoyada solo en la cookie — igual que la
-      // verificación que ahora hace `establecerSesion` justo después de
-      // `/entrar`. Responde bien solo si la cookie de verdad "quedó puesta"
-      // en este simulacro (ver `cookieEstablecida`, arriba).
-      if (!cuerpo.clave && cookieEstablecida) {
-        return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+      return new Response(JSON.stringify({ ok: false, error: 'Tu sesión no está activa o venció.' }), { status: 401 });
     }
 
     if (url.endsWith('/api/cotizacion/entrar')) {
-      // Ronda de correcciones 1 (Tarea 9): valida la clave igual que
-      // `/catalogo` arriba — a propósito el mismo criterio, para que ningún
-      // simulacro de este archivo pueda "entrar" con una clave que el
-      // servidor real rechazaría.
       if (cuerpo.clave !== 'correcta') {
-        return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+        return new Response(JSON.stringify({ ok: false, error: 'Usuario o clave incorrectos.' }), { status: 401 });
       }
       // El servidor real siempre responde 200 con `Set-Cookie` acá — nunca
       // sabe si el navegador la va a aceptar. `cookieBloqueada` simula esa
       // divergencia: la respuesta sigue en 200, pero `cookieEstablecida`
-      // (lo que de verdad decide si una lectura sin `clave` pasa) no se
+      // (lo que de verdad decide si la verificación posterior pasa) no se
       // enciende.
       if (!opciones.cookieBloqueada) cookieEstablecida = true;
-      return new Response(JSON.stringify({ ok: true, csrf }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, csrf, vendedor: 'Guillermo Rojas' }), { status: 200 });
     }
 
     if (url.endsWith('/api/cotizacion/borradores')) {
@@ -241,10 +236,16 @@ function mockFetch(opciones: OpcionesFetch = {}) {
   });
 }
 
-// Entra con la clave correcta y espera a que el catálogo (sin precios) esté
-// cargado, es decir, a que la pantalla de clave se haya reemplazado por la
-// pantalla principal.
+// El nombre de usuario que acepta el `mockFetch()` compartido. `usuario`, a
+// secas, ya nombra la instancia de `userEvent` en todo este archivo — este
+// nombre más largo evita la colisión.
+const USUARIO_DE_PRUEBA = 'guillermo';
+
+// Entra con el usuario y la clave correctos, y espera a que el catálogo (sin
+// precios) esté cargado, es decir, a que la pantalla de acceso se haya
+// reemplazado por la pantalla principal.
 async function entrar(usuario: ReturnType<typeof userEvent.setup>) {
+  await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
   await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
   await usuario.click(screen.getByRole('button', { name: /entrar/i }));
   await waitFor(() => {
@@ -269,26 +270,60 @@ async function llenarCliente(
   if (direccion !== undefined) await usuario.type(screen.getByLabelText(/dirección del cliente/i), direccion);
 }
 
+// Tarea 5 (usuarios del panel), Paso 1: `PantallaClave` sola, sin pasar por
+// `Panel` ni por `fetch` — es un componente "tonto" que solo pide usuario y
+// clave y delega en `onEntrar`, así que se prueba dándole un mock directo de
+// esa prop, en vez de simular la red entera. El resto de este archivo
+// (`describe('Cotizador', ...)`, abajo) cubre el camino completo a través de
+// `Panel`.
+describe('PantallaClave', () => {
+  it('pide usuario y clave, y manda los dos a onEntrar', async () => {
+    const onEntrar = vi.fn().mockResolvedValue(null);
+    const usuario = userEvent.setup();
+    render(<PantallaClave onEntrar={onEntrar} />);
+
+    await usuario.type(screen.getByLabelText(/usuario/i), 'guillermo');
+    await usuario.type(screen.getByLabelText(/^clave$/i), 'Turrialba-2026');
+    await usuario.click(screen.getByRole('button', { name: /entrar/i }));
+
+    expect(onEntrar).toHaveBeenCalledWith('guillermo', 'Turrialba-2026');
+  });
+
+  it('muestra el mensaje que devuelve el servidor cuando la cuenta está bloqueada', async () => {
+    const onEntrar = vi.fn().mockResolvedValue('Cuenta bloqueada por intentos fallidos. Probá en 15 minutos.');
+    const usuario = userEvent.setup();
+    render(<PantallaClave onEntrar={onEntrar} />);
+
+    await usuario.type(screen.getByLabelText(/usuario/i), 'guillermo');
+    await usuario.type(screen.getByLabelText(/^clave$/i), 'mala');
+    await usuario.click(screen.getByRole('button', { name: /entrar/i }));
+
+    expect(await screen.findByText(/bloqueada/i)).toBeInTheDocument();
+  });
+});
+
 describe('Cotizador', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('pide la clave antes de mostrar el catálogo', () => {
+  it('pide usuario y clave antes de mostrar el catálogo', () => {
     mockFetch();
     render(<Cotizador />);
+    expect(screen.getByLabelText(/usuario/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/buscar producto/i)).not.toBeInTheDocument();
   });
 
-  it('avisa si la clave es incorrecta y no entra', async () => {
+  it('avisa con el error del servidor si la clave es incorrecta, y no entra', async () => {
     mockFetch();
     const usuario = userEvent.setup();
     render(<Cotizador />);
+    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'mala');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
     await waitFor(() => {
-      expect(screen.getByText(/clave incorrecta/i)).toBeInTheDocument();
+      expect(screen.getByText(/usuario o clave incorrectos/i)).toBeInTheDocument();
     });
     expect(screen.queryByLabelText(/buscar producto/i)).not.toBeInTheDocument();
   });
@@ -500,15 +535,14 @@ describe('Cotizador', () => {
     expect(llamadasAlEnvio).toHaveLength(0);
   });
 
-  it('el cuerpo del envío final lleva la clave (respaldo de la cookie) Y el token anti-CSRF en la cabecera, con las líneas tal cual están en pantalla, sin un total inventado', async () => {
-    // Ronda de correcciones final (hallazgo crítico): la ronda anterior había
-    // quitado `clave` del cuerpo de esta única ruta de escritura, dejando la
-    // cookie + el token anti-CSRF como única credencial — sin respaldo si el
-    // navegador rechazaba la cookie (nadie había probado este panel dentro
-    // de un iframe real de GoHighLevel todavía). Ahora vuelve: el mutante que
-    // esto mata es "quitar `clave` del cuerpo de `crear()`" — y, por
-    // separado, "quitar la cabecera `x-csrf-token`", cubierto por la
-    // aserción de más abajo.
+  it('el cuerpo del envío final NO lleva ninguna clave, con las líneas tal cual están en pantalla, sin un total inventado, y el token anti-CSRF en la cabecera', async () => {
+    // Tarea 5 (usuarios del panel): desde la Fase 3 la cookie más el token
+    // anti-CSRF son la única credencial de esta ruta que escribe — ya no hay
+    // ninguna clave que mandar como respaldo (`autenticarPeticion` la
+    // ignoraría de todos modos). Esta prueba reemplaza a la que antes
+    // afirmaba lo contrario: mata el mutante "agregar `clave` de vuelta al
+    // cuerpo de `crear()`" y, por separado, "quitar la cabecera
+    // `x-csrf-token`", cubierto por la aserción de más abajo.
     const fetchEspiado = mockFetch();
     const usuario = userEvent.setup();
     render(<Cotizador />);
@@ -541,12 +575,12 @@ describe('Cotizador', () => {
     const cuerpo = JSON.parse(init.body as string);
 
     expect(cuerpo).toEqual({
-      clave: 'correcta',
       cliente: { nombre: 'Ana Pérez', email: 'ana@empresa.com' },
       lineas: [{ skuId: 'set-600-king', cantidad: 1 }],
       tasaIva: 0.13,
       bordadoEspecial: false,
     });
+    expect('clave' in cuerpo).toBe(false);
     expect('total' in cuerpo).toBe(false);
 
     const cabeceras = new Headers(init.headers);
@@ -571,30 +605,38 @@ describe('Cotizador', () => {
     const bloqueoEnvio = new Promise<void>((resolve) => {
       liberarEnvio = resolve;
     });
+    // Ronda de correcciones 1 (Tarea 9): este simulacro respondía `ok: true`
+    // sin mirar ninguna credencial — a diferencia del `mockFetch()`
+    // compartido, que sí la exige. Con la sonda de sesión de `Panel`
+    // (dispara siempre al montar, sin gate), ese simulacro laxo hacía que la
+    // pantalla "entrara sola" antes de que esta prueba llegara a escribir la
+    // clave y apretar "Entrar". Tarea 5: desde la Fase 3 `/catalogo` ya no
+    // acepta ninguna clave en el cuerpo — solo la cookie, simulada acá con
+    // `cookieEstablecida`, igual que en el mock compartido.
+    let cookieEstablecida = false;
     const fetchEspiado = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
       const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
 
       if (url.endsWith('/api/cotizacion/catalogo')) {
-        // Ronda de correcciones 1 (Tarea 9): este simulacro respondía
-        // `ok: true` sin mirar la clave — a diferencia del `mockFetch()`
-        // compartido, que sí la exige. Con la sonda de sesión de `Panel`
-        // (dispara siempre al montar, sin gate), ese simulacro laxo hacía
-        // que la pantalla "entrara sola" antes de que esta prueba llegara a
-        // escribir la clave y apretar "Entrar" — el simulacro mentía sobre
-        // lo que hace el servidor real (tests/api-cotizacion-catalogo.test.ts:
-        // rechaza sin clave). Corregido para que valide igual que el mock
-        // compartido.
-        if (cuerpo.clave !== 'correcta') {
-          return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+        if (!cookieEstablecida) {
+          return new Response(JSON.stringify({ ok: false, error: 'Tu sesión no está activa o venció.' }), {
+            status: 401,
+          });
         }
-        return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+        return new Response(
+          JSON.stringify({ ok: true, skus: SKUS, csrf: CSRF_TOKEN_DE_PRUEBA, vendedor: 'Guillermo Rojas' }),
+          { status: 200 },
+        );
       }
       if (url.endsWith('/api/cotizacion/entrar')) {
         if (cuerpo.clave !== 'correcta') {
-          return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+          return new Response(JSON.stringify({ ok: false, error: 'Usuario o clave incorrectos.' }), { status: 401 });
         }
-        return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
+        cookieEstablecida = true;
+        return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA, vendedor: 'Guillermo Rojas' }), {
+          status: 200,
+        });
       }
       if (url.endsWith('/api/cotizacion/borradores')) {
         return new Response(JSON.stringify({ ok: true, borradores: [] }), { status: 200 });
@@ -1098,43 +1140,51 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     // Ronda de correcciones 2 (hallazgo importante): el revisor señaló mi
     // propia preocupación del reporte anterior — `crear()` ya no manda la
     // clave en el cuerpo, así que el primer envío depende enteramente de
-    // que `establecerSesion` (el POST a /entrar) haya terminado. Si esa
-    // llamada se dispara sin esperarla, el primer envío puede ganarle la
-    // carrera y volver con un 401 evitable. Esta prueba retiene /entrar a
-    // propósito (mismo patrón que "el botón dice la verdad ANTES del
-    // clic") y confirma que la pantalla NO pasa a mostrar el catálogo
-    // mientras esa llamada sigue en vuelo.
+    // que `establecerSesion` (el POST a /entrar, más su verificación) haya
+    // terminado. Si esa llamada se dispara sin esperarla, el primer envío
+    // puede ganarle la carrera y volver con un 401 evitable. Esta prueba
+    // retiene /entrar a propósito (mismo patrón que "el botón dice la
+    // verdad ANTES del clic") y confirma que la pantalla NO pasa a mostrar
+    // el catálogo mientras esa llamada sigue en vuelo.
     let liberarEntrar: (() => void) | undefined;
     const bloqueoEntrar = new Promise<void>((resolve) => {
       liberarEntrar = resolve;
     });
-    // Ronda de correcciones final: la cookie solo se considera "puesta" acá
-    // DESPUÉS de que `/entrar` termine — antes de eso (la sonda de montaje,
-    // que corre sin haber tecleado nada todavía) tiene que seguir fallando,
-    // o esta prueba entraría sola sin pasar por el formulario.
+    // La cookie solo se considera "puesta" acá DESPUÉS de que `/entrar`
+    // termine — antes de eso (la sonda de montaje, que corre sin haber
+    // tecleado nada todavía) tiene que seguir fallando, o esta prueba
+    // entraría sola sin pasar por el formulario.
     let cookieEstablecida = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
       const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
       if (url.endsWith('/api/cotizacion/catalogo')) {
-        if (cuerpo.clave === 'correcta') {
-          return new Response(JSON.stringify({ ok: true, skus: SKUS }), { status: 200 });
+        if (cookieEstablecida) {
+          return new Response(
+            JSON.stringify({ ok: true, skus: SKUS, csrf: CSRF_TOKEN_DE_PRUEBA, vendedor: 'Guillermo Rojas' }),
+            { status: 200 },
+          );
         }
-        if (!cuerpo.clave && cookieEstablecida) {
-          return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
-        }
-        return new Response(JSON.stringify({ ok: false, error: 'Clave incorrecta.' }), { status: 401 });
+        return new Response(JSON.stringify({ ok: false, error: 'Tu sesión no está activa o venció.' }), {
+          status: 401,
+        });
       }
       if (url.endsWith('/api/cotizacion/entrar')) {
+        if (cuerpo.clave !== 'correcta') {
+          return new Response(JSON.stringify({ ok: false, error: 'Usuario o clave incorrectos.' }), { status: 401 });
+        }
         await bloqueoEntrar;
         cookieEstablecida = true;
-        return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, csrf: CSRF_TOKEN_DE_PRUEBA, vendedor: 'Guillermo Rojas' }), {
+          status: 200,
+        });
       }
       throw new Error(`Fetch no simulado en la prueba: ${url}`);
     });
 
     const usuario = userEvent.setup();
     render(<Cotizador />);
+    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
     await usuario.click(screen.getByRole('button', { name: /^entrar$/i }));
 
@@ -1156,7 +1206,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBe(CSRF_TOKEN_DE_PRUEBA);
   });
 
-  it('al validar la clave, llama a /api/cotizacion/entrar y guarda el token anti-CSRF que devuelve', async () => {
+  it('al validar el usuario y la clave, llama a /api/cotizacion/entrar con los dos y guarda el token anti-CSRF que devuelve', async () => {
     // Mata el mutante "borrar la llamada que crea la sesión": sin ella, no
     // hay ningún POST a /entrar y `sessionStorage` se queda vacío para
     // siempre.
@@ -1174,70 +1224,57 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     );
     expect(llamada).toBeDefined();
     const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
-    expect(cuerpo).toEqual({ clave: 'correcta' });
+    expect(cuerpo).toEqual({ usuario: USUARIO_DE_PRUEBA, clave: 'correcta' });
   });
 
-  // Ronda de correcciones final (hallazgo crítico): el escenario declarado
-  // en el encargo — nadie había probado este panel dentro de un iframe real
-  // de GoHighLevel todavía, y si el navegador rechaza la cookie (bloqueada
+  // Tarea 5 (usuarios del panel), Paso 5: el escenario declarado en el
+  // encargo — nadie había probado este panel dentro de un iframe real de
+  // GoHighLevel todavía, y si el navegador rechaza la cookie (bloqueada
   // como de terceros), el fallo era total y estaba disfrazado: `/entrar`
   // sigue respondiendo 200 (el servidor solo sabe que MANDÓ el
   // `Set-Cookie`), así que nada avisaba que la sesión nunca cuajó de
-  // verdad. Con `establecerSesion` verificando ahora con una lectura real
-  // (en vez de asumir el 200), y con `clave` de vuelta en el cuerpo de las
-  // rutas que escriben, esta prueba comprueba las dos mitades del arreglo:
-  // ningún token anti-CSRF inservible queda guardado, y el envío igual
-  // funciona porque manda la clave.
-  it('si el navegador rechaza la cookie (bloqueada dentro del iframe), no guarda un token anti-CSRF inútil, pero el envío igual funciona porque manda la clave', async () => {
-    const fetchEspiado = mockFetch({ cookieBloqueada: true });
+  // verdad. Hasta la Tarea 4 esto era tolerable porque las rutas que
+  // escriben aceptaban la clave compartida en el cuerpo como respaldo; esa
+  // vía ya no existe, así que dejar entrar sin cookie real sería el peor
+  // modo de fallo posible — un panel que se lee entero y no guarda nada, sin
+  // decir por qué. Reemplaza a la prueba que antes vivía acá y afirmaba lo
+  // contrario (que el panel entraba igual, respaldado por la clave).
+  it('no entra si la cookie no queda establecida en el navegador (bloqueada dentro del iframe)', async () => {
+    mockFetch({ cookieBloqueada: true });
     const usuario = userEvent.setup();
     render(<Cotizador />);
-    await entrar(usuario);
-    await agregar(usuario, 'set de 600 hilos king');
-    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
+    await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
+    await usuario.click(screen.getByRole('button', { name: /entrar/i }));
 
+    expect(await screen.findByText(/no pudimos abrir tu sesión/i)).toBeInTheDocument();
+    // No entró: ni el catálogo ni ningún botón de la pantalla principal.
+    expect(screen.queryByLabelText(/buscar/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /nueva cotización/i })).not.toBeInTheDocument();
     // `/entrar` respondió 200 igual (el servidor no sabe que el navegador
     // descartó la cookie) pero la verificación posterior falló: sin token
     // guardado.
     expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
-    });
-    await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
-
-    // El envío sale bien igual: la clave en el cuerpo es un respaldo
-    // completo, no depende de la cookie ni del token anti-CSRF.
-    await waitFor(() => {
-      expect(screen.getByText(/enviada a/i)).toBeInTheDocument();
-    });
-
-    const llamada = fetchEspiado.mock.calls.find(([input]) =>
-      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
-    );
-    expect(llamada).toBeDefined();
-    const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
-    expect(cuerpo.clave).toBe('correcta');
   });
 
-  it('si la sesión ya está viva al montar (cookie), entra directo sin pedir la clave, y no manda clave vacía en las lecturas', async () => {
+  it('si la sesión ya está viva al montar (cookie), entra directo sin pedir usuario ni clave', async () => {
     // Mata el mutante "la sonda nunca entra": con `sesionActiva`,
-    // `/api/cotizacion/catalogo` responde bien a la sonda (sin `clave` en
-    // el cuerpo) porque hay una cookie válida — la pantalla de clave no
-    // debería aparecer en ningún momento.
+    // `/api/cotizacion/catalogo` responde bien a la sonda porque hay una
+    // cookie válida — la pantalla de acceso no debería aparecer en ningún
+    // momento.
     const fetchEspiado = mockFetch({ sesionActiva: true });
     render(<Cotizador />);
 
     await waitFor(() => {
       expect(screen.getByLabelText(/buscar/i)).toBeInTheDocument();
     });
+    expect(screen.queryByLabelText(/usuario/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^clave$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^entrar$/i })).not.toBeInTheDocument();
 
-    // Ronda de correcciones 1 (hallazgo menor): sin una clave conocida
-    // (se entró por cookie, nunca se escribió una), la cola de borradores
-    // —que se pide sola al montar `VistaCrear`— no debe mandar `clave: ''`
-    // de peso muerto en el cuerpo.
+    // La cola de borradores —que se pide sola al montar `VistaCrear`— no
+    // manda ninguna credencial en el cuerpo: la sesión por cookie ya
+    // alcanza, y desde la Fase 3 no hay ninguna clave que arrastrar de más.
     await waitFor(() => {
       const llamada = fetchEspiado.mock.calls.find(([input]) =>
         (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/borradores'),
@@ -1248,7 +1285,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
       (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/borradores'),
     );
     const cuerpoBorradores = JSON.parse((llamadaBorradores![1] as RequestInit).body as string);
-    expect('clave' in cuerpoBorradores).toBe(false);
+    expect(cuerpoBorradores).toEqual({});
   });
 
   it('si el envío final vuelve con 401 (token anti-CSRF rancio), avisa por qué y NO pierde la cotización a medio armar', async () => {
@@ -1272,14 +1309,14 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     });
     await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
 
-    // Vuelve a pedir la clave — pero con una explicación, no un formulario
-    // en blanco sin contexto.
+    // Vuelve a pedir usuario y clave — pero con una explicación, no un
+    // formulario en blanco sin contexto.
     await waitFor(() => {
       expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/tu sesión venció/i)).toBeInTheDocument();
 
-    // Lo armado sigue ahí, debajo de la pantalla de clave — no se perdió.
+    // Lo armado sigue ahí, debajo de la pantalla de acceso — no se perdió.
     // (`getByLabelText(/cantidad/i)` es unívoco: solo la línea agregada lo
     // tiene, a diferencia de "set de 600 hilos king" en texto, que también
     // aparece en el resultado del buscador porque `busqueda` no se limpia
@@ -1301,6 +1338,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
 
     // Al reautenticarse, sigue exactamente donde estaba: no hay que
     // rearmar nada de cero.
+    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
     await usuario.click(screen.getByRole('button', { name: /^entrar$/i }));
 

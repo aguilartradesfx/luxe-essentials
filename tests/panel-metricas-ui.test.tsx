@@ -53,7 +53,7 @@ function mockFetch(opciones: { status?: number; cuerpo?: unknown } = {}) {
 function renderVista() {
   const onSesionInvalida = vi.fn();
   const onVerFallidas = vi.fn();
-  render(<VistaMetricas clave="correcta" onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />);
+  render(<VistaMetricas onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />);
   return { onSesionInvalida, onVerFallidas };
 }
 

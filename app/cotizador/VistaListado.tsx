@@ -56,14 +56,6 @@ function numeroDe(valor: unknown): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? valor : 0;
 }
 
-// Mismo helper que `conClave` en VistaCrear.tsx, duplicado a propósito
-// (misma nota: esta pantalla es de cliente, no puede importar código del
-// servidor). `clave` vacía significa "la sesión por cookie ya alcanza" — no
-// hay credencial que mandar de más.
-function conClave(clave: string, resto: Record<string, unknown>): Record<string, unknown> {
-  return clave ? { clave, ...resto } : resto;
-}
-
 function formatearFecha(iso: string): string {
   const f = new Date(iso);
   if (Number.isNaN(f.getTime())) return iso;
@@ -139,9 +131,6 @@ const OPCIONES_FILTRO: { valor: string; etiqueta: string }[] = [
 ];
 
 type Props = {
-  // La clave escrita al entrar por formulario; vacía cuando la sesión ya
-  // estaba viva por cookie (ver Panel.tsx y VistaCrear.tsx).
-  clave: string;
   // Token anti-CSRF vigente, para las dos acciones que escriben (cerrar,
   // reenviar). Mismo mecanismo que usa VistaCrear.
   obtenerCsrf: () => string | null;
@@ -166,7 +155,6 @@ type Props = {
 };
 
 export function VistaListado({
-  clave,
   obtenerCsrf,
   onSesionInvalida,
   onDuplicar,
@@ -211,7 +199,7 @@ export function VistaListado({
       const res = await fetch('/api/cotizacion/listado', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(conClave(clave, estadoParaServidor ? { estado: estadoParaServidor } : {})),
+        body: JSON.stringify(estadoParaServidor ? { estado: estadoParaServidor } : {}),
       });
       const datos = await res.json();
       if (estaCancelado()) return;
@@ -270,14 +258,7 @@ export function VistaListado({
           // Regla de seguridad 1: /cerrar escribe, exige el token anti-CSRF.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
-        // Ronda de correcciones final (hallazgo crítico): `clave` vuelve al
-        // cuerpo de las tres rutas que escriben (ver el comentario de
-        // `conClave`, arriba) — antes solo `duplicar()` (de lectura) la
-        // llevaba, y las que escriben dependían enteramente de la cookie +
-        // el token anti-CSRF, sin respaldo si el navegador rechazaba la
-        // cookie (algo que nadie había probado todavía dentro de un iframe
-        // real de GoHighLevel).
-        body: JSON.stringify(conClave(clave, { id, estado, ...(motivo ? { motivo } : {}) })),
+        body: JSON.stringify({ id, estado, ...(motivo ? { motivo } : {}) }),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {
@@ -310,7 +291,7 @@ export function VistaListado({
       const res = await fetch('/api/cotizacion/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(conClave(clave, { id: fila.id })),
+        body: JSON.stringify({ id: fila.id }),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {
@@ -340,9 +321,7 @@ export function VistaListado({
           // Regla de seguridad 1: /reenviar también escribe.
           ...(csrf ? { 'x-csrf-token': csrf } : {}),
         },
-        // Mismo motivo que en `cerrar()`, arriba: `clave` vuelve al cuerpo
-        // como respaldo de la cookie + CSRF.
-        body: JSON.stringify(conClave(clave, { id })),
+        body: JSON.stringify({ id }),
       });
       const datos = await res.json();
       // OJO — contrato de /reenviar (task-8-report.md): `res.ok` NO
@@ -382,7 +361,7 @@ export function VistaListado({
       const res = await fetch('/api/cotizacion/duplicar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(conClave(clave, { id: fila.id })),
+        body: JSON.stringify({ id: fila.id }),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {

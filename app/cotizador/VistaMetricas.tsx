@@ -35,14 +35,6 @@ type Metricas = {
   fallidas: number;
 };
 
-// Mismo helper que `conClave` en VistaListado.tsx/VistaCrear.tsx, duplicado
-// a propósito: esta pantalla es de cliente y no puede importar código del
-// servidor. `clave` vacía significa "la sesión por cookie ya alcanza" — no
-// hay credencial que mandar de más.
-function conClave(clave: string, resto: Record<string, unknown>): Record<string, unknown> {
-  return clave ? { clave, ...resto } : resto;
-}
-
 // Concordancia de número: "1 vence" / "2 vencen", no "1 vencen". Sin esto el
 // caso más común -- una sola cotización por vencer -- lee mal justo en el
 // bloque más accionable de los seis.
@@ -65,9 +57,6 @@ function formatearDiferencia(actual: number, anterior: number): string {
 const TOP_PRODUCTOS = 5;
 
 type Props = {
-  // La clave escrita al entrar por formulario; vacía cuando la sesión ya
-  // estaba viva por cookie (ver Panel.tsx).
-  clave: string;
   // Mismo mecanismo que ya tiene Panel para un 401 a mitad de trabajo: no
   // se inventa uno nuevo acá.
   onSesionInvalida: () => void;
@@ -78,7 +67,7 @@ type Props = {
   onVerFallidas: () => void;
 };
 
-export function VistaMetricas({ clave, onSesionInvalida, onVerFallidas }: Props) {
+export function VistaMetricas({ onSesionInvalida, onVerFallidas }: Props) {
   const [metricas, setMetricas] = useState<Metricas | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
@@ -92,7 +81,7 @@ export function VistaMetricas({ clave, onSesionInvalida, onVerFallidas }: Props)
         const res = await fetch('/api/cotizacion/metricas', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(conClave(clave, {})),
+          body: JSON.stringify({}),
         });
         const datos = await res.json();
         if (cancelado) return;

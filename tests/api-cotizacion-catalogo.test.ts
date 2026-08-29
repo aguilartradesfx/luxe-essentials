@@ -77,6 +77,18 @@ describe('POST /api/cotizacion/catalogo', () => {
     expect(cuerpo.skus).toHaveLength(CATALOGO.length);
   });
 
+  // Tarea 5 (usuarios del panel): `Panel.tsx` usa esta misma ruta como
+  // sonda de sesión al montar y como verificación tras `/entrar` — en
+  // ninguno de los dos casos vuelve a pasar por `/entrar`, así que el
+  // nombre del vendedor solo puede llegarle desde acá.
+  it('devuelve el vendedor de la sesión junto al token', async () => {
+    const { cookie } = emitirSesion('Guillermo Rojas');
+    const res = await POST(peticion({}, { cookie: cookie.split(';')[0] }));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.vendedor).toBe('Guillermo Rojas');
+  });
+
   // --- Ronda de correcciones 1 (Tarea 9, hallazgo crítico) ---
   //
   // Esta ruta es la sonda que usa `Panel.tsx` para saber si ya hay una

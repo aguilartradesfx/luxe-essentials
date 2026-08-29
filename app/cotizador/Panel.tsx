@@ -10,7 +10,7 @@ import { VistaMetricas } from './VistaMetricas';
 // Lo único que el vendedor necesita para buscar y elegir un SKU. Nada de
 // `precioLista` ni `grupo`: eso es la lista de precios de Luxe, y esta forma
 // es la que de verdad viaja al navegador (la sirve `/api/cotizacion/catalogo`,
-// tras clave). Ver Tarea 8. Exportado: `VistaCrear` lo necesita para tipar el
+// tras sesión). Ver Tarea 8. Exportado: `VistaCrear` lo necesita para tipar el
 // catálogo que recibe por props.
 export type SkuUI = { id: string; nombre: string; familia: string };
 
@@ -50,9 +50,9 @@ function guardarCsrf(csrf: string) {
   } catch {
     // `sessionStorage` puede no estar disponible (modo privado agresivo,
     // política de cookies del iframe, etc.). Sin el token, las peticiones
-    // que escriben simplemente no llevan la cabecera y el servidor cae de
-    // vuelta en la vía de la clave si todavía la tiene — no hay nada más
-    // que hacer acá.
+    // que escriben simplemente no llevan la cabecera y el servidor las
+    // rechaza con 401 — desde la Fase 3 no hay ninguna otra vía: no hay
+    // nada más que hacer acá.
   }
 }
 
@@ -90,12 +90,13 @@ export default function Panel() {
   // en la primera entrada (no hace falta explicar nada todavía).
   const [mensajePantallaClave, setMensajePantallaClave] = useState<string | null>(null);
   const [skus, setSkus] = useState<SkuUI[]>([]);
-  // La clave escrita al entrar por formulario. Se guarda en memoria (no en
-  // `sessionStorage`, a diferencia del token anti-CSRF): perderla en una
-  // recarga es aceptable —la sesión por cookie es la que evita pedirla de
-  // nuevo— y no es un secreto que valga la pena persistir aparte. Queda
-  // vacía cuando se entra por la sonda de sesión (sin clave conocida).
-  const [clave, setClave] = useState('');
+  // A quién pertenece la sesión — se muestra en la cabecera ("Sesión de
+  // Guillermo Rojas") para que sea visible con qué cuenta se está
+  // trabajando. Llega en la respuesta de `/entrar` la primera vez, y en la
+  // de `/api/cotizacion/catalogo` en cada recarga (la cookie es `HttpOnly`,
+  // así que `Panel` no puede leerla directo para saber de quién es).
+  // `null` hasta que alguna de las dos respuestas lo entregue.
+  const [vendedor, setVendedor] = useState<string | null>(null);
   const [pestana, setPestana] = useState<Pestana>('crear');
   // Tarea 10 ("Duplicar"): lo que precarga en `VistaCrear`. `VistaListado`
   // no decide nada más — arma el dato y lo manda para acá; `Panel` decide
@@ -151,6 +152,12 @@ export default function Panel() {
         setSkus(datos.skus);
         setDentro(true);
         setPidiendoClave(false);
+        // Tarea 5 (usuarios del panel): esta respuesta también trae el
+        // nombre del vendedor dueño de la cookie — sin esto, un refresco
+        // dejaría el panel con sesión pero sin saber de quién es (el nombre
+        // solo llega, si no, en la respuesta de `/entrar`, que ocurre una
+        // sola vez).
+        if (typeof datos.vendedor === 'string') setVendedor(datos.vendedor);
         // Esta respuesta trae el token anti-CSRF derivado de la cookie que
         // acaba de demostrarse válida (ver app/api/cotizacion/catalogo/route.ts):
         // guardarlo acá repara `sessionStorage` en cualquier pestaña donde
@@ -168,44 +175,47 @@ export default function Panel() {
     };
   }, []);
 
-  // Cambia la clave por una cookie de sesión más un token anti-CSRF
-  // (`/api/cotizacion/entrar`, Tarea 6). Nunca lanza: sus ramas de fallo
-  // (status no-ok, respuesta sin `csrf`, cookie que no llegó a fijarse,
-  // excepción de red) se registran con `console.error` y devuelven sin más —
-  // el llamador (`onEntrar`, abajo) decide qué hacer con eso.
+  // Cambia el usuario y la clave por una cookie de sesión más un token
+  // anti-CSRF (`/api/cotizacion/entrar`, Tarea 6), y de paso trae el
+  // catálogo — desde la Fase 3 ninguna otra ruta lo sirve sin cookie válida.
+  // Nunca lanza: cualquier rama de fallo (credenciales rechazadas, cookie
+  // que no llegó a fijarse, excepción de red) vuelve como `{ ok: false,
+  // error }`; el llamador (`onEntrar`, abajo) decide qué hacer con eso.
   //
-  // Ronda de correcciones final (hallazgo crítico): un 200 de `/entrar` solo
+  // Tarea 5 (usuarios del panel), reescrito: hasta la Tarea 4 esta función
+  // era un best-effort — si la verificación de abajo fallaba, solo dejaba un
+  // `console.error` y seguía, porque las tres rutas que escriben también
+  // aceptaban la clave compartida en el cuerpo como respaldo. Esa vía ya no
+  // existe (`autenticarPeticion`, lib/autenticacion-cotizador.ts, solo mira
+  // la cookie): un panel que "entra" sin cookie real detrás quedaría
+  // leyendo, sin poder guardar nada, sin decírselo a nadie — el peor modo de
+  // fallo posible. Por eso ahora la verificación GATEA la entrada: si no se
+  // puede confirmar que la cookie de verdad cuajó en este navegador, esta
+  // función devuelve el error y `onEntrar` no deja pasar al vendedor.
+  //
+  // La verificación en sí no cambió de mecanismo: un 200 de `/entrar` solo
   // prueba que el servidor INTENTÓ fijar la cookie (mandó `Set-Cookie` en la
   // respuesta) — no que el navegador la aceptó. La cookie es `HttpOnly`: este
   // código no puede leerla directo para comprobarlo, y dentro de un iframe
   // real de GoHighLevel (`SameSite=None` + `Partitioned`) nada garantiza que
-  // el navegador la conserve — es exactamente el escenario que nadie había
-  // probado todavía. Antes esto se asumía sin más; ahora se VERIFICA con una
-  // lectura real, apoyada solo en la cookie (sin `clave` en el cuerpo): si el
-  // servidor la valida (`/api/cotizacion/catalogo` sin clave, mismo endpoint
-  // que usa la sonda de sesión al montar), la cookie de verdad llegó, y solo
-  // entonces se guarda el token anti-CSRF que esa misma respuesta trae. Si la
-  // verificación falla, no se guarda ningún token — uno guardado "por si
-  // acaso" sin cookie real detrás sería inútil de todos modos (`sesionValida`
-  // lo rechazaría) y solo ensuciaría `sessionStorage`. Esto no dificulta
-  // nada: las tres rutas que escriben también aceptan `clave` en el cuerpo
-  // (ver `conClave` en VistaCrear.tsx/VistaListado.tsx), así que una cookie
-  // que nunca cuajó no deja al vendedor sin forma de guardar en esta pestaña.
-  async function establecerSesion(claveIngresada: string) {
+  // el navegador la conserve. Por eso se hace una lectura real, apoyada solo
+  // en la cookie (`/api/cotizacion/catalogo`, mismo endpoint que usa la
+  // sonda de sesión al montar): si el servidor la valida, la cookie de
+  // verdad llegó, y esa misma respuesta trae el catálogo, el token anti-CSRF
+  // y el vendedor.
+  async function establecerSesion(
+    usuario: string,
+    claveIngresada: string,
+  ): Promise<{ ok: true; skus: SkuUI[]; vendedor: string } | { ok: false; error: string }> {
     try {
       const res = await fetch('/api/cotizacion/entrar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clave: claveIngresada }),
+        body: JSON.stringify({ usuario, clave: claveIngresada }),
       });
-      if (!res.ok) {
-        console.error('[cotizador] No se pudo establecer la sesión por cookie.', res.status);
-        return;
-      }
-      const datos = await res.json();
-      if (!datos.ok || typeof datos.csrf !== 'string') {
-        console.error('[cotizador] /entrar respondió sin token anti-CSRF.');
-        return;
+      const datos = await res.json().catch(() => null);
+      if (!res.ok || !datos?.ok) {
+        return { ok: false, error: datos?.error ?? `Error ${res.status}` };
       }
 
       const verificacion = await fetch('/api/cotizacion/catalogo', {
@@ -215,18 +225,25 @@ export default function Panel() {
       });
       const datosVerificacion = await verificacion.json().catch(() => null);
       if (!verificacion.ok || !datosVerificacion?.ok || typeof datosVerificacion.csrf !== 'string') {
-        console.error(
-          '[cotizador] La cookie de sesión no quedó establecida en el navegador (¿bloqueada dentro del iframe?). ' +
-            'Las rutas que escriben seguirán funcionando por la clave, mandada en el cuerpo de cada una.',
-        );
-        return;
+        return {
+          ok: false,
+          error:
+            'No pudimos abrir tu sesión en este navegador. Si estás viendo el panel dentro de ' +
+            'GoHighLevel, abrilo en una pestaña aparte.',
+        };
       }
       guardarCsrf(datosVerificacion.csrf);
+      return {
+        ok: true,
+        skus: datosVerificacion.skus,
+        vendedor: typeof datosVerificacion.vendedor === 'string' ? datosVerificacion.vendedor : datos.vendedor,
+      };
     } catch (e) {
       console.error(
         '[cotizador] No se pudo establecer la sesión por cookie (fallo de red).',
         e instanceof Error ? e.message : String(e),
       );
+      return { ok: false, error: 'Fallo de red.' };
     }
   }
 
@@ -247,7 +264,6 @@ export default function Panel() {
   // donde estaba.
   function onSesionInvalida() {
     limpiarCsrf();
-    setClave('');
     setMensajePantallaClave(MENSAJE_SESION_VENCIDA);
     setPidiendoClave(true);
   }
@@ -275,40 +291,20 @@ export default function Panel() {
     setPlantilla(null);
   }
 
-  // La pantalla de clave: sin ella no hay catálogo. `/api/cotizacion/catalogo`
-  // es quien valida la clave y quien decide qué SKUs bajan al navegador (sin
-  // precios). Al estilo de app/q7m4/Taller.tsx.
-  async function onEntrar(claveIngresada: string): Promise<string | null> {
-    try {
-      const res = await fetch('/api/cotizacion/catalogo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clave: claveIngresada }),
-      });
-      const datos = await res.json();
-      if (!res.ok || !datos.ok) {
-        return res.status === 401 ? 'Clave incorrecta.' : (datos.error ?? `Error ${res.status}`);
-      }
-      // Ronda de correcciones 2 (hallazgo importante): antes esta llamada
-      // se disparaba sin esperarla, para no demorar la entrada. Pero
-      // `crear()` (VistaCrear.tsx) ya no manda la clave en el cuerpo desde
-      // la ronda anterior — depende enteramente de que esta sesión ya esté
-      // establecida. Sin esperar, el primer envío podía ganarle la carrera
-      // a esta llamada y volver con un 401 evitable. Se espera acá: nunca
-      // lanza (ver su propio try/catch), así que no puede dejar al
-      // vendedor afuera si falla — solo demora unos cientos de ms el
-      // "Entrando…" para que, en el camino feliz, el token ya esté listo
-      // antes del primer clic en "Cotizar y enviar".
-      await establecerSesion(claveIngresada);
-      setSkus(datos.skus);
-      setClave(claveIngresada);
-      setDentro(true);
-      setPidiendoClave(false);
-      setMensajePantallaClave(null);
-      return null;
-    } catch {
-      return 'Fallo de red.';
-    }
+  // La pantalla de acceso: sin usuario y clave válidos no hay catálogo.
+  // `establecerSesion` (arriba) hace todo el trabajo — autentica, verifica
+  // que la cookie haya cuajado en este navegador y trae el catálogo—; acá
+  // solo se traduce ese resultado a estado de React. Al estilo de
+  // app/q7m4/Taller.tsx.
+  async function onEntrar(usuario: string, claveIngresada: string): Promise<string | null> {
+    const resultado = await establecerSesion(usuario, claveIngresada);
+    if (!resultado.ok) return resultado.error;
+    setSkus(resultado.skus);
+    setVendedor(resultado.vendedor);
+    setDentro(true);
+    setPidiendoClave(false);
+    setMensajePantallaClave(null);
+    return null;
   }
 
   return (
@@ -331,6 +327,11 @@ export default function Panel() {
               Armá la cotización por SKU. Los precios y descuentos los calcula el mismo motor que
               usa el servidor — lo que ves acá es exactamente lo que va a facturarse.
             </p>
+            {/* Tarea 5 (usuarios del panel): antes había una sola clave compartida
+                para todo el equipo, así que no había con qué llenar esto. Ahora
+                cada vendedor entra con su propia cuenta — mostrar de quién es la
+                sesión hace visible con qué credencial se está trabajando. */}
+            {vendedor && <p className="mt-1 text-xs text-teal">Sesión de {vendedor}</p>}
           </header>
 
           {/* Tres pestañas (Tarea 9): solo "Crear" tiene contenido hoy —lo que ya
@@ -379,7 +380,6 @@ export default function Panel() {
             <div hidden={pestana !== 'crear'}>
               <VistaCrear
                 skus={skus}
-                clave={clave}
                 obtenerCsrf={obtenerCsrf}
                 onSesionInvalida={onSesionInvalida}
                 plantilla={plantilla}
@@ -388,7 +388,6 @@ export default function Panel() {
             </div>
             {pestana === 'cotizaciones' && (
               <VistaListado
-                clave={clave}
                 obtenerCsrf={obtenerCsrf}
                 onSesionInvalida={onSesionInvalida}
                 onDuplicar={onDuplicar}
@@ -397,7 +396,7 @@ export default function Panel() {
               />
             )}
             {pestana === 'metricas' && (
-              <VistaMetricas clave={clave} onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />
+              <VistaMetricas onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />
             )}
           </div>
         </main>

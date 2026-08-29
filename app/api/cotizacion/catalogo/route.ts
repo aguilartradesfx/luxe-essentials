@@ -61,5 +61,13 @@ export async function POST(request: Request) {
   const esCrossSite = request.headers.get('sec-fetch-site') === 'cross-site';
   const csrf = esCrossSite ? null : csrfDeSesion(request);
 
-  return NextResponse.json({ ok: true, skus, ...(csrf ? { csrf } : {}) });
+  // Tarea 5 (usuarios del panel): esta es también la sonda que `Panel.tsx`
+  // usa para confirmar, tras `/entrar`, que la cookie de verdad cuajó en el
+  // navegador — y la que reconfirma la sesión en cada recarga del iframe. En
+  // ambos casos el nombre del vendedor solo llegó una vez, en la respuesta de
+  // `/entrar`; sin repetirlo acá, un refresco dejaría al panel con sesión
+  // pero sin saber de quién es. `auth.vendedor` sale de la misma cookie que
+  // ya se validó arriba — no es un dato nuevo que este endpoint decida exponer
+  // de más.
+  return NextResponse.json({ ok: true, skus, vendedor: auth.vendedor, ...(csrf ? { csrf } : {}) });
 }
