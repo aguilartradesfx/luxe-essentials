@@ -2,10 +2,20 @@ import 'server-only';
 import { verificarClave, gastarTiempoDeHash } from '@/lib/cotizador/credenciales.mjs';
 
 // Mismo tipo inyectable que `lib/agente/estado.ts`: permite probar la lógica de
-// intentos y bloqueo sin una base de datos.
-export type Db = { from: (tabla: string) => any };
+// intentos y bloqueo sin una base de datos. Desde la revisión final incluye
+// `rpc`: el conteo de intentos fallidos lo hace la base (ver `registrarFallo`,
+// más abajo), así que el doble de pruebas tiene que saber responderlo.
+export type Db = {
+  from: (tabla: string) => any;
+  // `PromiseLike` y no `Promise`: el cliente de Supabase devuelve un
+  // constructor de consultas que sólo es *thenable*, no una promesa real.
+  rpc: (nombre: string, argumentos: Record<string, unknown>) => PromiseLike<{ data: any; error: any }>;
+};
 
 const TABLA = 'usuarios_panel';
+// Nombre de la función de Postgres que cuenta el fallo y bloquea, en una sola
+// sentencia (supabase/migrations/0013_usuarios_panel_intento_fallido.sql).
+const RPC_INTENTO_FALLIDO = 'usuarios_panel_intento_fallido';
 
 // Cinco fallos seguidos y quince minutos. Es lo que hace que una tabla de
 // credenciales sea mejor que una clave compartida y no sólo distinta: sin
@@ -81,18 +91,8 @@ export async function autenticarUsuario(
   const coincide = await verificarClave(clave, fila.clave_hash, fila.clave_sal);
 
   if (!coincide) {
-    const intentos = fila.intentos + 1;
-    if (intentos >= MAX_INTENTOS) {
-      const hasta = new Date(ahora.getTime() + BLOQUEO_MINUTOS * 60 * 1000);
-      // El contador vuelve a cero junto con el bloqueo: si se dejara en el
-      // máximo, el primer fallo después de vencer el bloqueo volvería a
-      // bloquear de inmediato y la cuenta quedaría en un ciclo del que sólo se
-      // sale por consola.
-      await escribir(db, fila.id, { intentos: 0, bloqueado_hasta: hasta.toISOString() });
-      return { ok: false, motivo: 'bloqueado' };
-    }
-    await escribir(db, fila.id, { intentos });
-    return { ok: false, motivo: 'credenciales' };
+    const bloqueada = await registrarFallo(db, fila.id, ahora);
+    return { ok: false, motivo: bloqueada ? 'bloqueado' : 'credenciales' };
   }
 
   await escribir(db, fila.id, {
@@ -103,9 +103,43 @@ export async function autenticarUsuario(
   return { ok: true, nombre: fila.nombre };
 }
 
-// No lanza: si falla el registro del intento o del último acceso, la decisión
-// de dejar entrar (o no) ya está tomada y es correcta. Hacer fallar la entrada
-// por no poder anotar la contabilidad sería peor que perder la anotación.
+// Cuenta un intento fallido y, si toca, bloquea la cuenta. Devuelve si quedó
+// bloqueada, para que la ruta pueda distinguir los dos motivos de rechazo.
+//
+// Revisión final, Importante 2: esto era un lee-modifica-escribe. Se leía
+// `fila.intentos`, se sumaba uno en JavaScript y se escribía el valor absoluto
+// — así que cien peticiones concurrentes leían todas `0` y escribían todas
+// `1`. El atacante no obtenía cinco intentos sino cinco TANDAS de tamaño
+// arbitrario, que es un debilitamiento de dos órdenes de magnitud sobre el
+// único control que hace que una tabla de credenciales sea mejor que una clave
+// compartida. Ahora el incremento y el bloqueo son una sola sentencia dentro
+// de la base, sobre la fila que Postgres bloquea mientras la modifica.
+//
+// No lanza, por el mismo motivo que `escribir`: la decisión de rechazar ya
+// está tomada y es correcta. Si la base no puede anotar el fallo, se pierde la
+// anotación —y se registra ruidosamente— pero no se convierte un rechazo en un
+// 500. El caso degradado es "sin contador", no "sin rechazo".
+async function registrarFallo(db: Db, id: string, ahora: Date): Promise<boolean> {
+  const { data, error } = await db.rpc(RPC_INTENTO_FALLIDO, {
+    p_id: id,
+    p_max_intentos: MAX_INTENTOS,
+    p_bloqueo_minutos: BLOQUEO_MINUTOS,
+    p_ahora: ahora.toISOString(),
+  });
+  if (error) {
+    console.error(
+      '[cotizador] No se pudo contar el intento fallido del panel.',
+      id,
+      error.message,
+    );
+    return false;
+  }
+  return data === true;
+}
+
+// No lanza: si falla el registro del último acceso, la decisión de dejar entrar
+// ya está tomada y es correcta. Hacer fallar la entrada por no poder anotar la
+// contabilidad sería peor que perder la anotación.
 async function escribir(db: Db, id: string, cambios: Record<string, unknown>): Promise<void> {
   const { error } = await db.from(TABLA).update(cambios).eq('id', id);
   if (error) {
