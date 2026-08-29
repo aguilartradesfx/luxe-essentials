@@ -24,7 +24,7 @@ const valido = {
 
 describe('POST /api/cotizacion/previsualizar', () => {
   beforeEach(() => {
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
   });
 
   it('rechaza sin sesión', async () => {

@@ -47,7 +47,7 @@ function peticionAutenticada(cuerpo: unknown) {
 
 describe('POST /api/cotizacion/borradores', () => {
   beforeEach(() => {
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
     // `filtros` vive fuera del módulo mockeado (es del propio archivo de
     // prueba), así que sin este reset se va acumulando entre pruebas: la de
     // "devuelve los borradores pendientes" ya deja dos entradas antes de que

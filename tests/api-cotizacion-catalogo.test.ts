@@ -20,7 +20,7 @@ function peticionAutenticada(cuerpo: unknown) {
 
 describe('POST /api/cotizacion/catalogo', () => {
   beforeEach(() => {
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
   });
 
   it('rechaza sin sesión', async () => {
@@ -99,7 +99,7 @@ describe('POST /api/cotizacion/catalogo', () => {
   // ya demuestra que le pertenece.
   describe('token anti-CSRF en la respuesta cuando la entrada es por cookie', () => {
     beforeEach(() => {
-      process.env.LUXE_TALLER_CLAVE = 'secreta';
+      process.env.LUXE_SESION_SECRETO = 'secreta';
     });
 
     it('con cookie válida y sin clave, la respuesta trae el csrf que le corresponde a esa cookie', async () => {

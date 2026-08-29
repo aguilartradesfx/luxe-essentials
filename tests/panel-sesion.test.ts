@@ -1,5 +1,6 @@
 // tests/panel-sesion.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 import { emitirSesion, sesionValida, csrfValido, csrfDeSesion, nombreDeSesion } from '@/lib/sesion';
 
 function conCookie(valor: string, cabeceras: Record<string, string> = {}) {
@@ -8,7 +9,7 @@ function conCookie(valor: string, cabeceras: Record<string, string> = {}) {
 
 describe('sesión', () => {
   beforeEach(() => {
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
   });
 
   it('la cookie es httpOnly, secure y sameSite=none', () => {
@@ -40,8 +41,67 @@ describe('sesión', () => {
   it('rechaza una sesión firmada con otra clave', () => {
     const { cookie } = emitirSesion('Guillermo Rojas');
     const valor = cookie.split(';')[0];
-    process.env.LUXE_TALLER_CLAVE = 'otra';
+    process.env.LUXE_SESION_SECRETO = 'otra';
     expect(sesionValida(conCookie(valor))).toBe(false);
+  });
+
+  // --- Revisión final, Crítico 1: la clave del taller ya no firma nada ---
+  // `LUXE_TALLER_CLAVE` NO es un secreto de servidor: es la contraseña que un
+  // humano teclea en /q7m4, viaja en el cuerpo de cada petición a /api/q7m4 y
+  // queda en texto plano en `sessionStorage`. Mientras firmara esta cookie,
+  // quien la conociera podía fabricarse una sesión válida a nombre de quien
+  // quisiera — sin fila en `usuarios_panel`, sin `activo`, sin contador de
+  // intentos. Estas dos pruebas anclan el corte: la firma sale ahora de
+  // `LUXE_SESION_SECRETO`, y NO hay respaldo a la clave del taller.
+  describe('LUXE_TALLER_CLAVE ya no es la llave del panel', () => {
+    // Fabrica una cookie con el formato exacto que produce `emitirSesion`
+    // (`<emitidoEn>.<nombre en base64url>.<firma>`), pero firmada con el
+    // secreto que se le pase. Con `LUXE_TALLER_CLAVE` es exactamente lo que
+    // podía armar cualquiera que hubiera usado el taller.
+    function cookieFirmadaCon(secreto: string, nombre: string): string {
+      const emitidoEn = String(Date.now());
+      const codificado = Buffer.from(nombre, 'utf8').toString('base64url');
+      const contenido = `${emitidoEn}.${codificado}`;
+      const firma = createHmac('sha256', secreto).update(contenido).digest('hex');
+      return `luxe_sesion=${contenido}.${firma}`;
+    }
+
+    it('una cookie firmada con LUXE_TALLER_CLAVE no valida', () => {
+      process.env.LUXE_SESION_SECRETO = 'secreto-de-firma-del-panel';
+      process.env.LUXE_TALLER_CLAVE = 'la-clave-que-se-teclea-en-q7m4';
+
+      const forjada = cookieFirmadaCon(
+        process.env.LUXE_TALLER_CLAVE,
+        'Vendedor Despedido',
+      );
+      expect(sesionValida(conCookie(forjada))).toBe(false);
+      expect(nombreDeSesion(conCookie(forjada))).toBeNull();
+      expect(csrfDeSesion(conCookie(forjada))).toBeNull();
+
+      // Control: la misma fábrica, con el secreto correcto, SÍ produce una
+      // sesión válida. Sin esto, la prueba de arriba pasaría también si la
+      // fábrica estuviera mal armada y nunca validara nada.
+      const legitima = cookieFirmadaCon(
+        process.env.LUXE_SESION_SECRETO,
+        'Guillermo Rojas',
+      );
+      expect(nombreDeSesion(conCookie(legitima))).toBe('Guillermo Rojas');
+    });
+
+    it('sin LUXE_SESION_SECRETO no hay respaldo: no se emite ni se valida ninguna sesión', () => {
+      process.env.LUXE_SESION_SECRETO = 'secreto-de-firma-del-panel';
+      const { cookie } = emitirSesion('Guillermo Rojas');
+      const valor = cookie.split(';')[0];
+
+      delete process.env.LUXE_SESION_SECRETO;
+      process.env.LUXE_TALLER_CLAVE = 'la-clave-que-se-teclea-en-q7m4';
+
+      expect(() => emitirSesion('Guillermo Rojas')).toThrow(/LUXE_SESION_SECRETO/);
+      expect(sesionValida(conCookie(valor))).toBe(false);
+      expect(
+        sesionValida(conCookie(cookieFirmadaCon('la-clave-que-se-teclea-en-q7m4', 'X'))),
+      ).toBe(false);
+    });
   });
 
   it('el token anti-CSRF debe coincidir con el de la sesión', () => {
@@ -123,7 +183,7 @@ describe('sesión', () => {
   // --- Ronda de correcciones 1 (Tarea 9, hallazgo crítico) ---
   describe('csrfDeSesion: deriva el token anti-CSRF de una cookie ya válida', () => {
     beforeEach(() => {
-      process.env.LUXE_TALLER_CLAVE = 'secreta';
+      process.env.LUXE_SESION_SECRETO = 'secreta';
     });
 
     it('con cookie válida, devuelve el mismo token que csrfValido acepta', () => {
@@ -145,7 +205,7 @@ describe('sesión', () => {
     it('con una sesión firmada con otra clave, devuelve null', () => {
       const { cookie } = emitirSesion('Guillermo Rojas');
       const valor = cookie.split(';')[0];
-      process.env.LUXE_TALLER_CLAVE = 'otra';
+      process.env.LUXE_SESION_SECRETO = 'otra';
       expect(csrfDeSesion(conCookie(valor))).toBeNull();
     });
   });

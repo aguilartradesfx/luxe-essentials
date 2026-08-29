@@ -50,9 +50,35 @@ seguir diciendo quién la hizo.
 ### `/q7m4` no se toca
 
 El banco de pruebas del agente usa hoy la misma clave. Al separarse, cada uno queda con la
-suya y ese sigue funcionando exactamente igual. **`LUXE_TALLER_CLAVE` sigue siendo el secreto
-con el que se firma la cookie de sesión** — eso es un secreto de servidor, no una credencial
-de usuario, y no cambia.
+suya y ese sigue funcionando exactamente igual.
+
+**Corrección de la revisión final (Crítico 1).** Este párrafo decía antes que
+`LUXE_TALLER_CLAVE` seguía siendo el secreto con el que se firma la cookie de sesión, y que
+eso estaba bien porque era "un secreto de servidor, no una credencial de usuario". Era falso,
+y de ahí salió el agujero.
+
+*Qué se creía:* que `LUXE_TALLER_CLAVE` era un secreto que sólo vive en el servidor, del mismo
+orden que una llave de firma. La afirmación venía de la fase 2 y se repitió acá sin volver a
+probar su premisa — y una decisión heredada que un diseño nuevo repite en voz alta es más
+peligrosa que una que sólo arrastra, porque repetirla se siente como haberla revisado.
+
+*Por qué era falso:* `LUXE_TALLER_CLAVE` es la contraseña que un humano teclea en el
+formulario de `/q7m4`. Viaja en el cuerpo de cada petición a `/api/q7m4` y queda en texto
+plano en `sessionStorage`, bajo la llave `taller-clave`, en toda máquina que haya abierto el
+taller. Era verdad que servía de secreto de firma mientras el panel se entrara con esa misma
+clave; dejó de serlo en el momento exacto en que esta fase cambió la puerta. Con la fase 3
+puesta, cualquiera que conociera esa clave podía fabricarse una cookie de sesión válida a
+nombre de quien quisiera: sin fila en `usuarios_panel`, sin `activo`, sin contador de
+intentos. Es decir, una llave maestra del panel justo para las personas frente a las que esta
+fase existe para cerrar la puerta.
+
+*Qué se hizo:* la cookie se firma ahora con **`LUXE_SESION_SECRETO`**, una variable nueva que
+nadie teclea y que no sale del servidor. **No hay respaldo a `LUXE_TALLER_CLAVE` si la nueva
+falta** — un respaldo conservaría el agujero entero: si falta, no se emite ni se valida
+ninguna sesión, que es el comportamiento que `lib/sesion.ts` ya tenía ante un secreto ausente.
+`LUXE_TALLER_CLAVE` sigue siendo la clave de `/q7m4` y ese endpoint no se tocó. Rotar
+`LUXE_SESION_SECRETO` saca a todo el equipo del panel de una vez y ya no toca a `/q7m4`, que
+es lo que hace practicable el procedimiento de dar de baja a alguien (ver README.md).
 
 ### Límite de intentos
 

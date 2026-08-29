@@ -91,7 +91,7 @@ const previsualizarValida = { lineas: [{ skuId: 'set-600-king', cantidad: 16 }] 
 
 describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
   beforeEach(() => {
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
   });
 
   describe('POST /api/cotizacion (escribe): exige CSRF cuando entra por cookie', () => {
@@ -247,7 +247,7 @@ function peticionEntrada(cuerpo: unknown) {
 describe('POST /api/cotizacion/entrar', () => {
   beforeEach(() => {
     vi.mocked(autenticarUsuario).mockReset();
-    process.env.LUXE_TALLER_CLAVE = 'secreto-de-firma';
+    process.env.LUXE_SESION_SECRETO = 'secreto-de-firma';
   });
 
   // Ronda de correcciones 1: el nombre moqueado es 'Marta Vargas' —

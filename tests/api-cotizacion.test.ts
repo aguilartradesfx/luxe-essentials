@@ -107,7 +107,7 @@ describe('POST /api/cotizacion', () => {
     insertado.length = 0;
     actualizados.length = 0;
     errorAlActualizar = null;
-    process.env.LUXE_TALLER_CLAVE = 'secreta';
+    process.env.LUXE_SESION_SECRETO = 'secreta';
     vi.mocked(crearEstimate).mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' });
     // `mockClear` (no `mockReset`): borra el historial de llamadas de la
     // prueba anterior sin perder el `mockResolvedValue` por defecto de cada

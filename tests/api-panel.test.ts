@@ -168,7 +168,7 @@ function conSesionYCsrf(url: string, cuerpo: unknown, cabeceras: Record<string, 
 }
 
 beforeEach(() => {
-  process.env.LUXE_TALLER_CLAVE = 'secreta';
+  process.env.LUXE_SESION_SECRETO = 'secreta';
   process.env.RESEND_API_KEY = 'llave';
   process.env.LUXE_CORREO_REMITENTE = 'Luxe Essentials <cotizaciones@luxe.cr>';
   process.env.LUXE_GHL_LOCATION_ID = 'location-de-prueba';

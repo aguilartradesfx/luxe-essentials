@@ -2,9 +2,9 @@ import 'server-only';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 // El panel vive embebido en un iframe de GoHighLevel (Tarea 6): la clave ya
-// no puede pedirse en cada carga de pantalla, así que además de la clave en
-// el cuerpo (que sigue siendo válida — la usan las rutas y sus pruebas) se
-// suma esta sesión por cookie.
+// no puede pedirse en cada carga de pantalla, y por eso existe esta sesión
+// por cookie. Desde la fase 3 es la ÚNICA credencial de las rutas del panel:
+// la clave en el cuerpo dejó de autenticar (ver lib/autenticacion-cotizador.ts).
 //
 // Tarea 3 (usuarios del panel): la cookie ya no solo prueba que hubo una
 // entrada válida — identifica a qué vendedor pertenece la sesión. El nombre
@@ -23,9 +23,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 // Ronda de correcciones 1: sin identificador de sesión ni lista de
 // revocación, una cookie filtrada es una credencial administrativa mientras
 // siga siendo válida. La única forma de cortarla a mano es rotar
-// `LUXE_TALLER_CLAVE` (deliberado, tumba a todos los vendedores a la vez) —
+// `LUXE_SESION_SECRETO` (deliberado, tumba a todos los vendedores a la vez) —
 // por eso la caducidad de abajo, verificada en el servidor y no solo
-// declarada en `Max-Age`, es la que de verdad acota el daño.
+// declarada en `Max-Age`, es la que de verdad acota el daño. Esa rotación es
+// también el segundo paso obligatorio para sacar a alguien del equipo: ver
+// lib/autenticacion-cotizador.ts y la sección del panel en README.md.
 
 const NOMBRE_COOKIE = 'luxe_sesion';
 const MAX_EDAD_SEGUNDOS = 60 * 60 * 24 * 30; // 30 días.
@@ -41,10 +43,25 @@ const MAX_EDAD_MS = MAX_EDAD_SEGUNDOS * 1000;
 const TOLERANCIA_RELOJ_MS = 60 * 1000;
 
 function secreto(): string {
-  // Firmar con la misma clave del taller: si `LUXE_TALLER_CLAVE` cambia,
-  // toda sesión viva deja de validar sola, sin lista de revocación aparte.
-  // Deliberado — ver Tarea 6.
-  return process.env.LUXE_TALLER_CLAVE ?? '';
+  // Revisión final, Crítico 1: hasta acá esta cookie se firmaba con
+  // `LUXE_TALLER_CLAVE`, con el argumento de que era "un secreto de servidor".
+  // No lo era: es la contraseña que una persona teclea en el formulario de
+  // `/q7m4`, viaja en el cuerpo de cada petición a `/api/q7m4` y queda en
+  // texto plano en el `sessionStorage` de toda máquina que haya usado el
+  // taller. Quien la conociera podía fabricarse una cookie válida para
+  // cualquier nombre — sin fila en `usuarios_panel`, sin `activo`, sin
+  // contador de intentos. Era la llave maestra del panel, justo para las
+  // personas frente a las que esta fase existe para cerrar la puerta.
+  //
+  // Ahora se firma con un secreto propio, que nadie teclea y que no sale del
+  // servidor. NO hay respaldo a `LUXE_TALLER_CLAVE` si esta falta, a
+  // propósito: un respaldo conservaría el agujero entero. Si falta, no se
+  // emite ni se valida ninguna sesión — el mismo comportamiento que esta
+  // función ya tenía ante un secreto ausente.
+  //
+  // `LUXE_TALLER_CLAVE` sigue existiendo y sigue siendo la clave de `/q7m4`,
+  // que no se toca.
+  return process.env.LUXE_SESION_SECRETO ?? '';
 }
 
 function firmar(valor: string): string {
@@ -108,7 +125,7 @@ function decodificarNombre(codificado: string): string | null {
 
 export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
   if (!secreto()) {
-    throw new Error('LUXE_TALLER_CLAVE no está configurada: no se puede emitir una sesión.');
+    throw new Error('LUXE_SESION_SECRETO no está configurada: no se puede emitir una sesión.');
   }
   // Una sesión sin vendedor no puede existir: firmaría cotizaciones con nadie.
   if (typeof nombre !== 'string' || nombre.trim().length === 0) {
