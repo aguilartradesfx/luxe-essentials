@@ -3,7 +3,7 @@ import { hashClave } from '@/lib/cotizador/credenciales.mjs';
 import { autenticarUsuario, MAX_INTENTOS, BLOQUEO_MINUTOS } from '@/lib/cotizador/usuarios';
 
 // Doble de la parte de PostgREST que usa `autenticarUsuario`: una lectura por
-// `lower(usuario)`, una escritura por id, y —desde la revisión final— la
+// `lower(correo)`, una escritura por id, y —desde la revisión final— la
 // llamada `rpc` que cuenta los intentos fallidos. Guarda lo escrito y lo
 // llamado para poder afirmar sobre ello.
 //
@@ -70,7 +70,7 @@ function db(
 async function filaDe(clave: string, extra: Record<string, unknown> = {}) {
   const { hash, sal } = await hashClave(clave);
   return {
-    id: 'u1', usuario: 'guillermo', nombre: 'Guillermo Rojas',
+    id: 'u1', correo: 'guillermo@luxe.cr', nombre: 'Guillermo Rojas', rol: 'vendedor',
     clave_hash: hash, clave_sal: sal,
     activo: true, intentos: 0, bloqueado_hasta: null,
     ...extra,
@@ -80,37 +80,72 @@ async function filaDe(clave: string, extra: Record<string, unknown> = {}) {
 describe('autenticarUsuario', () => {
   it('devuelve el nombre con la clave correcta', async () => {
     const { cliente } = db(await filaDe('Turrialba-2026'));
-    const r = await autenticarUsuario('guillermo', 'Turrialba-2026', cliente);
-    expect(r).toEqual({ ok: true, nombre: 'Guillermo Rojas' });
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
+    expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'vendedor' });
   });
 
-  it('normaliza el usuario: mayúsculas y espacios no impiden entrar', async () => {
+  it('devuelve el rol junto al nombre', async () => {
+    const { cliente } = db(await filaDe('Turrialba-2026', { rol: 'superadmin' }));
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
+    expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'superadmin' });
+  });
+
+  it('el rol por defecto es vendedor', async () => {
+    const { cliente } = db(await filaDe('Turrialba-2026', { rol: 'vendedor' }));
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
+    expect(r.ok && r.rol).toBe('vendedor');
+  });
+
+  it('normaliza el correo: mayúsculas y espacios no impiden entrar', async () => {
     const { cliente } = db(await filaDe('Turrialba-2026'));
-    const r = await autenticarUsuario('  GUILLERMO ', 'Turrialba-2026', cliente);
+    const r = await autenticarUsuario('  GUILLERMO@LUXE.CR ', 'Turrialba-2026', cliente);
     expect(r.ok).toBe(true);
+  });
+
+  // Una persona invitada que todavía no eligió su clave no tiene con qué
+  // entrar. Sin esta guarda, `verificarClave` recibiría null y el
+  // comportamiento dependería de que ese módulo lo tolere.
+  // El resultado solo no alcanza para probar esta guarda: sin ella,
+  // `verificarClave` corta igual por su cuenta (`typeof hash !== 'string' →
+  // false`) y el resultado final es el MISMO objeto `{ ok: false, motivo:
+  // 'credenciales' }` — pero llegado por otro camino, uno que no gasta el
+  // tiempo de hash y que cae en la rama de "clave incorrecta", que sí llama a
+  // `registrarFallo` (un rpc que cuenta un intento fallido contra una cuenta
+  // que nunca tuvo clave). Por eso se afirma también sobre el camino: sin
+  // guarda, este `rpc` se llamaría una vez, y esta prueba se pondría roja
+  // aunque `r` siguiera dando el mismo resultado.
+  it('rechaza a quien fue invitado pero aún no fijó su clave', async () => {
+    const { cliente, llamadasRpc } = db(
+      await filaDe('Turrialba-2026', { clave_hash: null, clave_sal: null }),
+    );
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'x', cliente);
+    expect(r).toEqual({ ok: false, motivo: 'credenciales' });
+    // Ninguna cuenta de intento fallido: una invitación pendiente no es un
+    // intento de clave incorrecta, y no debe empujar a nadie hacia el bloqueo.
+    expect(llamadasRpc).toHaveLength(0);
   });
 
   it('rechaza la clave incorrecta', async () => {
     const { cliente } = db(await filaDe('Turrialba-2026'));
-    const r = await autenticarUsuario('guillermo', 'otra', cliente);
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'otra', cliente);
     expect(r).toEqual({ ok: false, motivo: 'credenciales' });
   });
 
   it('rechaza a un usuario que no existe, con el mismo motivo', async () => {
     const { cliente } = db(null);
-    const r = await autenticarUsuario('nadie', 'x', cliente);
+    const r = await autenticarUsuario('nadie@luxe.cr', 'x', cliente);
     expect(r).toEqual({ ok: false, motivo: 'credenciales' });
   });
 
   it('rechaza a un usuario desactivado aunque la clave sea correcta', async () => {
     const { cliente } = db(await filaDe('Turrialba-2026', { activo: false }));
-    const r = await autenticarUsuario('guillermo', 'Turrialba-2026', cliente);
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
     expect(r).toEqual({ ok: false, motivo: 'credenciales' });
   });
 
   it('cuenta el intento fallido', async () => {
     const { cliente, fila } = db(await filaDe('Turrialba-2026', { intentos: 2 }));
-    await autenticarUsuario('guillermo', 'otra', cliente);
+    await autenticarUsuario('guillermo@luxe.cr', 'otra', cliente);
     expect(fila!.intentos).toBe(3);
   });
 
@@ -119,7 +154,7 @@ describe('autenticarUsuario', () => {
     const { cliente, fila } = db(
       await filaDe('Turrialba-2026', { intentos: MAX_INTENTOS - 1 }),
     );
-    const r = await autenticarUsuario('guillermo', 'otra', cliente, ahora);
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'otra', cliente, ahora);
     expect(r).toEqual({ ok: false, motivo: 'bloqueado' });
     expect(fila!.bloqueado_hasta).toBe('2026-08-28T10:15:00.000Z');
     // El contador vuelve a cero al bloquear: si no, el siguiente fallo tras
@@ -134,7 +169,7 @@ describe('autenticarUsuario', () => {
       bloqueado_hasta: '2026-08-28T10:10:00.000Z',
     });
     const { cliente } = db(fila);
-    const r = await autenticarUsuario('guillermo', 'Turrialba-2026', cliente, ahora);
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente, ahora);
     expect(r).toEqual({ ok: false, motivo: 'bloqueado' });
   });
 
@@ -144,14 +179,14 @@ describe('autenticarUsuario', () => {
       bloqueado_hasta: '2026-08-28T10:10:00.000Z',
     });
     const { cliente } = db(fila);
-    const r = await autenticarUsuario('guillermo', 'Turrialba-2026', cliente, ahora);
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente, ahora);
     expect(r.ok).toBe(true);
   });
 
   it('al entrar bien, reinicia los intentos y levanta el bloqueo', async () => {
     const ahora = new Date('2026-08-28T10:00:00Z');
     const { cliente, escrituras } = db(await filaDe('Turrialba-2026', { intentos: 3 }));
-    await autenticarUsuario('guillermo', 'Turrialba-2026', cliente, ahora);
+    await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente, ahora);
     expect(escrituras[0]).toMatchObject({
       intentos: 0,
       bloqueado_hasta: null,
@@ -173,9 +208,9 @@ describe('autenticarUsuario', () => {
     });
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const r = await autenticarUsuario('guillermo', 'Turrialba-2026', cliente, ahora);
+    const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente, ahora);
 
-    expect(r).toEqual({ ok: true, nombre: 'Guillermo Rojas' });
+    expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'vendedor' });
     // Se intentó anotar, y el fallo quedó registrado ruidosamente: la
     // anotación se pierde, pero no en silencio.
     expect(escrituras).toHaveLength(1);
@@ -190,7 +225,7 @@ describe('autenticarUsuario', () => {
     it('un fallo llama a la función de Postgres con los umbrales y el instante', async () => {
       const ahora = new Date('2026-08-28T10:00:00Z');
       const { cliente, llamadasRpc } = db(await filaDe('Turrialba-2026', { intentos: 2 }));
-      await autenticarUsuario('guillermo', 'otra', cliente, ahora);
+      await autenticarUsuario('guillermo@luxe.cr', 'otra', cliente, ahora);
 
       expect(llamadasRpc).toHaveLength(1);
       expect(llamadasRpc[0].nombre).toBe('usuarios_panel_intento_fallido');
@@ -209,7 +244,7 @@ describe('autenticarUsuario', () => {
     // verde mientras el doble siguiera respondiendo el `rpc`.
     it('un fallo no emite ninguna escritura del contador por fuera de la función', async () => {
       const { cliente, escrituras } = db(await filaDe('Turrialba-2026', { intentos: 2 }));
-      await autenticarUsuario('guillermo', 'otra', cliente);
+      await autenticarUsuario('guillermo@luxe.cr', 'otra', cliente);
       expect(escrituras).toHaveLength(0);
     });
 
@@ -229,11 +264,11 @@ describe('autenticarUsuario', () => {
           rpc: async () => ({ data: respuesta, error: null }),
         }) as any;
 
-      expect(await autenticarUsuario('guillermo', 'mala', base(true))).toEqual({
+      expect(await autenticarUsuario('guillermo@luxe.cr', 'mala', base(true))).toEqual({
         ok: false,
         motivo: 'bloqueado',
       });
-      expect(await autenticarUsuario('guillermo', 'mala', base(false))).toEqual({
+      expect(await autenticarUsuario('guillermo@luxe.cr', 'mala', base(false))).toEqual({
         ok: false,
         motivo: 'credenciales',
       });
@@ -255,7 +290,7 @@ describe('autenticarUsuario', () => {
       } as any;
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      const r = await autenticarUsuario('guillermo', 'mala', cliente);
+      const r = await autenticarUsuario('guillermo@luxe.cr', 'mala', cliente);
 
       expect(r).toEqual({ ok: false, motivo: 'credenciales' });
       expect(consoleError).toHaveBeenCalled();
@@ -274,6 +309,6 @@ describe('autenticarUsuario', () => {
         maybeSingle: async () => ({ data: null, error: { message: 'conexión caída' } }),
       }),
     } as any;
-    await expect(autenticarUsuario('guillermo', 'x', cliente)).rejects.toThrow(/conexión caída/);
+    await expect(autenticarUsuario('guillermo@luxe.cr', 'x', cliente)).rejects.toThrow(/conexión caída/);
   });
 });

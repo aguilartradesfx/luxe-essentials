@@ -1,5 +1,6 @@
 import 'server-only';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { ROLES, type Rol } from '@/lib/cotizador/usuarios';
 
 // El panel vive embebido en un iframe de GoHighLevel (Tarea 6): la clave ya
 // no puede pedirse en cada carga de pantalla, y por eso existe esta sesión
@@ -8,8 +9,29 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 //
 // Tarea 3 (usuarios del panel): la cookie ya no solo prueba que hubo una
 // entrada válida — identifica a qué vendedor pertenece la sesión. El nombre
-// viaja dentro del propio valor firmado (ver `emitirSesion` y
-// `nombreDeSesion`, más abajo).
+// viaja dentro del propio valor firmado (ver `emitirSesion` y `sesionDe`, más
+// abajo).
+//
+// Tarea 3 de invitaciones-roles: la cookie suma un cuarto segmento con el rol
+// (`'vendedor' | 'superadmin'`), también dentro del valor firmado. No es un
+// secreto — cualquiera puede leer su propia cookie decodificando base64url —
+// pero si viajara aparte de la firma, o la firma no lo cubriera, cualquier
+// vendedor podría ascenderse a superadmin editando su propia cookie a mano.
+//
+// Ronda de correcciones 2 (Tarea 5, invitaciones y roles): la cookie suma un
+// quinto segmento con el ID de la fila en `usuarios_panel`. Hasta acá la
+// identidad de la sesión era el NOMBRE, y `autorizarSuperadmin`
+// (lib/cotizador/equipo.ts) releía la fila buscándolo por nombre — pero los
+// nombres no son únicos, y esa elección barata se pagó dos veces: primero
+// como un bloqueo irreversible (invitar a alguien con el mismo nombre que
+// un superadmin lo dejaba sin forma de autorizar nada), y después como una
+// ventana de carrera en el propio chequeo que lo evita (nada impedía que dos
+// inserciones simultáneas con el mismo nombre pasaran las dos el chequeo
+// antes de que cualquiera escribiera). El id, en cambio, es la clave
+// primaria de la tabla — único por definición de la base, no por disciplina
+// de la aplicación — así que releer por id cierra el problema de raíz en vez
+// de agregarle otro chequeo al costado. Por eso la firma se calcula ahora
+// sobre `<emitidoEn>.<nombre>.<rol>.<id>` entero.
 //
 // La cookie necesita `SameSite=None` para que el navegador la mande dentro
 // de un iframe de otro origen (app.gohighlevel.com). Esa es justo la
@@ -123,7 +145,32 @@ function decodificarNombre(codificado: string): string | null {
   }
 }
 
-export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
+// El rol no se codifica en base64url como el nombre: los valores de `ROLES`
+// no llevan tildes, espacios ni puntos, así que no chocan con el separador
+// del formato. Se valida contra `ROLES` (lib/cotizador/usuarios.ts) y no
+// contra literales repetidos acá — un type predicate escrito a mano no lo
+// valida el compilador contra `Rol`, así que agregar un tercer rol al tipo
+// sin agregarlo acá compilaría limpio y quedaría rechazado en silencio. Con
+// `ROLES` como única fuente, agregar un rol es tocar un solo lugar. Ni
+// "leído en claro" significa "de confianza".
+function esRolValido(valor: string): valor is Rol {
+  return (ROLES as readonly string[]).includes(valor);
+}
+
+// El id es el de la fila en `usuarios_panel` (`uuid primary key default
+// gen_random_uuid()`) y viaja sin codificar, igual que el rol: un UUID no
+// trae puntos ni otro carácter que choque con el separador de este
+// formato. Se valida contra la forma canónica (8-4-4-4-12 hexadecimal),
+// mismo criterio que `esRolValido` contra `ROLES`: la firma ya garantiza
+// que nadie lo alteró después de emitido, pero un valor con una forma
+// imposible no debería colar ni con la firma correcta — por ejemplo, si
+// algún día se emitiera con un id vacío por error de programación.
+const RE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function esIdValido(valor: string): boolean {
+  return RE_ID.test(valor);
+}
+
+export function emitirSesion(nombre: string, rol: Rol, id: string): { cookie: string; csrf: string } {
   if (!secreto()) {
     throw new Error('LUXE_SESION_SECRETO no está configurada: no se puede emitir una sesión.');
   }
@@ -131,10 +178,24 @@ export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
   if (typeof nombre !== 'string' || nombre.trim().length === 0) {
     throw new Error('No se puede emitir una sesión sin el nombre del vendedor.');
   }
+  // Igual con el rol: emitir una sesión con un valor fuera de la lista
+  // cerrada dejaría una cookie que ninguna lectura futura podría aceptar (o
+  // peor, una que `sesionDe` decida interpretar a su manera).
+  if (!esRolValido(rol)) {
+    throw new Error(`No se puede emitir una sesión con un rol inválido: ${String(rol)}`);
+  }
+  // Ronda de correcciones 2 (Tarea 5, invitaciones y roles): mismo criterio
+  // que el rol — sin esta guarda, una sesión emitida con un id vacío o mal
+  // formado quedaría sin forma de que `autorizarSuperadmin` la releyera
+  // nunca, y el fallo aparecería lejos de acá, como un 403 que no dice por
+  // qué.
+  if (!esIdValido(id)) {
+    throw new Error(`No se puede emitir una sesión con un id inválido: ${String(id)}`);
+  }
 
   const emitidoEn = String(Date.now());
   const codificado = codificarNombre(nombre.trim());
-  const contenido = `${emitidoEn}.${codificado}`;
+  const contenido = `${emitidoEn}.${codificado}.${rol}.${id}`;
   const firma = firmar(contenido);
   const valor = `${contenido}.${firma}`;
   const csrf = derivarCsrf(valor);
@@ -170,31 +231,40 @@ function armarCookie(valor: string, maxEdadSegundos: number): string {
 //
 // `Max-Age=0` es la forma estándar de pedirle al navegador que la borre ya. El
 // valor va vacío para que, si algún navegador ignorara el `Max-Age`, lo que
-// quede tampoco valide: una cadena vacía no pasa el formato de tres partes.
+// quede tampoco valide: una cadena vacía no pasa el formato de cinco partes.
 export function cookieDeCierre(): string {
   return armarCookie('', 0);
 }
 
-// Devuelve el vendedor de la sesión, o null si no hay una válida. Es la función
-// de verdad: `sesionValida` es su versión booleana. Las mismas comprobaciones
-// de siempre —firma, caducidad real en el servidor, emisión no futura— más el
-// formato de tres partes.
-export function nombreDeSesion(request: Request): string | null {
+// Devuelve el vendedor, el rol y el id de la sesión, o null si no hay una
+// válida. Es la función de verdad: `sesionValida` es su versión booleana.
+// Las mismas comprobaciones de siempre —firma, caducidad real en el
+// servidor, emisión no futura— más el formato de cinco partes exactas, un
+// rol de la lista cerrada y un id con forma de tal.
+export function sesionDe(request: Request): { nombre: string; rol: Rol; id: string } | null {
   const esperado = secreto();
   if (!esperado) return null;
 
   const valor = obtenerCookie(request, NOMBRE_COOKIE);
   if (!valor) return null;
 
-  // Tres partes exactas. Una cookie del formato anterior (dos partes) no trae
-  // vendedor: aceptarla dejaría entrar a quien conserve una emitida con la
-  // clave compartida, que es justo el hueco que esta fase cierra.
+  // Cinco partes exactas. Una cookie de un formato anterior (cuatro partes,
+  // sin id; o tres, sin rol) no valida: aceptarla dejaría entrar con una
+  // sesión que no lleva el id que `autorizarSuperadmin` necesita para
+  // releer la fila correcta — exactamente el hueco que este cambio cierra.
   const partes = valor.split('.');
-  if (partes.length !== 3) return null;
-  const [emitidoEnTexto, codificado, firma] = partes;
-  if (!emitidoEnTexto || !codificado || !firma) return null;
+  if (partes.length !== 5) return null;
+  const [emitidoEnTexto, codificado, rolTexto, idTexto, firma] = partes;
+  if (!emitidoEnTexto || !codificado || !rolTexto || !idTexto || !firma) return null;
 
-  if (!igualesEnTiempoConstante(firma, firmar(`${emitidoEnTexto}.${codificado}`))) return null;
+  if (
+    !igualesEnTiempoConstante(
+      firma,
+      firmar(`${emitidoEnTexto}.${codificado}.${rolTexto}.${idTexto}`),
+    )
+  ) {
+    return null;
+  }
 
   const emitidoEn = Number(emitidoEnTexto);
   if (!Number.isFinite(emitidoEn)) return null;
@@ -203,11 +273,17 @@ export function nombreDeSesion(request: Request): string | null {
   if (emitidoEn > ahora + TOLERANCIA_RELOJ_MS) return null;
   if (ahora - emitidoEn > MAX_EDAD_MS) return null;
 
-  return decodificarNombre(codificado);
+  if (!esRolValido(rolTexto)) return null;
+  if (!esIdValido(idTexto)) return null;
+
+  const nombre = decodificarNombre(codificado);
+  if (!nombre) return null;
+
+  return { nombre, rol: rolTexto, id: idTexto };
 }
 
 export function sesionValida(request: Request): boolean {
-  return nombreDeSesion(request) !== null;
+  return sesionDe(request) !== null;
 }
 
 export function csrfValido(request: Request, enviado: string | undefined): boolean {

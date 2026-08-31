@@ -79,7 +79,7 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
 // Fase 3: la clave compartida ya no autentica. Esta ruta escribe: exige
 // cookie de sesión Y el token anti-CSRF derivado de ella.
 function peticionAutenticada(cuerpo: unknown) {
-  const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+  const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
   return peticion(cuerpo, { cookie: cookie.split(';')[0], 'x-csrf-token': csrf });
 }
 

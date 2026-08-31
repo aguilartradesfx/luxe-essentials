@@ -245,16 +245,30 @@ function mockFetch(opciones: OpcionesFetch = {}) {
   });
 }
 
-// El nombre de usuario que acepta el `mockFetch()` compartido. `usuario`, a
-// secas, ya nombra la instancia de `userEvent` en todo este archivo — este
-// nombre más largo evita la colisión.
-const USUARIO_DE_PRUEBA = 'guillermo';
+// El correo que acepta el `mockFetch()` compartido. Tarea 6: el campo pasó
+// de "Usuario" a "Correo" (y su `type` a `email`), así que el valor tiene
+// que parecer uno de verdad — un input `type="email"` rechaza el envío del
+// formulario en jsdom, igual que en un navegador real, si no lleva una `@`.
+const CORREO_DE_PRUEBA = 'guillermo@luxe.cr';
 
-// Entra con el usuario y la clave correctos, y espera a que el catálogo (sin
+// Tarea 6: `getByLabelText(/^correo$/i)` a secas es ambiguo en cuanto
+// `VistaCrear` está montada (desde que se entra una vez, se queda montada —
+// ver Panel.tsx): su campo "Correo del cliente" envuelve al input en un
+// `<label>` cuyo texto VISIBLE es sólo "Correo" (el resto, "del cliente",
+// vive en el `aria-label` del input, no en el texto del label) — así que
+// `testing-library` lo cuenta como otra coincidencia de "correo", además del
+// campo de esta pantalla. El `id` del campo de acceso (`correo-cotizador`,
+// ver PantallaClave.tsx) es el único dato que los distingue. Se usa este
+// `selector` en cualquier consulta que pueda coincidir con `VistaCrear` ya
+// montada (después de la primera entrada); las del `describe('PantallaClave', ...)`
+// de más abajo, que montan la pantalla sola, no lo necesitan.
+const SELECTOR_CORREO_ACCESO = { selector: '#correo-cotizador' };
+
+// Entra con el correo y la clave correctos, y espera a que el catálogo (sin
 // precios) esté cargado, es decir, a que la pantalla de acceso se haya
 // reemplazado por la pantalla principal.
 async function entrar(usuario: ReturnType<typeof userEvent.setup>) {
-  await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
+  await usuario.type(screen.getByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO), CORREO_DE_PRUEBA);
   await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
   await usuario.click(screen.getByRole('button', { name: /entrar/i }));
   await waitFor(() => {
@@ -291,11 +305,11 @@ describe('PantallaClave', () => {
     const usuario = userEvent.setup();
     render(<PantallaClave onEntrar={onEntrar} />);
 
-    await usuario.type(screen.getByLabelText(/usuario/i), 'guillermo');
+    await usuario.type(screen.getByLabelText(/^correo$/i), 'guillermo@luxe.cr');
     await usuario.type(screen.getByLabelText(/^clave$/i), 'Turrialba-2026');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
 
-    expect(onEntrar).toHaveBeenCalledWith('guillermo', 'Turrialba-2026');
+    expect(onEntrar).toHaveBeenCalledWith('guillermo@luxe.cr', 'Turrialba-2026');
   });
 
   it('muestra el mensaje que devuelve el servidor cuando la cuenta está bloqueada, anunciado con role="alert"', async () => {
@@ -303,7 +317,7 @@ describe('PantallaClave', () => {
     const usuario = userEvent.setup();
     render(<PantallaClave onEntrar={onEntrar} />);
 
-    await usuario.type(screen.getByLabelText(/usuario/i), 'guillermo');
+    await usuario.type(screen.getByLabelText(/^correo$/i), 'guillermo@luxe.cr');
     await usuario.type(screen.getByLabelText(/^clave$/i), 'mala');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
 
@@ -321,7 +335,7 @@ describe('PantallaClave', () => {
   it('lleva autoComplete de usuario y clave, para que el navegador ofrezca autocompletar', () => {
     render(<PantallaClave onEntrar={vi.fn()} />);
 
-    expect(screen.getByLabelText(/usuario/i)).toHaveAttribute('autoComplete', 'username');
+    expect(screen.getByLabelText(/^correo$/i)).toHaveAttribute('autoComplete', 'username');
     expect(screen.getByLabelText(/^clave$/i)).toHaveAttribute('autoComplete', 'current-password');
   });
 });
@@ -334,7 +348,7 @@ describe('Cotizador', () => {
   it('pide usuario y clave antes de mostrar el catálogo', () => {
     mockFetch();
     render(<Cotizador />);
-    expect(screen.getByLabelText(/usuario/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO)).toBeInTheDocument();
     expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/buscar producto/i)).not.toBeInTheDocument();
   });
@@ -343,7 +357,7 @@ describe('Cotizador', () => {
     mockFetch();
     const usuario = userEvent.setup();
     render(<Cotizador />);
-    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
+    await usuario.type(screen.getByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO), CORREO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'mala');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
     await waitFor(() => {
@@ -393,7 +407,7 @@ describe('Cotizador', () => {
 
       // 2. Volvió la pantalla de acceso, y sin el nombre del vendedor
       //    anterior colgando detrás.
-      expect(await screen.findByLabelText(/usuario/i)).toBeInTheDocument();
+      expect(await screen.findByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO)).toBeInTheDocument();
       expect(screen.getByLabelText(/^clave$/i)).toBeInTheDocument();
       await waitFor(() => {
         expect(screen.queryByText(/sesión de guillermo rojas/i)).not.toBeInTheDocument();
@@ -417,7 +431,7 @@ describe('Cotizador', () => {
       vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
       await usuario.click(screen.getByRole('button', { name: /^salir$/i }));
 
-      expect(await screen.findByLabelText(/usuario/i)).toBeInTheDocument();
+      expect(await screen.findByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO)).toBeInTheDocument();
       expect(sessionStorage.getItem(CSRF_STORAGE_KEY)).toBeNull();
       consoleError.mockRestore();
     });
@@ -1271,7 +1285,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
 
     const usuario = userEvent.setup();
     render(<Cotizador />);
-    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
+    await usuario.type(screen.getByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO), CORREO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
     await usuario.click(screen.getByRole('button', { name: /^entrar$/i }));
 
@@ -1311,7 +1325,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     );
     expect(llamada).toBeDefined();
     const cuerpo = JSON.parse((llamada![1] as RequestInit).body as string);
-    expect(cuerpo).toEqual({ usuario: USUARIO_DE_PRUEBA, clave: 'correcta' });
+    expect(cuerpo).toEqual({ correo: CORREO_DE_PRUEBA, clave: 'correcta' });
   });
 
   // Tarea 5 (usuarios del panel), Paso 5: el escenario declarado en el
@@ -1330,7 +1344,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     mockFetch({ cookieBloqueada: true });
     const usuario = userEvent.setup();
     render(<Cotizador />);
-    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
+    await usuario.type(screen.getByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO), CORREO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
 
@@ -1355,7 +1369,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     await waitFor(() => {
       expect(screen.getByLabelText(/buscar/i)).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText(/usuario/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^clave$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^entrar$/i })).not.toBeInTheDocument();
 
@@ -1434,7 +1448,7 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
 
     // Al reautenticarse, sigue exactamente donde estaba: no hay que
     // rearmar nada de cero.
-    await usuario.type(screen.getByLabelText(/usuario/i), USUARIO_DE_PRUEBA);
+    await usuario.type(screen.getByLabelText(/^correo$/i, SELECTOR_CORREO_ACCESO), CORREO_DE_PRUEBA);
     await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
     await usuario.click(screen.getByRole('button', { name: /^entrar$/i }));
 

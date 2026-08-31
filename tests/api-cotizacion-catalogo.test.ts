@@ -14,7 +14,7 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
 // Fase 3: la clave compartida ya no autentica. Ruta de solo lectura: la
 // cookie de sesión basta, sin token anti-CSRF.
 function peticionAutenticada(cuerpo: unknown) {
-  const { cookie } = emitirSesion('Guillermo Rojas');
+  const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
   return peticion(cuerpo, { cookie: cookie.split(';')[0] });
 }
 
@@ -82,11 +82,21 @@ describe('POST /api/cotizacion/catalogo', () => {
   // ninguno de los dos casos vuelve a pasar por `/entrar`, así que el
   // nombre del vendedor solo puede llegarle desde acá.
   it('devuelve el vendedor de la sesión junto al token', async () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
     const res = await POST(peticion({}, { cookie: cookie.split(';')[0] }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.vendedor).toBe('Guillermo Rojas');
+  });
+
+  // Tarea 3 (invitaciones y roles): la respuesta de esta ruta es también de
+  // donde el panel obtiene el rol de la sesión (para decidir qué dibujar).
+  it('devuelve el rol de la sesión junto al vendedor', async () => {
+    const { cookie } = emitirSesion('Guillermo Rojas', 'superadmin', 'aaaaaaaa-0000-4000-8000-000000000001');
+    const res = await POST(peticion({}, { cookie: cookie.split(';')[0] }));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.rol).toBe('superadmin');
   });
 
   // --- Ronda de correcciones 1 (Tarea 9, hallazgo crítico) ---
@@ -103,7 +113,7 @@ describe('POST /api/cotizacion/catalogo', () => {
     });
 
     it('con cookie válida y sin clave, la respuesta trae el csrf que le corresponde a esa cookie', async () => {
-      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({}, { cookie: valor }));
       expect(res.status).toBe(200);
@@ -130,7 +140,7 @@ describe('POST /api/cotizacion/catalogo', () => {
       // presentada es válida. Mandar además una clave (aunque ya no
       // autentique nada) no cambia eso: un campo de sobra en el cuerpo no
       // debe tumbar una sesión por cookie que sí es válida.
-      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({ clave: 'secreta' }, { cookie: valor }));
       expect(res.status).toBe(200);
@@ -144,7 +154,7 @@ describe('POST /api/cotizacion/catalogo', () => {
       // su JavaScript), pero este chequeo no depende de que eso siga siendo
       // cierto para siempre. La petición en sí sigue pasando (200, con los
       // SKUs) — lo único que se retiene es el token.
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({}, { cookie: valor, 'sec-fetch-site': 'cross-site' }));
       expect(res.status).toBe(200);
@@ -154,7 +164,7 @@ describe('POST /api/cotizacion/catalogo', () => {
     });
 
     it('con Sec-Fetch-Site: same-origin, sí devuelve el csrf (uso normal del panel)', async () => {
-      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await POST(peticion({}, { cookie: valor, 'sec-fetch-site': 'same-origin' }));
       const cuerpo = await res.json();
