@@ -466,13 +466,36 @@ describe('VistaListado', () => {
   // "las que fallaron, con su error" — antes la vista de fallidas mostraba
   // una píldora roja que decía "Error" y nada más, aunque `ghl_error` y
   // `motivo_cierre` ya viajaran al navegador en la misma respuesta.
-  it('una fila en error muestra el error del correo (correo_error), no solo la palabra "Error"', async () => {
+  //
+  // Ronda de correcciones 2 (hallazgo del dueño): el texto crudo del
+  // servidor (`correo_error`/`ghl_error`) ya no se vuelca directo en la
+  // fila -- se lee un aviso humano primero, y el texto tal cual queda
+  // detrás de un botón "ver detalle" (ver `AvisoError` en VistaListado).
+  // Esta prueba se adapta al formato nuevo, no se borra: sigue afirmando
+  // que el motivo de fondo llega al navegador, ahora en dos pasos.
+  it('una fila en error muestra un aviso humano del correo, y el detalle crudo detrás de un control', async () => {
     mockFetch({
       filas: [{ ...FILA_ABIERTA, estado: 'error', correo_error: 'Falta RESEND_API_KEY: no se pudo enviar el correo.' }],
     });
+    const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+
+    // El aviso humano está a la vista de entrada.
+    expect(screen.getByText(/no le llegó el correo al cliente/i)).toBeInTheDocument();
+    // El texto crudo del servidor NO está a la vista todavía.
+    expect(screen.queryByText(/falta resend_api_key/i)).not.toBeInTheDocument();
+
+    // Con teclado: Tab hasta el control (primero cae el filtro de estado,
+    // que va antes en la página) y Enter lo despliega -- no depende del
+    // mouse.
+    const boton = screen.getByRole('button', { name: /ver detalle/i });
+    await usuario.tab();
+    await usuario.tab();
+    expect(boton).toHaveFocus();
+    await usuario.keyboard('{Enter}');
+
     expect(screen.getByText(/falta resend_api_key/i)).toBeInTheDocument();
   });
 
@@ -486,14 +509,54 @@ describe('VistaListado', () => {
     expect(screen.getByText(/escogió a otro proveedor/i)).toBeInTheDocument();
   });
 
-  it('una fila con ghl_error lo muestra, aparte del error del correo', async () => {
+  it('una fila con ghl_error muestra un aviso humano, distinto del error del correo, con el detalle crudo detrás de un control', async () => {
     mockFetch({
       filas: [{ ...FILA_ABIERTA, ghl_error: 'GHL estimate 500: boom' }],
+    });
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+
+    // Aviso humano, distinto del de correo_error, a la vista de entrada.
+    expect(within(fila).getByText(/no se avisó al crm/i)).toBeInTheDocument();
+    expect(within(fila).queryByText(/no le llegó el correo al cliente/i)).not.toBeInTheDocument();
+    // El texto crudo no está a la vista todavía.
+    expect(within(fila).queryByText(/boom/i)).not.toBeInTheDocument();
+
+    await usuario.click(within(fila).getByRole('button', { name: /ver detalle/i }));
+    expect(within(fila).getByText(/boom/i)).toBeInTheDocument();
+  });
+
+  // Ancla lo esencial del pedido del dueño: la respuesta cruda del
+  // servidor no puede aparecer en pantalla sin que nadie la pida, y tiene
+  // que haber un aviso en español de que algo falló. Se prueba con las dos
+  // fallas por separado (correo/CRM) para que ninguna de las dos pueda
+  // quedar en silencio.
+  it('el texto crudo del servidor nunca está a la vista sin pedirlo -- siempre hay un aviso humano primero', async () => {
+    mockFetch({
+      filas: [
+        {
+          ...FILA_ABIERTA,
+          estado: 'error',
+          correo_error: 'GHL workflow 422: {"status":422,"message":"timezone offset","traceId":"abc-123"}',
+          ghl_error: 'GHL workflow 422: {"status":422,"message":"timezone offset","traceId":"abc-123"}',
+        },
+      ],
     });
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
-    expect(screen.getByText(/boom/i)).toBeInTheDocument();
+
+    // El JSON crudo no aparece en ningún lado de la pantalla.
+    expect(screen.queryByText(/traceId/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/timezone offset/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"status":422/i)).not.toBeInTheDocument();
+
+    // Pero sí hay, sin pedir nada, un aviso en español de que algo falló.
+    expect(screen.getByText(/no le llegó el correo al cliente/i)).toBeInTheDocument();
+    expect(screen.getByText(/no se avisó al crm/i)).toBeInTheDocument();
   });
 
   it('hay un enlace a la ficha del contacto en GoHighLevel cuando la fila tiene contact_id', async () => {

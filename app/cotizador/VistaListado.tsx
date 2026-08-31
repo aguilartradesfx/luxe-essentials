@@ -116,6 +116,64 @@ function estiloEstado(estado: Estado): string {
   }
 }
 
+// Ronda de correcciones 2 (hallazgo del dueño): antes, `ghl_error` se
+// volcaba tal cual en la fila -- la respuesta cruda del servidor de
+// GoHighLevel, en inglés, con JSON adentro, ocupando varios renglones. Le
+// servía a quien depura y no le decía nada a un vendedor. La regla de la
+// fase 1 de este proyecto sigue de pie: un fallo no puede desaparecer del
+// todo (ver el comentario junto a `correo_error`, más abajo, en la fila) --
+// así que el texto crudo no se borra, se mueve detrás de un control que se
+// abre con el mouse o con el teclado (`<button aria-expanded>`, sin
+// dependencias nuevas). `resumen` es la frase en español que necesita el
+// vendedor; `detalle` es la respuesta tal cual la mandó el servidor, para
+// quien tenga que depurarla.
+type TonoAviso = 'critico' | 'aviso';
+
+function AvisoError({
+  id,
+  resumen,
+  detalle,
+  tono,
+  abierto,
+  onToggle,
+}: {
+  id: string;
+  resumen: string;
+  detalle: string;
+  tono: TonoAviso;
+  abierto: boolean;
+  onToggle: () => void;
+}) {
+  // 'critico': el cliente se quedó sin la cotización (correo_error) -- el
+  // mismo rojo que ya usa la píldora "Error". 'aviso': la cotización salió
+  // bien, lo que falló es el aviso al CRM (ghl_error) -- el mismo ámbar que
+  // ya usa el resto de la pantalla para "salió, pero con algo pendiente"
+  // (ver el mensaje de /reenviar más abajo). Ningún color nuevo.
+  const color = tono === 'critico' ? 'text-red-700' : 'text-amber-700';
+  return (
+    <div className="mt-1 max-w-[16rem]">
+      <p className={`text-xs font-medium ${color}`}>
+        {resumen}{' '}
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={abierto}
+          aria-controls={id}
+          title={detalle}
+          className="font-normal underline decoration-dotted underline-offset-2 hover:text-navy"
+        >
+          {abierto ? 'ocultar detalle' : 'ver detalle'}
+        </button>
+      </p>
+      {abierto && (
+        <p id={id} className="mt-1 whitespace-pre-wrap break-words text-[11px] text-teal/70">
+          {detalle}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // Ronda de correcciones 1 (hallazgo): "Por vencer" no es un estado que el
 // servidor entienda -- es un cruce de "sin respuesta" + "vence pronto" que
 // solo esta pantalla puede calcular (ver `calcularVigencia`). Con la lista
@@ -187,6 +245,14 @@ export function VistaListado({
   // no hace falta soportar acciones simultáneas en varias filas.
   const [procesandoId, setProcesandoId] = useState<string | null>(null);
   const [mensajesFila, setMensajesFila] = useState<Record<string, Mensaje>>({});
+
+  // Qué detalle técnico (ghl_error/correo_error) está desplegado ahora
+  // mismo, por fila -- ver `AvisoError`. Colapsado por defecto: el texto
+  // crudo del servidor no está a la vista mientras nadie pida verlo.
+  const [detallesAbiertos, setDetallesAbiertos] = useState<Record<string, boolean>>({});
+  function alternarDetalle(clave: string) {
+    setDetallesAbiertos((d) => ({ ...d, [clave]: !d[clave] }));
+  }
 
   // `estaCancelado`: solo lo usa el efecto de abajo, para que una respuesta
   // que llega tarde (el vendedor cambió el filtro dos veces seguido) no
@@ -438,17 +504,17 @@ export function VistaListado({
 
       {filasVisibles !== null && filasVisibles.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-[var(--carta-border)]">
-          <table className="w-full min-w-[840px] text-left text-sm">
+          <table className="w-full min-w-[880px] text-left text-sm">
             <thead className="bg-[var(--carta-fill)] text-xs uppercase tracking-wide text-teal">
               <tr>
-                <th className="px-3 py-2">Cliente</th>
+                <th className="px-3 py-2 min-w-[11rem]">Cliente</th>
                 <th className="px-3 py-2">Número</th>
                 <th className="px-3 py-2">Vendedor</th>
                 <th className="px-3 py-2">Fecha</th>
                 <th className="px-3 py-2">Vigencia</th>
                 <th className="px-3 py-2 text-right">Monto</th>
                 <th className="px-3 py-2">Estado</th>
-                <th className="px-3 py-2">Acciones</th>
+                <th className="px-3 py-2 min-w-[13rem]">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--carta-border)]">
@@ -465,17 +531,17 @@ export function VistaListado({
                     key={fila.id}
                     className={proximaAVencer ? 'bg-amber-50' : undefined}
                   >
-                    <td className="px-3 py-2 align-top">
-                      <p className="text-navy">{nombre}</p>
-                      {empresa && <p className="text-xs text-teal">{empresa}</p>}
+                    <td className="px-3 py-3 align-top">
+                      <p className="whitespace-nowrap text-navy">{nombre}</p>
+                      {empresa && <p className="whitespace-nowrap text-xs text-teal">{empresa}</p>}
                     </td>
-                    <td className="px-3 py-2 align-top text-navy">{fila.numero ?? '—'}</td>
-                    <td className="px-3 py-2 align-top text-teal">{fila.vendedor || '—'}</td>
-                    <td className="px-3 py-2 align-top text-teal">{formatearFecha(fila.created_at)}</td>
-                    <td className="px-3 py-2 align-top">
+                    <td className="px-3 py-3 align-top text-navy">{fila.numero ?? '—'}</td>
+                    <td className="px-3 py-3 align-top text-teal">{fila.vendedor || '—'}</td>
+                    <td className="px-3 py-3 align-top text-xs text-teal/70">{formatearFecha(fila.created_at)}</td>
+                    <td className="px-3 py-3 align-top">
                       {proximaAVencer ? (
                         <span
-                          className={`font-semibold ${diasRestantes < 0 ? 'text-red-700' : 'text-amber-700'}`}
+                          className={`font-semibold tabular-nums ${diasRestantes < 0 ? 'text-red-700' : 'text-amber-700'}`}
                         >
                           {diasRestantes < 0
                             ? `Vencida hace ${Math.abs(diasRestantes)} día(s)`
@@ -487,10 +553,10 @@ export function VistaListado({
                         <span className="text-xs text-teal/80">{formatearFecha(vence.toISOString())}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 align-top text-right font-medium text-navy">
+                    <td className="px-3 py-3 align-top text-right font-semibold tabular-nums text-navy">
                       {formatearColones(monto)}
                     </td>
-                    <td className="px-3 py-2 align-top">
+                    <td className="px-3 py-3 align-top">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${estiloEstado(fila.estado)}`}>
                         {ETIQUETAS_ESTADO[fila.estado] ?? fila.estado}
                       </span>
@@ -499,25 +565,51 @@ export function VistaListado({
                           antes esta píldora era todo lo que se veía, sin el
                           motivo de fondo. `correo_error` (persistido recién,
                           ver app/api/cotizacion/route.ts) explica por qué no
-                          llegó al cliente; `motivo_cierre` es el que ya
-                          escribe el vendedor al marcar "Perdida". */}
+                          llegó al cliente -- el fallo más grave de los dos:
+                          la cotización no le llegó a nadie. */}
                       {fila.estado === 'error' && fila.correo_error && (
-                        <p className="mt-1 max-w-[16rem] text-xs text-red-700">{fila.correo_error}</p>
+                        <AvisoError
+                          id={`correo-error-${fila.id}`}
+                          resumen="No le llegó el correo al cliente."
+                          detalle={fila.correo_error}
+                          tono="critico"
+                          abierto={!!detallesAbiertos[`correo:${fila.id}`]}
+                          onToggle={() => alternarDetalle(`correo:${fila.id}`)}
+                        />
                       )}
                       {fila.motivo_cierre && (
                         <p className="mt-1 max-w-[16rem] text-xs text-teal">{fila.motivo_cierre}</p>
                       )}
+                      {/* `ghl_error`: la cotización sí salió -- lo que falló
+                          es nada más el aviso al CRM. No es el mismo fallo
+                          que `correo_error` y no debe verse igual (ver
+                          `AvisoError`, arriba en el archivo). */}
                       {fila.ghl_error && (
-                        <p className="mt-1 max-w-[16rem] text-xs text-teal/80">GoHighLevel: {fila.ghl_error}</p>
+                        <AvisoError
+                          id={`ghl-error-${fila.id}`}
+                          resumen="No se avisó al CRM (GoHighLevel)."
+                          detalle={fila.ghl_error}
+                          tono="aviso"
+                          abierto={!!detallesAbiertos[`ghl:${fila.id}`]}
+                          onToggle={() => alternarDetalle(`ghl:${fila.id}`)}
+                        />
                       )}
                     </td>
-                    <td className="px-3 py-2 align-top">
-                      <div className="flex flex-wrap items-center gap-2">
+                    <td className="px-3 py-3 align-top">
+                      {/* Jerarquía de acciones (hallazgo del dueño): seis
+                          botones iguales no dejaban resaltar ninguno.
+                          "Ganada"/"Perdida" son la decisión que cierra la
+                          fila -- la razón de ser de esta pantalla -- y
+                          quedan como botones sólidos. El resto son apoyo
+                          situacional (revisar el PDF, reenviar, duplicar,
+                          saltar al CRM): se recogen como enlaces de texto,
+                          sin perder que siguen siendo un clic directo. */}
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
                           disabled={enProceso}
                           onClick={() => void cerrar(fila.id, 'ganada')}
-                          className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                          className="rounded-lg bg-navy px-2.5 py-1 text-xs font-medium text-beige hover:bg-navy/90 disabled:opacity-40"
                         >
                           Ganada
                         </button>
@@ -528,16 +620,19 @@ export function VistaListado({
                             setPidiendoMotivoId(fila.id);
                             setMotivoTexto('');
                           }}
-                          className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                          className="rounded-lg border border-[var(--carta-border)] px-2.5 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
                         >
                           Perdida
                         </button>
+                      </div>
+
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-teal">
                         {fila.pdf_ruta && (
                           <button
                             type="button"
                             disabled={enProceso}
                             onClick={() => void verPdf(fila)}
-                            className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                            className="underline decoration-dotted underline-offset-2 hover:text-navy disabled:opacity-40"
                           >
                             Ver PDF
                           </button>
@@ -547,7 +642,7 @@ export function VistaListado({
                             type="button"
                             disabled={enProceso}
                             onClick={() => void reenviar(fila.id)}
-                            className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                            className="underline decoration-dotted underline-offset-2 hover:text-navy disabled:opacity-40"
                           >
                             Reenviar
                           </button>
@@ -556,7 +651,7 @@ export function VistaListado({
                           type="button"
                           disabled={enProceso}
                           onClick={() => void duplicar(fila)}
-                          className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                          className="underline decoration-dotted underline-offset-2 hover:text-navy disabled:opacity-40"
                         >
                           Duplicar
                         </button>
@@ -565,7 +660,7 @@ export function VistaListado({
                             href={`https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${fila.contact_id}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-xs text-teal underline hover:text-navy"
+                            className="underline hover:text-navy"
                           >
                             Ver en GoHighLevel
                           </a>
