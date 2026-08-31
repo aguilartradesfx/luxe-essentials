@@ -105,10 +105,24 @@ describe('autenticarUsuario', () => {
   // Una persona invitada que todavía no eligió su clave no tiene con qué
   // entrar. Sin esta guarda, `verificarClave` recibiría null y el
   // comportamiento dependería de que ese módulo lo tolere.
+  // El resultado solo no alcanza para probar esta guarda: sin ella,
+  // `verificarClave` corta igual por su cuenta (`typeof hash !== 'string' →
+  // false`) y el resultado final es el MISMO objeto `{ ok: false, motivo:
+  // 'credenciales' }` — pero llegado por otro camino, uno que no gasta el
+  // tiempo de hash y que cae en la rama de "clave incorrecta", que sí llama a
+  // `registrarFallo` (un rpc que cuenta un intento fallido contra una cuenta
+  // que nunca tuvo clave). Por eso se afirma también sobre el camino: sin
+  // guarda, este `rpc` se llamaría una vez, y esta prueba se pondría roja
+  // aunque `r` siguiera dando el mismo resultado.
   it('rechaza a quien fue invitado pero aún no fijó su clave', async () => {
-    const { cliente } = db(await filaDe('Turrialba-2026', { clave_hash: null, clave_sal: null }));
+    const { cliente, llamadasRpc } = db(
+      await filaDe('Turrialba-2026', { clave_hash: null, clave_sal: null }),
+    );
     const r = await autenticarUsuario('guillermo@luxe.cr', 'x', cliente);
     expect(r).toEqual({ ok: false, motivo: 'credenciales' });
+    // Ninguna cuenta de intento fallido: una invitación pendiente no es un
+    // intento de clave incorrecta, y no debe empujar a nadie hacia el bloqueo.
+    expect(llamadasRpc).toHaveLength(0);
   });
 
   it('rechaza la clave incorrecta', async () => {
