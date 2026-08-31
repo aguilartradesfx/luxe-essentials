@@ -3,12 +3,20 @@ import { huellaDe } from '@/lib/cotizador/invitaciones';
 
 const CLAVE_BUENA = 'clave-larga-de-prueba';
 
-// Doble mínimo de la parte de PostgREST que usa la ruta: una lectura por
-// `invitacion_hash` (nunca por el enlace crudo) y una escritura por `id`.
-// Mismo patrón de `filtros`/`escrituras` que tests/api-panel.test.ts y
+// Doble de la parte de PostgREST que usa la ruta: una lectura por
+// `invitacion_hash` (nunca por el enlace crudo) y una escritura
+// compare-and-swap por `id` + `invitacion_hash`. Mismo patrón de
+// `filtros`/`escrituras` que tests/api-panel.test.ts y
 // tests/usuarios-autenticacion.test.ts: se registra cada par
-// `[columna, valor]` de un `.eq()` y cada objeto que llega a un `.update()`,
-// para poder afirmar sobre la consulta en sí y no solo sobre el resultado.
+// `[columna, valor]` de CUALQUIER `.eq()` —de lectura o de escritura— y cada
+// objeto que llega a un `.update()`.
+//
+// Ronda de correcciones 1: `fila` no es sólo el dato que se devuelve, es el
+// estado compartido que la lectura y la escritura consultan en el momento en
+// que cada una corre — no una foto fija tomada al armar el doble. Es lo que
+// permite reproducir de verdad la carrera del enlace de un solo uso (ver el
+// describe de más abajo): sin esto, el doble no podría distinguir "la
+// invitación sigue viva" de "alguien ya la consumió".
 type Filtro = [string, string];
 
 let fila: Record<string, unknown> | null;
@@ -34,22 +42,57 @@ function filaInvitacionValida(extra: Record<string, unknown> = {}) {
   };
 }
 
+// Compara los filtros de ESTA llamada contra el estado ACTUAL de `fila` —no
+// contra el estado que tenía cuando se leyó—, igual que un WHERE real de
+// Postgres evaluado en el momento del UPDATE/SELECT.
+function coincideConFilaActual(filtrosLocales: Filtro[]): boolean {
+  if (fila === null) return false;
+  return filtrosLocales.every(([col, val]) => String((fila as Record<string, unknown>)[col] ?? '') === val);
+}
+
 function construirLectura(): any {
+  const filtrosLocales: Filtro[] = [];
   const nodo: any = {
     eq: (columna: string, valor: string) => {
-      filtros.push([columna, String(valor)]);
+      const entrada: Filtro = [columna, String(valor)];
+      filtros.push(entrada);
+      filtrosLocales.push(entrada);
       return nodo;
     },
-    maybeSingle: async () => ({ data: fila, error: errorLectura }),
+    maybeSingle: async () => {
+      if (errorLectura) return { data: null, error: errorLectura };
+      return { data: coincideConFilaActual(filtrosLocales) ? fila : null, error: null };
+    },
   };
   return nodo;
 }
 
+// `.update(cambios).eq(...).eq(...).select('id')`. El compare-and-swap real
+// vive acá: `.select()` sólo "afecta" (y muta) `fila` si los filtros
+// encadenados siguen coincidiendo con su estado actual — exactamente lo que
+// hace la cláusula WHERE de un UPDATE de Postgres evaluada fila por fila, con
+// el candado que Postgres toma mientras la modifica. Como JS es de un solo
+// hilo, la primera llamada a `.select()` que se ejecuta gana la mutación de
+// forma atómica: no hay ninguna ventana entre "comprobar" y "escribir" en la
+// que la otra petición pueda colarse, igual que en la base real.
 function construirEscritura(cambios: Record<string, unknown>): any {
   escrituras.push(cambios);
-  return {
-    eq: async () => ({ error: errorEscritura }),
+  const filtrosLocales: Filtro[] = [];
+  const nodo: any = {
+    eq: (columna: string, valor: string) => {
+      const entrada: Filtro = [columna, String(valor)];
+      filtros.push(entrada);
+      filtrosLocales.push(entrada);
+      return nodo;
+    },
+    select: async () => {
+      if (errorEscritura) return { data: null, error: errorEscritura };
+      if (!coincideConFilaActual(filtrosLocales)) return { data: [], error: null };
+      Object.assign(fila as Record<string, unknown>, cambios);
+      return { data: [{ id: (fila as Record<string, unknown>).id }], error: null };
+    },
   };
+  return nodo;
 }
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -133,9 +176,52 @@ describe('POST /api/cotizacion/fijar-clave', () => {
     expect(res.headers.get('set-cookie')).toBeNull();
   });
 
+  // Ronda de correcciones 1, hallazgo importante: las tres pruebas de arriba
+  // usan una regex laxa (`/venci|no es v[áa]lido/i`), que sigue en verde
+  // aunque alguien parta la rama en DOS mensajes distintos ("Este enlace no
+  // es válido." / "Este enlace ya venció."). Esa fuga es justo lo que el
+  // diseño nombra tres veces: si los tres casos de rechazo se distinguen,
+  // alguien puede usar la respuesta para averiguar qué correos están
+  // invitados. Esta prueba no compara contra una regex: compara los tres
+  // textos ENTRE SÍ, así que partir la rama en dos mensajes la pone roja sin
+  // importar qué tan razonable suene cada uno por separado.
+  it('los tres motivos de rechazo devuelven exactamente el mismo texto, no sólo uno parecido', async () => {
+    fila = null;
+    const resInexistente = await POST(peticion({ enlace: 'no-existe', clave: CLAVE_BUENA }));
+    const cuerpoInexistente = await resInexistente.json();
+
+    fila = filaInvitacionValida({ invitacion_expira: new Date(Date.now() - 3_600_000).toISOString() });
+    const resVencido = await POST(peticion({ enlace: 'abc', clave: CLAVE_BUENA }));
+    const cuerpoVencido = await resVencido.json();
+
+    fila = filaInvitacionValida({ activo: false });
+    const resDesactivada = await POST(peticion({ enlace: 'abc', clave: CLAVE_BUENA }));
+    const cuerpoDesactivada = await resDesactivada.json();
+
+    expect(resInexistente.status).toBe(400);
+    expect(resVencido.status).toBe(400);
+    expect(resDesactivada.status).toBe(400);
+    expect(cuerpoVencido.error).toBe(cuerpoInexistente.error);
+    expect(cuerpoDesactivada.error).toBe(cuerpoInexistente.error);
+  });
+
   it('exige una clave de al menos 10 caracteres', async () => {
     const res = await POST(peticion({ enlace: 'abc', clave: 'corta' }));
     expect(res.status).toBe(400);
+  });
+
+  // Ronda de correcciones 1, hallazgo menor: 'corta' tiene 5 caracteres, así
+  // que atrapa un mínimo corrido a 4 o a 5, pero deja pasar cualquier mínimo
+  // entre 6 y 9 sin que ninguna prueba se entere. Estas dos fijan la
+  // frontera exacta que pide el brief (10).
+  it('rechaza una clave de exactamente 9 caracteres (frontera del mínimo)', async () => {
+    const res = await POST(peticion({ enlace: 'abc', clave: '123456789' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('acepta una clave de exactamente 10 caracteres (frontera del mínimo)', async () => {
+    const res = await POST(peticion({ enlace: 'abc', clave: '1234567890' }));
+    expect(res.status).toBe(200);
   });
 
   // Busca por huella, no por enlace: el valor crudo nunca toca la consulta.
@@ -164,4 +250,35 @@ describe('POST /api/cotizacion/fijar-clave', () => {
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
+
+  // Ronda de correcciones 1, hallazgo importante: entre la lectura de la
+  // invitación y la escritura que la consume hay una derivación de scrypt
+  // REAL —no mockeada acá a propósito, porque la ventana de la carrera ES ese
+  // tiempo (~100-400 ms, ver el comentario de N en credenciales.mjs). Dos
+  // peticiones concurrentes con el mismo enlace: las dos leen la fila
+  // vigente (ninguna escribió todavía), las dos derivan su propio hash, y
+  // sólo una puede ganar la escritura condicionada por `invitacion_hash` —la
+  // otra encuentra la invitación ya consumida (cero filas afectadas) y se
+  // rechaza igual que un enlace inválido. Sin el `.eq('invitacion_hash', ...)`
+  // de la escritura (revertido a mano para verificar), las dos escrituras
+  // sólo filtran por `id` —que no cambia— y las dos "ganan": esta prueba se
+  // pone roja con `[200, 200]` en vez de `[200, 400]`.
+  it(
+    'el enlace es de un solo uso: dos peticiones concurrentes con el mismo enlace, sólo una fija la clave',
+    async () => {
+      const [res1, res2] = await Promise.all([
+        POST(peticion({ enlace: 'abc', clave: CLAVE_BUENA })),
+        POST(peticion({ enlace: 'abc', clave: CLAVE_BUENA })),
+      ]);
+
+      const estados = [res1.status, res2.status].sort((a, b) => a - b);
+      expect(estados).toEqual([200, 400]);
+
+      // Ni cero cookies (algo se rompió) ni dos (las dos peticiones se
+      // creyeron dueñas del enlace) — exactamente una.
+      const cookies = [res1.headers.get('set-cookie'), res2.headers.get('set-cookie')];
+      expect(cookies.filter((c) => c !== null)).toHaveLength(1);
+    },
+    10_000,
+  );
 });

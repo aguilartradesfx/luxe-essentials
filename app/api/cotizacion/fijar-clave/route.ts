@@ -103,13 +103,20 @@ export async function POST(request: Request) {
     );
   }
 
+  // Ronda de correcciones 1: entre la lectura de arriba y esta escritura hay
+  // una derivación de scrypt (`hashClave`), lenta a propósito — la ventana no
+  // es de microsegundos, son ~100 ms o más. Dos peticiones concurrentes con
+  // el MISMO enlace leen las dos la fila vigente, las dos derivan, y si esta
+  // escritura sólo filtrara por `id`, las dos escribirían y las dos
+  // recibirían una sesión: un enlace de un solo uso terminaría emitiendo dos
+  // credenciales. Por eso el `.eq('invitacion_hash', huella)` de abajo es un
+  // compare-and-swap: sólo escribe si la invitación sigue exactamente como se
+  // leyó. `.select('id')` deja ver cuántas filas tocó — con cero, alguien más
+  // ya consumió este enlace primero, y se rechaza igual que un enlace
+  // inválido (nunca se distingue el motivo).
+  let filasAfectadas: unknown[] | null;
   try {
-    // El enlace es de un solo uso: `invitacion_hash` e `invitacion_expira`
-    // quedan en null en la MISMA escritura que fija la clave. Si no, quien
-    // conserve el correo podría volver a fijar la clave más adelante y
-    // entrar cuando quiera. `intentos`/`bloqueado_hasta` en cero arrancan la
-    // cuenta limpia, igual que hace `autenticarUsuario` al entrar bien.
-    const { error } = await db
+    const { data, error } = await db
       .from('usuarios_panel')
       .update({
         clave_hash: claveHash,
@@ -120,8 +127,11 @@ export async function POST(request: Request) {
         bloqueado_hasta: null,
         ultimo_acceso: new Date().toISOString(),
       })
-      .eq('id', fila.id);
+      .eq('id', fila.id)
+      .eq('invitacion_hash', huella)
+      .select('id');
     if (error) throw new Error(error.message);
+    filasAfectadas = data as unknown[] | null;
   } catch (err) {
     console.error(
       '[cotizador] No se pudo guardar la clave nueva.',
@@ -131,6 +141,10 @@ export async function POST(request: Request) {
       { ok: false, error: 'No pudimos guardar tu clave. Intentá de nuevo en un momento.' },
       { status: 500 },
     );
+  }
+
+  if (!filasAfectadas || filasAfectadas.length === 0) {
+    return NextResponse.json({ ok: false, error: MENSAJE_ENLACE_INVALIDO }, { status: 400 });
   }
 
   try {

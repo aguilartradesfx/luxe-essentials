@@ -40,6 +40,48 @@ describe('enviarInvitacion', () => {
     expect(html).toContain(`${HORAS_VIGENCIA} horas`);
   });
 
+  // Ronda de correcciones 1, hallazgo importante: `nombre` lo escribe OTRO
+  // usuario (quien invita, Tarea 5), no la persona invitada. Payload real
+  // usado en la revisión: sin espacios (para que `primerNombreDe`, que corta
+  // en el primer espacio, no lo neutralice por accidente) y que abre una
+  // etiqueta `<a href>` hacia un dominio ajeno.
+  it('escapa el nombre antes de interpolarlo en el html: no se puede inyectar una etiqueta', async () => {
+    const payload = '</p><a/href=https://sitio-falso.cr>Reclamá</a><p>';
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarInvitacion({ ...params, nombre: payload }, { ...deps, fetchImpl });
+    const { html } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    // El correo SÍ lleva enlaces reales propios (el botón y el enlace en
+    // texto), así que no alcanza con "ningún `<a href=`" — hay que verificar
+    // puntualmente que el payload no abrió una etiqueta de verdad. Si esto
+    // fallara, `html` tendría un `<a` real apuntando a `sitio-falso.cr`,
+    // servido con remitente y dominio legítimos de Luxe Essentials.
+    expect(html).not.toMatch(/<a\/href=https:\/\/sitio-falso\.cr/i);
+    expect(html).toContain('&lt;/p&gt;&lt;a/href=https://sitio-falso.cr&gt;');
+  });
+
+  // Ronda de correcciones 1, hallazgo menor: `enlaceCompleto` no obligaba a
+  // nada sobre la forma de `enlace` — hoy es siempre hexadecimal
+  // (`generarInvitacion`, Tarea 1) y por eso es inofensivo en la práctica,
+  // pero nada en la firma de `enviarInvitacion` lo garantiza. Defensivo.
+  //
+  // El payload es a propósito uno que `escaparHtml` NO alcanza a neutralizar
+  // por sí sola: un "&" no es un metacarácter de HTML que haga falta escapar
+  // para que el atributo sea válido (de hecho `escaparHtml` lo convierte en
+  // `&amp;`, que un navegador o cliente de correo vuelve a leer como "&" al
+  // resolver la URL) — así que si esta prueba pasa gracias al escapado del
+  // punto anterior en vez de a `encodeURIComponent`, no está probando lo que
+  // dice probar. Sin codificar, un "&" en el enlace abre un segundo parámetro
+  // de query (`redirect=...`) que un cliente de correo puede resolver como
+  // si fuera parte del enlace legítimo.
+  it('codifica el enlace antes de ponerlo en el query string: un "&" no agrega un parámetro nuevo', async () => {
+    const payload = 'abc&redirect=https://sitio-falso.cr';
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarInvitacion({ ...params, enlace: payload }, { ...deps, fetchImpl });
+    const { html } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(html).toContain('enlace=abc%26redirect%3Dhttps%3A%2F%2Fsitio-falso.cr');
+    expect(html).not.toContain('&amp;redirect=https://sitio-falso.cr');
+  });
+
   // Sin versión de texto, el correo puntúa peor en los filtros de spam — el
   // dominio de envío es nuevo y todavía no tiene reputación.
   it('incluye siempre una versión de texto plano, con el enlace', async () => {

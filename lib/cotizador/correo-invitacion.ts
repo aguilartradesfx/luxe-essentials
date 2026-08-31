@@ -29,17 +29,47 @@ function urlSitio(): string {
   return process.env.NEXT_PUBLIC_SITE_URL || 'https://luxeessentialscr.com';
 }
 
+// Ronda de correcciones 1, hallazgo menor: nada en la firma de
+// `enviarInvitacion` obliga a que `enlace` sean 64 caracteres hexadecimales
+// (hoy lo es, porque `generarInvitacion` lo genera así — Tarea 1). Se
+// codifica igual, como cualquier valor que termina en un query string.
 function enlaceCompleto(enlace: string): string {
-  return `${urlSitio()}/cotizador/clave?enlace=${enlace}`;
+  return `${urlSitio()}/cotizador/clave?enlace=${encodeURIComponent(enlace)}`;
 }
 
 function primerNombreDe(nombre: string): string {
   return nombre.trim().split(/\s+/)[0] ?? nombre;
 }
 
+// Ronda de correcciones 1, hallazgo importante: `nombre` lo escribe OTRO
+// usuario (quien invita, en Tarea 5), no la persona invitada — así que es
+// exactamente el tipo de valor que no se puede interpolar crudo en HTML. Sin
+// escapar, un nombre como `</p><a/href=https://sitio-falso.cr>Reclamá</a><p>`
+// sale íntegro en el correo: el destinatario recibe un mensaje con
+// remitente y dominio legítimos que contiene un enlace de phishing armado
+// por quien invitó. Cortar en el primer espacio (`primerNombreDe`) no
+// alcanza — un payload sin espacios pasa igual, y de hecho el ejemplo de
+// arriba no tiene ninguno.
+//
+// `lib/cotizador/correo.ts` tiene el mismo patrón sin escapar, pero ahí el
+// nombre lo escribe el propio vendedor para su cliente (una fuente que ya es
+// dueña de la cotización) — arreglar eso es otra tarea, no ésta.
+function escaparHtml(valor: string): string {
+  return valor
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function cuerpoHtml(p: ParamsInvitacion): string {
-  const primerNombre = primerNombreDe(p.nombre);
-  const url = enlaceCompleto(p.enlace);
+  const primerNombre = escaparHtml(primerNombreDe(p.nombre));
+  // La URL completa también se escapa antes de interpolarse: es la
+  // combinación de `urlSitio()` (variable de entorno, controlada por quien
+  // despliega) y el enlace ya codificado con `encodeURIComponent` arriba, así
+  // que hoy no puede traer `&`/`<`/`>`/`"` — pero nada en el tipo de
+  // `NEXT_PUBLIC_SITE_URL` lo garantiza, y escaparla es gratis.
+  const url = escaparHtml(enlaceCompleto(p.enlace));
 
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: ${BEIGE};">
