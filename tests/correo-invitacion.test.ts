@@ -94,6 +94,48 @@ describe('enviarInvitacion', () => {
     expect(text).not.toMatch(/<[a-z][\s\S]*>/i);
   });
 
+  // Rediseño del correo (pedido del dueño: "está del culo"): nada de
+  // imágenes remotas ni de una hoja de estilos aparte — el CSP y buena
+  // parte de los clientes de correo las bloquean, así que el correo tiene
+  // que sostenerse solo con tablas y estilos en línea.
+  it('no depende de imágenes remotas ni de una hoja de estilos aparte', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarInvitacion(params, { ...deps, fetchImpl });
+    const { html } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(html).not.toMatch(/<img/i);
+    expect(html).not.toMatch(/<style/i);
+    expect(html).not.toMatch(/<link/i);
+  });
+
+  // El botón tiene que ser una celda de tabla con fondo y padding —no un
+  // `<a>` pelado sin ningún estilo alrededor—, para que se note como botón
+  // incluso en un cliente que ignora `display: inline-block`.
+  it('el boton "Elegir mi clave" es una celda de tabla con fondo de marca, no un enlace pelado', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarInvitacion(params, { ...deps, fetchImpl });
+    const { html } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const posicionBoton = html.indexOf('Elegir mi clave');
+    expect(posicionBoton).toBeGreaterThan(-1);
+    // La celda `<td>` que envuelve el enlace del botón, no cualquier `<td>`
+    // del correo, es la que lleva el fondo teal y el padding grande.
+    const celdaBoton = html.lastIndexOf('<td', posicionBoton);
+    const trozoCelda = html.slice(celdaBoton, posicionBoton);
+    expect(trozoCelda).toContain(`background-color: ${'#567C8D'}`);
+    expect(trozoCelda).toMatch(/padding: \d+px \d+px/);
+  });
+
+  // Ancho máximo ~600px, centrado: la técnica híbrida de correo (`width`
+  // fijo para Outlook + `max-width` en el estilo para todo lo demás) es la
+  // única forma de que se vea bien en escritorio y se angoste en el celular
+  // sin depender de `@media` (que Outlook de escritorio ignora igual).
+  it('la tarjeta principal tiene un ancho máximo de 600px y está centrada', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarInvitacion(params, { ...deps, fetchImpl });
+    const { html } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(html).toMatch(/max-width:\s*600px/);
+    expect(html).toContain('align="center"');
+  });
+
   it('devuelve el error de Resend sin lanzar', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(respuesta({ message: 'dominio no verificado' }, 403));
     const r = await enviarInvitacion(params, { ...deps, fetchImpl });

@@ -62,6 +62,12 @@ function escaparHtml(valor: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// Gris/navy suave para el texto de cuerpo (no el `${NAVY}` de marca, que acá
+// queda reservado para la franja superior y los títulos — usarlo también en
+// párrafos largos lo aplana todo a un solo tono y se pierde la jerarquía).
+const TINTA = '#2A2A2A';
+const TINTA_SUAVE = '#6B7A85';
+
 function cuerpoHtml(p: ParamsInvitacion): string {
   const primerNombre = escaparHtml(primerNombreDe(p.nombre));
   // La URL completa también se escapa antes de interpolarse: es la
@@ -71,43 +77,68 @@ function cuerpoHtml(p: ParamsInvitacion): string {
   // `NEXT_PUBLIC_SITE_URL` lo garantiza, y escaparla es gratis.
   const url = escaparHtml(enlaceCompleto(p.enlace));
 
+  // Ancho híbrido a propósito: la tabla interna pide 600 (`width="600"`,
+  // lo único que Outlook de escritorio respeta, sin soporte de `@media`) y
+  // el `style="max-width: 600px"` es lo que un cliente moderno (Gmail,
+  // Apple Mail, el navegador) usa para angostarla en pantallas chicas —
+  // ninguno de los dos estorba al otro. Todo en tablas y estilos en línea:
+  // nada de `<style>`, flexbox ni imágenes remotas — un cliente que las
+  // bloquea, o Outlook, igual debe leerse bien.
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: ${BEIGE};">
   <tr>
-    <td align="center" style="padding: 32px 16px;">
-      <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px;">
+    <td align="center" style="padding: 40px 16px;">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width: 100%; max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden;">
         <tr>
-          <td style="background-color: ${NAVY}; padding: 20px 32px; border-radius: 8px 8px 0 0;">
-            <span style="font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: bold; color: #ffffff;">
+          <td style="background-color: ${NAVY}; padding: 36px 40px;">
+            <span style="font-family: Georgia, 'Times New Roman', serif; font-size: 22px; letter-spacing: 0.5px; color: #ffffff;">
               Luxe Essentials
             </span>
           </td>
         </tr>
         <tr>
-          <td style="padding: 32px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.6; color: #20211f;">
-            <p style="margin: 0 0 16px 0;">Hola ${primerNombre},</p>
-            <p style="margin: 0 0 24px 0;">
-              Te invitaron a entrar al cotizador de Luxe Essentials. Para arrancar, elegí tu
-              propia clave desde el siguiente botón:
+          <td style="background-color: ${TEAL}; height: 4px; line-height: 4px; font-size: 1px;">&nbsp;</td>
+        </tr>
+        <tr>
+          <td style="padding: 40px 40px 8px 40px; font-family: Arial, Helvetica, sans-serif; color: ${TINTA};">
+            <p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6;">Hola ${primerNombre},</p>
+            <p style="margin: 0 0 12px 0; font-size: 22px; font-weight: bold; line-height: 1.35; color: ${NAVY};">
+              Te invitaron al cotizador de Luxe Essentials
             </p>
-            <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 0 24px 0;">
+            <p style="margin: 0 0 32px 0; font-size: 15px; line-height: 1.6; color: ${TINTA};">
+              Para arrancar, elegí tu propia clave desde el siguiente botón. Es un enlace de un
+              solo uso, pensado solo para vos.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding: 0 40px 36px 40px;">
+            <table role="presentation" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="background-color: ${TEAL}; border-radius: 6px;">
-                  <a href="${url}" style="display: inline-block; padding: 12px 28px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: bold; color: #ffffff; text-decoration: none;">
+                <td align="center" style="background-color: ${TEAL}; border-radius: 8px;">
+                  <a href="${url}" style="display: inline-block; padding: 15px 40px; font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: bold; color: #ffffff; text-decoration: none;">
                     Elegir mi clave
                   </a>
                 </td>
               </tr>
             </table>
-            <p style="margin: 0 0 8px 0; font-size: 13px; color: ${TEAL};">
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 0 40px 36px 40px; border-top: 1px solid ${BEIGE};">
+            <p style="margin: 28px 0 6px 0; font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.6; color: ${TINTA_SUAVE};">
               Si el botón no se puede hacer clic, copiá y pegá este enlace en tu navegador:
             </p>
-            <p style="margin: 0 0 24px 0; font-size: 13px; word-break: break-all;">
+            <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.6; word-break: break-all;">
               <a href="${url}" style="color: ${TEAL};">${url}</a>
             </p>
-            <p style="margin: 0; font-size: 13px; color: ${TEAL};">
-              Este enlace vence en ${HORAS_VIGENCIA} horas. Si no lo pediste vos, podés ignorar
-              este correo.
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: ${BEIGE}; padding: 20px 40px; border-radius: 0 0 12px 12px;">
+            <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.6; color: ${TINTA_SUAVE};">
+              Este enlace vence en ${HORAS_VIGENCIA} horas. Si no lo pediste vos, podés ignorar este
+              correo — tu clave actual sigue siendo la misma.
             </p>
           </td>
         </tr>
@@ -125,15 +156,17 @@ function cuerpoTexto(p: ParamsInvitacion): string {
   const url = enlaceCompleto(p.enlace);
 
   return [
+    'LUXE ESSENTIALS',
+    '',
     `Hola ${primerNombre},`,
     '',
-    'Te invitaron a entrar al cotizador de Luxe Essentials. Para arrancar, elegí tu propia',
-    'clave desde este enlace:',
+    'Te invitaron al cotizador de Luxe Essentials. Para arrancar, elegí tu propia clave',
+    'desde este enlace de un solo uso:',
     '',
     url,
     '',
     `Este enlace vence en ${HORAS_VIGENCIA} horas. Si no lo pediste vos, podés ignorar este`,
-    'correo.',
+    'correo — tu clave actual sigue siendo la misma.',
   ].join('\n');
 }
 
