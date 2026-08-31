@@ -184,7 +184,7 @@ export async function procesar(
   // después— un 500 pasajero de GHL perdería el aviso para siempre, porque
   // `debeAvisar` no volvería a autorizarlo nunca.
   if (avisar) {
-    const errorAviso = await dispararWorkflow(contactId, escritura);
+    const errorAviso = await dispararWorkflow(contactId, config.WORKFLOW_AVISO, escritura);
     errores.push(errorAviso);
     if (!errorAviso) {
       errores.push(await guardar(contactId, { notificado_at: new Date().toISOString() }, db));

@@ -6,6 +6,10 @@ describe('config del agente', () => {
     expect(config.WORKFLOW_AVISO).toBe('1235c311-b3e6-4b7d-be40-0ec2a1f01a60');
   });
 
+  it('expone el workflow de "Cotización nueva"', () => {
+    expect(config.WORKFLOW_COTIZACION_NUEVA).toBe('abfe1f24-e993-4963-ae8e-658142e8aa47');
+  });
+
   it('topa las respuestas automáticas en 4', () => {
     expect(config.TOPE_TURNOS).toBe(4);
   });

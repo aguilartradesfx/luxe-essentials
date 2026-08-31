@@ -121,13 +121,23 @@ export async function agregarNota(
   }
 }
 
+// `workflowId` es un parámetro y no una constante interna porque este agente
+// dispara más de un workflow: el de "Notificación interna (Respondió el
+// email)" desde procesar.ts (config.WORKFLOW_EMAIL_RESPONDIDO) y el de
+// "Cotización nueva" desde app/api/cotizacion/route.ts
+// (config.WORKFLOW_COTIZACION_NUEVA). Cada llamador decide cuál.
+//
+// `POST /contacts/{id}/workflow/{workflowId}` mete al contacto DIRECTO en el
+// workflow y SE SALTA cualquier trigger configurado en la interfaz de
+// GoHighLevel. Por eso nadie debe configurar ahí, además, un trigger para el
+// mismo evento — el resultado serían dos disparos del mismo aviso.
 export async function dispararWorkflow(
-  contactId: string, deps: DepsEscritura,
+  contactId: string, workflowId: string, deps: DepsEscritura,
 ): Promise<string | undefined> {
   const { apiKey, fetchImpl = fetch } = deps;
   try {
     const res = await fetchImpl(
-      `${config.BASE_GHL}/contacts/${contactId}/workflow/${config.WORKFLOW_AVISO}`,
+      `${config.BASE_GHL}/contacts/${contactId}/workflow/${workflowId}`,
       {
         method: 'POST',
         headers: cabeceras(apiKey, config.VERSION_CONTACTOS),

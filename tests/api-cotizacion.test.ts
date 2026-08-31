@@ -17,8 +17,12 @@ vi.mock('@/lib/cotizador/ghl', async (importOriginal) => {
 // archivo dispare una llamada de red real — `agregarNota`
 // (lib/agente/acciones.ts) no está mockeada en ningún otro punto de este
 // archivo, y sin esto se ejecutaría de verdad en cuanto el correo "sale".
+//
+// `dispararWorkflow` (workflow "Cotización nueva"): mismo criterio, mockeada
+// para no disparar de verdad contra la cuenta real de GoHighLevel.
 vi.mock('@/lib/agente/acciones', () => ({
   agregarNota: vi.fn().mockResolvedValue(undefined),
+  dispararWorkflow: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Tarea 5: el PDF, el guardado en Storage y el correo se simulan igual que
@@ -62,7 +66,8 @@ vi.mock('@/lib/supabase/server', () => ({
 
 const { POST } = await import('@/app/api/cotizacion/route');
 const { crearEstimate } = await import('@/lib/cotizador/ghl');
-const { agregarNota } = await import('@/lib/agente/acciones');
+const { agregarNota, dispararWorkflow } = await import('@/lib/agente/acciones');
+const configAgente = (await import('@/lib/agente/config')).config;
 const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
 const { guardarPdf, enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
@@ -120,6 +125,8 @@ describe('POST /api/cotizacion', () => {
     vi.mocked(enviarCotizacion).mockClear();
     vi.mocked(agregarNota).mockClear();
     vi.mocked(agregarNota).mockResolvedValue(undefined);
+    vi.mocked(dispararWorkflow).mockClear();
+    vi.mocked(dispararWorkflow).mockResolvedValue(undefined);
   });
 
   it('rechaza sin sesión', async () => {
@@ -605,5 +612,60 @@ describe('POST /api/cotizacion', () => {
     const res = await POST(peticionAutenticada(valido));
     expect(res.status).toBe(200);
     expect(agregarNota).not.toHaveBeenCalled();
+  });
+
+  describe('workflow "Cotización nueva" al crear la cotización', () => {
+    it('dispara el workflow con el contactId y el id correcto cuando la cotización se creó', async () => {
+      const res = await POST(peticionAutenticada(valido));
+      expect(res.status).toBe(200);
+      expect(dispararWorkflow).toHaveBeenCalledWith(
+        'contacto-ghl-1', configAgente.WORKFLOW_COTIZACION_NUEVA, expect.anything(),
+      );
+    });
+
+    // Sin contacto no hay a quién meter en el workflow: sería una llamada a
+    // GoHighLevel con un id vacío o inventado.
+    it('no dispara el workflow si no se llegó a resolver ningún contactId', async () => {
+      vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL contacto 500: boom' });
+      const res = await POST(peticionAutenticada(valido));
+      expect(res.status).toBe(200);
+      expect(dispararWorkflow).not.toHaveBeenCalled();
+    });
+
+    // El correo puede fallar y el workflow igual dispara: la cotización ya
+    // existe y el aviso interno no depende de que el correo al cliente salga.
+    it('dispara el workflow aunque el correo al cliente haya fallado', async () => {
+      vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+      const res = await POST(peticionAutenticada(valido));
+      expect(res.status).toBe(200);
+      expect(dispararWorkflow).toHaveBeenCalledWith(
+        'contacto-ghl-1', configAgente.WORKFLOW_COTIZACION_NUEVA, expect.anything(),
+      );
+    });
+
+    // Un fallo del workflow no puede tumbar la cotización: ya existe, el PDF
+    // pudo haberse generado y el correo pudo haber salido. Se registra y sigue.
+    it('no tumba la respuesta si el workflow falla, y lo registra en consola', async () => {
+      const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(dispararWorkflow).mockResolvedValueOnce('GHL workflow 500: boom');
+      const res = await POST(peticionAutenticada(valido));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo.ok).toBe(true);
+      expect(espia).toHaveBeenCalledWith(
+        expect.stringContaining('workflow de cotización nueva'),
+        'GHL workflow 500: boom',
+      );
+      espia.mockRestore();
+    });
+
+    it('usa el contactId recibido del vendedor cuando GoHighLevel no devuelve uno', async () => {
+      vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL contacto 500: boom' });
+      const res = await POST(peticionAutenticada({ ...valido, contactId: 'contacto-del-vendedor' }));
+      expect(res.status).toBe(200);
+      expect(dispararWorkflow).toHaveBeenCalledWith(
+        'contacto-del-vendedor', configAgente.WORKFLOW_COTIZACION_NUEVA, expect.anything(),
+      );
+    });
   });
 });

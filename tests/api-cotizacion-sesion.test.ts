@@ -35,7 +35,9 @@ vi.mock('@/lib/cotizador/usuarios', async (importOriginal) => {
 // Tarea 12: `notaDeCotizacion` queda real vía `importOriginal` (es pura y
 // local); sólo se mockea `crearEstimate`. `agregarNota` se mockea aparte
 // (ver abajo) para que ninguna prueba de este archivo dispare una llamada
-// de red real cuando el correo "sale".
+// de red real cuando el correo "sale". `dispararWorkflow` (workflow
+// "Cotización nueva") se mockea por el mismo motivo: la ruta la llama en
+// cuanto hay `contactId`, sin depender del correo.
 vi.mock('@/lib/cotizador/ghl', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/cotizador/ghl')>();
   return {
@@ -45,6 +47,7 @@ vi.mock('@/lib/cotizador/ghl', async (importOriginal) => {
 });
 vi.mock('@/lib/agente/acciones', () => ({
   agregarNota: vi.fn().mockResolvedValue(undefined),
+  dispararWorkflow: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/lib/cotizador/documento', () => ({
   renderizarCotizacion: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.7 falso')),

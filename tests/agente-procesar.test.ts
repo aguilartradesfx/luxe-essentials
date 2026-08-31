@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { config } from '@/lib/agente/config';
 
 const hidratar = vi.fn();
 vi.mock('@/lib/agente/conversacion', async (original) => ({
@@ -206,7 +207,7 @@ describe('aviso al equipo', () => {
       salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@x.com' } },
     });
     await procesar('c1', deps);
-    expect(dispararWorkflow).toHaveBeenCalledWith('c1', expect.anything());
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO, expect.anything());
   });
 
   it('no dispara con nombre pero sin correo ni teléfono', async () => {

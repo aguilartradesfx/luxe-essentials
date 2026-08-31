@@ -64,6 +64,11 @@ export const config = {
   VERSION_CONTACTOS: '2021-07-28',
 
   WORKFLOW_AVISO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
+
+  // Workflow "Cotización nueva". Se dispara desde
+  // app/api/cotizacion/route.ts en cuanto la cotización queda registrada y
+  // hay un `contactId` al que meter en el workflow.
+  WORKFLOW_COTIZACION_NUEVA: 'abfe1f24-e993-4963-ae8e-658142e8aa47',
   // Campo personalizado de la carpeta "Luxe · Base Comercial 2026". En la base
   // importada First Name lleva el nombre comercial del negocio, así que el
   // nombre de la persona que escribe necesita su propio campo.

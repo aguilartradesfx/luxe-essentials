@@ -184,11 +184,21 @@ describe('agregarNota', () => {
 });
 
 describe('dispararWorkflow', () => {
-  it('pega en la ruta del workflow de aviso interno', async () => {
+  // `workflowId` es un parámetro (no una constante fija adentro): este mismo
+  // agente dispara más de un workflow — "Notificación interna (Respondió el
+  // email)" desde procesar.ts y "Cotización nueva" desde
+  // app/api/cotizacion/route.ts — y cada llamador decide cuál.
+  it('pega en la ruta del workflow que se le pida', async () => {
     const fetchImpl = ok({});
-    await dispararWorkflow('c1', { ...deps, fetchImpl });
-    expect(fetchImpl.mock.calls[0][0]).toContain('/contacts/c1/workflow/1235c311-b3e6-4b7d-be40-0ec2a1f01a60');
+    await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
+    expect(fetchImpl.mock.calls[0][0]).toContain('/contacts/c1/workflow/workflow-cualquiera');
     expect(fetchImpl.mock.calls[0][1].method).toBe('POST');
+  });
+
+  it('devuelve el error sin lanzar', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
+    const err = await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
+    expect(err).toContain('500');
   });
 });
 

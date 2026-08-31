@@ -4,7 +4,8 @@ import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
 import { crearEstimate, notaDeCotizacion } from '@/lib/cotizador/ghl';
-import { agregarNota } from '@/lib/agente/acciones';
+import { agregarNota, dispararWorkflow } from '@/lib/agente/acciones';
+import { config as configAgente } from '@/lib/agente/config';
 import { renderizarCotizacion } from '@/lib/cotizador/documento';
 import { guardarPdf, enlaceFirmado } from '@/lib/cotizador/almacen';
 import { enviarCotizacion } from '@/lib/cotizador/correo';
@@ -160,6 +161,34 @@ export async function POST(request: Request) {
   // `crearEstimate`), es un dato gratis que ya tenemos en la mano y que de
   // otro modo se pierde sin dejar rastro en la fila.
   const contactId = ghl.contactId ?? datos.contactId ?? null;
+
+  // Workflow "Cotización nueva" (config.WORKFLOW_COTIZACION_NUEVA): avisa por
+  // dentro en cuanto la cotización queda registrada. Sólo tiene sentido con un
+  // contacto al que meter en el workflow — sin `contactId` no hay a quién
+  // avisar. Fire-and-forget, mismo criterio que el resto del enriquecimiento
+  // de GoHighLevel de esta ruta: la cotización ya existe, el PDF (más abajo)
+  // puede que ya se haya generado y el correo puede que ya haya salido —
+  // perder este aviso es molesto, perder la cotización es grave. Se registra
+  // en consola y se sigue; no tumba la respuesta ni el resto de la ruta.
+  //
+  // `dispararWorkflow` (lib/agente/acciones.ts) mete al contacto directo en
+  // el workflow vía `POST /contacts/{id}/workflow/{workflowId}` y SE SALTA
+  // cualquier trigger configurado en la interfaz de GoHighLevel — no hace
+  // falta (ni conviene) configurar ahí, además, un trigger para "cotización
+  // nueva", o el aviso saldría duplicado.
+  if (contactId) {
+    const errorWorkflowCotizacion = await dispararWorkflow(
+      contactId,
+      configAgente.WORKFLOW_COTIZACION_NUEVA,
+      { apiKey: process.env.LUXE_GHL_API_KEY ?? '' },
+    );
+    if (errorWorkflowCotizacion) {
+      console.error(
+        '[cotizador] No se pudo disparar el workflow de cotización nueva en GoHighLevel.',
+        errorWorkflowCotizacion,
+      );
+    }
+  }
 
   // El `numero` no lo asigna este código: lo pone un trigger en la base
   // (migración 0010, `cotizaciones_asignar_numero` / `obtener_numero_cotizacion`)
