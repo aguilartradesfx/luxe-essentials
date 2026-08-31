@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerEtiquetas,
+  horaEventoGHL,
 } from '@/lib/agente/acciones';
 import { DATOS_VACIOS } from '@/lib/agente/estado';
 
@@ -197,10 +198,41 @@ describe('dispararWorkflow', () => {
     expect(fetchImpl.mock.calls[0][1].method).toBe('POST');
   });
 
+  // GoHighLevel devolvió 422 en producción porque el cuerpo mandaba
+  // `toISOString()` (con "Z" y milisegundos) en vez del desfase horario
+  // explícito que pide su propio mensaje de error. Esta prueba mira el
+  // cuerpo de la petición, no sólo la ruta y el método — antes ninguna
+  // prueba de este describe lo hacía, y por eso el 422 llegó a producción
+  // sin que la suite lo viera venir.
+  it('manda eventStartTime con desfase horario explícito, sin Z y sin milisegundos', async () => {
+    const fetchImpl = ok({});
+    await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.eventStartTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$/);
+  });
+
   it('devuelve el error sin lanzar', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
     const err = await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
     expect(err).toContain('500');
+  });
+});
+
+describe('horaEventoGHL', () => {
+  it('produce el formato exacto que GoHighLevel exige: desfase +00:00, sin Z y sin milisegundos', () => {
+    const fecha = new Date('2021-06-23T03:30:00.579Z');
+    expect(horaEventoGHL(fecha)).toBe('2021-06-23T03:30:00+00:00');
+  });
+
+  it('rechaza explícitamente la forma que produce toISOString() (con Z)', () => {
+    const fecha = new Date('2021-06-23T03:30:00.579Z');
+    expect(horaEventoGHL(fecha)).not.toContain('Z');
+    expect(horaEventoGHL(fecha)).not.toMatch(/\./);
+  });
+
+  it('es determinista: no depende de la hora del reloj ni de la zona horaria de la máquina', () => {
+    const fecha = new Date(Date.UTC(2026, 0, 1, 0, 0, 0, 0));
+    expect(horaEventoGHL(fecha)).toBe('2026-01-01T00:00:00+00:00');
   });
 });
 

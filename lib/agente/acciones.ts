@@ -148,6 +148,20 @@ export async function agregarNota(
   }
 }
 
+// GoHighLevel exige "un date and time con desfase horario", con este
+// ejemplo exacto en el propio mensaje de error: `2021-06-23T03:30:00+01:00`.
+// `Date.prototype.toISOString()` no sirve: pone `Z` en vez del desfase
+// explícito y arrastra milisegundos, y GHL responde 422 a ambas cosas (visto
+// en producción). Como aquí siempre trabajamos en UTC, el desfase es
+// siempre `+00:00` — nunca `Z`, nunca `.mmm`.
+//
+// `toISOString()` en sí es determinista (siempre UTC, sin importar la zona
+// horaria de la máquina donde corra Node), así que basta con reescribir su
+// cola: cambiar `.SSSZ` por `+00:00`.
+export function horaEventoGHL(ahora: Date = new Date()): string {
+  return ahora.toISOString().replace(/\.\d{3}Z$/, '+00:00');
+}
+
 // `workflowId` es un parámetro y no una constante interna porque este agente
 // dispara más de un workflow: el de "Notificación interna (Respondió el
 // email)" desde procesar.ts (config.WORKFLOW_EMAIL_RESPONDIDO) y el de
@@ -168,7 +182,7 @@ export async function dispararWorkflow(
       {
         method: 'POST',
         headers: cabeceras(apiKey, config.VERSION_CONTACTOS),
-        body: JSON.stringify({ eventStartTime: new Date().toISOString() }),
+        body: JSON.stringify({ eventStartTime: horaEventoGHL() }),
       },
     );
     if (!res.ok) return `GHL workflow ${res.status}: ${(await res.text()).slice(0, 200)}`;
