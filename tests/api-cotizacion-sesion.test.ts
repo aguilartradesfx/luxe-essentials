@@ -83,7 +83,7 @@ const { POST: postCatalogo } = await import('@/app/api/cotizacion/catalogo/route
 const { POST: postPrevisualizar } = await import('@/app/api/cotizacion/previsualizar/route');
 const { POST: postBorradores } = await import('@/app/api/cotizacion/borradores/route');
 const { POST: postEntrar } = await import('@/app/api/cotizacion/entrar/route');
-const { emitirSesion } = await import('@/lib/sesion');
+const { emitirSesion, sesionDe } = await import('@/lib/sesion');
 const { autenticarUsuario } = await import('@/lib/cotizador/usuarios');
 
 function peticion(url: string, cuerpo: unknown, cabeceras: Record<string, string> = {}) {
@@ -276,15 +276,32 @@ describe('POST /api/cotizacion/entrar', () => {
   // `autenticarUsuario` (que en producción significa "nadie puede entrar")
   // pasaba en verde antes de este ajuste, porque el mock resuelve igual sin
   // mirar con qué lo llamaron.
+  //
+  // Ronda de correcciones 3: mismo criterio, extendido al id. `idDelMock`
+  // es DISTINTO del `'aaaaaaaa-0000-4000-8000-000000000001'` que usa el
+  // resto del archivo — si coincidiera, la prueba pasaría igual aunque la
+  // ruta emitiera la cookie con un id fijo y ajeno en vez de
+  // `resultado.id`, que es exactamente el mutante que este ancla tiene que
+  // matar (dos rutas —esta y `fijar-clave`— son las únicas que EMITEN una
+  // cookie; nada más abajo en la cadena puede notar que el id que llevan
+  // es el equivocado).
   it('emite una sesión con el nombre real del vendedor autenticado, en el orden correcto de argumentos', async () => {
-    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, id: 'aaaaaaaa-0000-4000-8000-000000000001', nombre: 'Marta Vargas', rol: 'vendedor' });
+    const idDelMock = 'ffffffff-9999-4999-8999-000000000009';
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, id: idDelMock, nombre: 'Marta Vargas', rol: 'vendedor' });
     const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'x' }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.vendedor).toBe('Marta Vargas');
     expect(cuerpo.rol).toBe('vendedor');
     expect(typeof cuerpo.csrf).toBe('string');
-    expect(res.headers.get('set-cookie')).toContain('luxe_sesion=');
+    const setCookie = res.headers.get('set-cookie');
+    expect(setCookie).toContain('luxe_sesion=');
+    // Se decodifica la cookie emitida con `sesionDe` —la función de
+    // verdad, no un split a mano— y se compara su `id` contra el que
+    // devolvió `autenticarUsuario`.
+    const cookieValor = (setCookie ?? '').split(';')[0];
+    const sesionEmitida = sesionDe(new Request('https://luxeessentialscr.com/x', { headers: { cookie: cookieValor } }));
+    expect(sesionEmitida?.id).toBe(idDelMock);
     expect(autenticarUsuario).toHaveBeenCalledWith('guillermo@luxeessentialscr.com', 'x', expect.anything());
   });
 

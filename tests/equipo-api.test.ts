@@ -636,8 +636,15 @@ describe('el ultimo superadmin activo no se puede tocar (via rpc atomica)', () =
     const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(500);
     expect(consoleError).toHaveBeenCalled();
-    // Y no se coló ningún éxito fantasma: la fila sigue como estaba.
-    expect(filas.find((f) => f.id === UUID_U1)?.activo).toBe(true);
+    // Ronda de correcciones 3: la aserción que vivía acá
+    // (`filas.find(...).activo` sigue en `true`) era vacua — con
+    // `resultadoRpcForzado` puesto, el doble de la rpc corta camino ANTES
+    // de tocar `filas` en absoluto (ver `ejecutarRpc`, más arriba), así
+    // que esa fila jamás podría cambiar, pasara lo que pasara en
+    // `cambiarEstado`. El ancla real de esta prueba es el 500 y el
+    // `console.error` de arriba: los dos SÍ se ponen en rojo si se revierte
+    // el chequeo estricto (`data === 'ok'`) a un `return { ok: true }` sin
+    // condición.
     consoleError.mockRestore();
   });
 

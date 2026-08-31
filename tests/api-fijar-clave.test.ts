@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { huellaDe } from '@/lib/cotizador/invitaciones';
+import { sesionDe } from '@/lib/sesion';
 
 const CLAVE_BUENA = 'clave-larga-de-prueba';
 
@@ -130,7 +131,17 @@ describe('POST /api/cotizacion/fijar-clave', () => {
     expect(cuerpo.vendedor).toBe('Guillermo Rojas');
     expect(cuerpo.rol).toBe('vendedor');
     expect(typeof cuerpo.csrf).toBe('string');
-    expect(res.headers.get('set-cookie')).toContain('luxe_sesion=');
+    const setCookie = res.headers.get('set-cookie');
+    expect(setCookie).toContain('luxe_sesion=');
+    // Ronda de correcciones 3: esta ruta es una de las DOS que EMITEN una
+    // cookie (la otra es /entrar) — nadie probaba que el id que lleva sea
+    // el de la fila que se acaba de autenticar, y no uno fijo pegado por
+    // error. Se decodifica con `sesionDe` (la función de verdad, no un
+    // split a mano) y se compara contra `fila!.id`, el id real de
+    // `filaInvitacionValida()`.
+    const cookieValor = (setCookie ?? '').split(';')[0];
+    const sesionEmitida = sesionDe(new Request('https://luxeessentialscr.com/x', { headers: { cookie: cookieValor } }));
+    expect(sesionEmitida?.id).toBe(fila!.id);
   });
 
   // El enlace es de un solo uso: si la huella no se borrara, quien lo tuviera
