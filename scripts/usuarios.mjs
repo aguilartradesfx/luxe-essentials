@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline';
+import { createHash, randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { config } from 'dotenv';
 import { hashClave } from '../lib/cotizador/credenciales.mjs';
@@ -19,8 +20,78 @@ function connectionString() {
   return `postgresql://postgres:${encodeURIComponent(password)}@db.${ref}.supabase.co:5432/postgres`;
 }
 
-function normalizarUsuario(usuario) {
-  return usuario.trim().toLowerCase();
+function normalizarCorreo(correo) {
+  return correo.trim().toLowerCase();
+}
+
+// Mismo problema que `credenciales.mjs`, pero acá no vale la pena mover un
+// módulo entero por tres líneas: `lib/cotizador/invitaciones.ts` es la fuente
+// de verdad (la usa `lib/cotizador/equipo.ts` desde el panel), y un `.mjs` no
+// puede importar un `.ts`. Estas tres líneas son una copia deliberada, y
+// `tests/usuarios-script.test.ts` trae la prueba cruzada que impide que las
+// dos huellas diverjan: si alguien cambia el algoritmo de un lado y no del
+// otro, esa prueba (y no un bug en producción) es quien se entera primero.
+const HORAS_VIGENCIA = 72;
+
+export function huellaDe(enlace) {
+  return createHash('sha256').update(enlace).digest('hex');
+}
+
+function generarInvitacion() {
+  const enlace = randomBytes(32).toString('hex');
+  return {
+    enlace,
+    huella: huellaDe(enlace),
+    expira: new Date(Date.now() + HORAS_VIGENCIA * 3_600_000),
+  };
+}
+
+function urlInvitacion(enlace) {
+  const sitio = process.env.NEXT_PUBLIC_SITE_URL || 'https://luxeessentialscr.com';
+  return `${sitio}/cotizador/clave?enlace=${encodeURIComponent(enlace)}`;
+}
+
+// Versión mínima —texto plano, sin la plantilla con estilos— del correo que
+// manda `lib/cotizador/correo-invitacion.ts` desde el panel. Ese módulo es
+// `.ts` y además importa `server-only`: tampoco es importable acá. Esta
+// consola se usa un puñado de veces al año como vía de recuperación, así que
+// no vale la pena duplicar la plantilla HTML completa; el enlace y la
+// vigencia son lo único que la persona invitada necesita.
+async function enviarCorreoInvitacion({ correo, nombre, enlace }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const remitente = process.env.LUXE_CORREO_REMITENTE;
+  if (!apiKey || !remitente) {
+    return { ok: false, error: 'Faltan RESEND_API_KEY o LUXE_CORREO_REMITENTE en el entorno.' };
+  }
+
+  const url = urlInvitacion(enlace);
+  const primerNombre = nombre.trim().split(/\s+/)[0] || nombre;
+  const cuerpo = {
+    from: remitente,
+    to: [correo],
+    subject: 'Tu acceso al cotizador de Luxe Essentials',
+    text:
+      `Hola ${primerNombre},\n\n` +
+      'Te invitaron a entrar al cotizador de Luxe Essentials. Para arrancar, elegí tu ' +
+      `propia clave desde este enlace:\n\n${url}\n\n` +
+      `Este enlace vence en ${HORAS_VIGENCIA} horas. Si no lo pediste vos, podés ignorar este correo.`,
+  };
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(cuerpo),
+    });
+    const texto = await res.text();
+    if (!res.ok) return { ok: false, error: `Resend ${res.status}: ${texto.slice(0, 300)}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // Los usuarios se administran por consola y no por una pantalla dentro del
@@ -30,35 +101,49 @@ function normalizarUsuario(usuario) {
 export async function construirSql(orden, argumentos) {
   switch (orden) {
     case 'listar':
+      // `rol` sí se selecciona, pero `clave_hash` nunca: el estado
+      // ('invitada'/'vencida'/'activa'/'desactivada') se deriva más abajo,
+      // en `imprimirListado`, sólo con `activo` e `invitacion_expira`.
+      // `invitacion_expira` se limpia a null en el mismo momento en que se
+      // fija `clave_hash` (ver `app/api/cotizacion/fijar-clave/route.ts`),
+      // así que "sin invitación pendiente" y "ya tiene clave" son la misma
+      // condición vistas desde acá — no hace falta traer el hash para
+      // saberlo, y esta lista no tiene ningún motivo para tocarlo.
       return {
         texto:
-          'select usuario, nombre, activo, intentos, bloqueado_hasta, ultimo_acceso, creado_at ' +
-          'from public.usuarios_panel order by activo desc, usuario',
+          'select correo, nombre, rol, activo, intentos, bloqueado_hasta, invitacion_expira, ultimo_acceso, creado_at ' +
+          'from public.usuarios_panel order by activo desc, correo',
         valores: [],
       };
-    case 'alta': {
-      const [usuario, nombre, clave] = argumentos;
-      if (!usuario || !nombre || !clave) {
+    case 'invitar': {
+      const [correo, nombre, ...banderas] = argumentos;
+      if (!correo || !nombre) {
         throw new Error(
-          'Uso: alta <usuario> "<nombre completo>" [clave]\n' +
-            'Sin el último argumento, la clave se pide por consola (recomendado: no queda ' +
-            'en el historial del shell ni visible en `ps`).',
+          'Uso: invitar <correo> "<nombre completo>" [--superadmin] [--sin-correo]\n' +
+            'Crea la cuenta sin clave y manda un enlace para que la persona elija la suya ' +
+            '(vence en 72 horas). Con --sin-correo se crea igual pero no se manda nada: la ' +
+            'consola muestra el enlace para pasarlo a mano.',
         );
       }
-      const { hash, sal } = await hashClave(clave);
+      const rol = banderas.includes('--superadmin') ? 'superadmin' : 'vendedor';
+      const sinCorreo = banderas.includes('--sin-correo');
+      const { enlace, huella, expira } = generarInvitacion();
       return {
         texto:
-          'insert into public.usuarios_panel (usuario, nombre, clave_hash, clave_sal) ' +
-          'values ($1, $2, $3, $4)',
-        valores: [normalizarUsuario(usuario), nombre, hash, sal],
+          'insert into public.usuarios_panel (correo, nombre, rol, invitacion_hash, invitacion_expira) ' +
+          'values ($1, $2, $3, $4, $5)',
+        valores: [normalizarCorreo(correo), nombre, rol, huella, expira.toISOString()],
+        enlace,
+        sinCorreo,
       };
     }
     case 'clave': {
-      const [usuario, nueva] = argumentos;
-      if (!usuario || !nueva) {
+      const [correo, nueva] = argumentos;
+      if (!correo || !nueva) {
         throw new Error(
-          'Uso: clave <usuario> [nueva clave]\n' +
-            'Sin el último argumento, la clave se pide por consola (recomendado).',
+          'Uso: clave <correo> [nueva clave]\n' +
+            'Sin el último argumento, la clave se pide por consola (recomendado: no queda ' +
+            'en el historial del shell ni visible en `ps`).',
         );
       }
       // Quien cambia la clave de alguien es porque esa persona no puede
@@ -68,44 +153,44 @@ export async function construirSql(orden, argumentos) {
       return {
         texto:
           'update public.usuarios_panel set clave_hash = $1, clave_sal = $2, ' +
-          'bloqueado_hasta = null, intentos = 0 where usuario = $3',
-        valores: [hash, sal, normalizarUsuario(usuario)],
+          'bloqueado_hasta = null, intentos = 0 where correo = $3',
+        valores: [hash, sal, normalizarCorreo(correo)],
       };
     }
     case 'desactivar': {
-      const [usuario] = argumentos;
-      if (!usuario) {
-        throw new Error('Uso: desactivar <usuario>');
+      const [correo] = argumentos;
+      if (!correo) {
+        throw new Error('Uso: desactivar <correo>');
       }
       // Nunca delete: una cotización firmada por alguien que ya no está tiene
       // que seguir diciendo quién la hizo.
       return {
-        texto: 'update public.usuarios_panel set activo = false where usuario = $1',
-        valores: [normalizarUsuario(usuario)],
+        texto: 'update public.usuarios_panel set activo = false where correo = $1',
+        valores: [normalizarCorreo(correo)],
       };
     }
     case 'activar': {
-      const [usuario] = argumentos;
-      if (!usuario) {
-        throw new Error('Uso: activar <usuario>');
+      const [correo] = argumentos;
+      if (!correo) {
+        throw new Error('Uso: activar <correo>');
       }
       return {
-        texto: 'update public.usuarios_panel set activo = true where usuario = $1',
-        valores: [normalizarUsuario(usuario)],
+        texto: 'update public.usuarios_panel set activo = true where correo = $1',
+        valores: [normalizarCorreo(correo)],
       };
     }
     case 'desbloquear': {
-      const [usuario] = argumentos;
-      if (!usuario) {
-        throw new Error('Uso: desbloquear <usuario>');
+      const [correo] = argumentos;
+      if (!correo) {
+        throw new Error('Uso: desbloquear <correo>');
       }
       return {
-        texto: 'update public.usuarios_panel set bloqueado_hasta = null, intentos = 0 where usuario = $1',
-        valores: [normalizarUsuario(usuario)],
+        texto: 'update public.usuarios_panel set bloqueado_hasta = null, intentos = 0 where correo = $1',
+        valores: [normalizarCorreo(correo)],
       };
     }
     default:
-      throw new Error(`Orden desconocida: ${orden}. Usá: listar, alta, clave, desactivar, activar, desbloquear.`);
+      throw new Error(`Orden desconocida: ${orden}. Usá: listar, invitar, clave, desactivar, activar, desbloquear.`);
   }
 }
 
@@ -182,15 +267,17 @@ function crearLectorDeClaves() {
   return preguntar;
 }
 
-// Completa los argumentos que faltan preguntando por consola. Sólo la clave:
-// el usuario y el nombre no son secretos y se siguen dando en la línea de
-// órdenes. `pedir` se inyecta para poder probar esto sin una terminal.
+// Completa los argumentos que faltan preguntando por consola. Sólo la clave
+// de `clave` (correo y nombre no son secretos y se siguen dando en la línea
+// de órdenes). `invitar` ya no pide clave por acá: la persona invitada la
+// elige la primera vez que entra, con el enlace que esta orden manda. `pedir`
+// se inyecta para poder probar esto sin una terminal.
 //
 // Se pregunta dos veces: sin eco, una clave mal tecleada no se ve, y el
 // síntoma llega días después como "no puedo entrar" de alguien que sí escribió
 // bien su clave.
 export async function completarArgumentos(orden, argumentos, pedir) {
-  const posicionClave = orden === 'alta' ? 2 : orden === 'clave' ? 1 : -1;
+  const posicionClave = orden === 'clave' ? 1 : -1;
   if (posicionClave === -1) return argumentos;
   if (argumentos[posicionClave]) return argumentos;
   // Si faltan los argumentos previos, `construirSql` ya tiene el mensaje de
@@ -219,16 +306,27 @@ export async function completarArgumentos(orden, argumentos, pedir) {
   }
 }
 
-function imprimirListado(filas) {
+// Mismo criterio que `derivarEstado` en `lib/cotizador/equipo.ts`, pero sin
+// mirar `clave_hash` (ver el comentario de `listar` en `construirSql`, más
+// arriba, sobre por qué esta consulta no lo trae).
+function derivarEstado(fila, ahora) {
+  if (!fila.activo) return 'desactivada';
+  if (fila.invitacion_expira === null) return 'activa';
+  const vigente = new Date(fila.invitacion_expira).getTime() > ahora.getTime();
+  return vigente ? 'invitada' : 'vencida';
+}
+
+function imprimirListado(filas, ahora = new Date()) {
   if (filas.length === 0) {
     console.log('No hay usuarios registrados.');
     return;
   }
   console.table(
     filas.map((fila) => ({
-      usuario: fila.usuario,
+      correo: fila.correo,
       nombre: fila.nombre,
-      activo: fila.activo,
+      rol: fila.rol,
+      estado: derivarEstado(fila, ahora),
       intentos: fila.intentos,
       bloqueado_hasta: fila.bloqueado_hasta ?? '',
       ultimo_acceso: fila.ultimo_acceso ?? '',
@@ -238,7 +336,7 @@ function imprimirListado(filas) {
 }
 
 async function ejecutar(orden, argumentos) {
-  const { texto, valores } = await construirSql(orden, argumentos);
+  const { texto, valores, enlace, sinCorreo } = await construirSql(orden, argumentos);
 
   const client = new pg.Client({
     connectionString: connectionString(),
@@ -257,6 +355,23 @@ async function ejecutar(orden, argumentos) {
     const { rowCount } = await client.query(texto, valores);
     console.log(`${rowCount} fila(s) afectada(s).`);
 
+    if (orden === 'invitar' && rowCount > 0) {
+      const [correo, nombre] = valores;
+      if (sinCorreo) {
+        console.log('No se mandó ningún correo (--sin-correo). Pasale este enlace a mano:');
+        console.log(`  ${urlInvitacion(enlace)}`);
+      } else {
+        const resultado = await enviarCorreoInvitacion({ correo, nombre, enlace });
+        if (resultado.ok) {
+          console.log(`Invitación enviada por correo a ${correo}.`);
+        } else {
+          console.log(`No se pudo mandar el correo: ${resultado.error}`);
+          console.log('La cuenta ya quedó creada. Pasale este enlace a mano:');
+          console.log(`  ${urlInvitacion(enlace)}`);
+        }
+      }
+    }
+
     // Revisión final, Importante 1: `desactivar` impide entradas FUTURAS y no
     // corta la sesión que ya está viva. `autenticarPeticion` sólo mira la
     // firma de la cookie y nunca vuelve a consultar la tabla; `activo` se
@@ -273,7 +388,7 @@ async function ejecutar(orden, argumentos) {
     }
   } catch (err) {
     if (err && err.code === '23505') {
-      throw new Error('Ese usuario ya existe. Usá `clave` para cambiarle la contraseña.');
+      throw new Error('Ese correo ya está en el equipo.');
     }
     throw err;
   } finally {
@@ -284,7 +399,7 @@ async function ejecutar(orden, argumentos) {
 async function main() {
   const [orden, ...argumentos] = process.argv.slice(2);
   if (!orden) {
-    console.error('Uso: npm run usuarios -- <listar|alta|clave|desactivar|activar|desbloquear> [argumentos]');
+    console.error('Uso: npm run usuarios -- <listar|invitar|clave|desactivar|activar|desbloquear> [argumentos]');
     process.exit(1);
   }
 
