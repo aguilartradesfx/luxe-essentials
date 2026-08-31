@@ -4,9 +4,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // la cambia por la tabla de usuarios. Se moquea `@/lib/cotizador/usuarios`
 // para probar la ruta sin base de datos — la lógica de intentos ya tiene sus
 // propias pruebas en tests/usuarios-autenticacion.test.ts.
-vi.mock('@/lib/cotizador/usuarios', () => ({
-  autenticarUsuario: vi.fn(),
-}));
+//
+// Ronda de correcciones 1 (Tarea 3, invitaciones y roles): sólo se
+// reemplaza `autenticarUsuario`. El resto del módulo real se conserva vía
+// `importOriginal` — en particular `ROLES`, que `lib/sesion.ts` importa en
+// tiempo de ejecución (no sólo como tipo) para validar el rol de una
+// cookie. Un mock que sólo devolviera `{ autenticarUsuario }` dejaría ese
+// import en `undefined` y tumbaría en runtime cualquier prueba de este
+// archivo que emita o lea una sesión.
+vi.mock('@/lib/cotizador/usuarios', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/cotizador/usuarios')>();
+  return {
+    ...real,
+    autenticarUsuario: vi.fn(),
+  };
+});
 
 // Ronda de correcciones 1 (Tarea 6): las siete pruebas de panel-sesion.test.ts
 // son unitarias sobre lib/sesion.ts — no ejercitan ni una sola ruta real. El
@@ -216,6 +228,9 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
       expect(res.status).toBe(200);
       const cuerpo = await res.json();
       expect(cuerpo.ok).toBe(true);
+      // Ronda de correcciones 1 — menor: sin esta línea, borrar `rol:
+      // resultado.rol` de la respuesta de la ruta pasaba en verde igual.
+      expect(cuerpo.rol).toBe('vendedor');
       expect(typeof cuerpo.csrf).toBe('string');
       expect(cuerpo.csrf.length).toBeGreaterThan(0);
       const setCookie = res.headers.get('set-cookie');
@@ -267,6 +282,7 @@ describe('POST /api/cotizacion/entrar', () => {
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.vendedor).toBe('Marta Vargas');
+    expect(cuerpo.rol).toBe('vendedor');
     expect(typeof cuerpo.csrf).toBe('string');
     expect(res.headers.get('set-cookie')).toContain('luxe_sesion=');
     expect(autenticarUsuario).toHaveBeenCalledWith('guillermo@luxeessentialscr.com', 'x', expect.anything());

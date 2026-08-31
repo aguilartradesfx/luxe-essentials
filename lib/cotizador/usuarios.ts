@@ -25,7 +25,16 @@ const RPC_INTENTO_FALLIDO = 'usuarios_panel_intento_fallido';
 export const MAX_INTENTOS = 5;
 export const BLOQUEO_MINUTOS = 15;
 
-export type Rol = 'vendedor' | 'superadmin';
+// Lista cerrada de roles reales, con contraparte en tiempo de ejecución: un
+// `type Rol = 'vendedor' | 'superadmin'` suelto sólo existe en tiempo de
+// compilación, y un type predicate escrito a mano (`valor === 'vendedor' ||
+// valor === 'superadmin'`) no lo valida contra el tipo — agregar un tercer rol
+// al tipo compilaría limpio aunque el guard de `lib/sesion.ts` lo siguiera
+// rechazando en silencio. `ROLES` es la única fuente de verdad; `Rol` se
+// deriva de ella, y cualquier guard en tiempo de ejecución (`sesionDe`) debe
+// leer de acá, no repetir los literales.
+export const ROLES = ['vendedor', 'superadmin'] as const;
+export type Rol = (typeof ROLES)[number];
 
 export type ResultadoEntrada =
   | { ok: true; nombre: string; rol: Rol }

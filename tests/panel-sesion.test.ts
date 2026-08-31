@@ -291,9 +291,22 @@ describe('la sesión recuerda el rol', () => {
     expect(sesionDe(req)).toBeNull();
   });
 
+  // Ronda de correcciones 1: la versión original firmaba esta cookie con
+  // 'deadbeef', el mismo defecto que la prueba del rol inválido de más
+  // abajo — una firma que no coincide con nada rechaza la cookie en el
+  // chequeo de firma sin que el chequeo de cantidad de partes llegue a
+  // ejercitarse. Un mutante que agregara soporte para el formato de tres
+  // partes (firmando sobre `<emitidoEn>.<nombre>` y asumiendo rol
+  // 'vendedor') seguiría rechazando esta cookie por la firma inventada, y
+  // la prueba habría quedado en verde igual. Firmada de verdad, el único
+  // motivo de rechazo posible es que el formato de tres partes ya no existe.
   it('rechaza una cookie del formato anterior, de tres partes', () => {
+    const emitidoEn = String(Date.now());
+    const codificado = Buffer.from('Guillermo Rojas', 'utf8').toString('base64url');
+    const contenido = `${emitidoEn}.${codificado}`;
+    const firma = createHmac('sha256', 'secreta').update(contenido).digest('hex');
     const req = new Request('https://luxeessentialscr.com/x', {
-      headers: { cookie: 'luxe_sesion=1756000000000.R3VpbGxlcm1v.deadbeef' },
+      headers: { cookie: `luxe_sesion=${contenido}.${firma}` },
     });
     expect(sesionDe(req)).toBeNull();
   });

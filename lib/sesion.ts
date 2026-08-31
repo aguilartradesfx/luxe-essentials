@@ -1,6 +1,6 @@
 import 'server-only';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { Rol } from '@/lib/cotizador/usuarios';
+import { ROLES, type Rol } from '@/lib/cotizador/usuarios';
 
 // El panel vive embebido en un iframe de GoHighLevel (Tarea 6): la clave ya
 // no puede pedirse en cada carga de pantalla, y por eso existe esta sesión
@@ -131,12 +131,16 @@ function decodificarNombre(codificado: string): string | null {
   }
 }
 
-// El rol no se codifica en base64url como el nombre: los dos valores
-// posibles ('vendedor', 'superadmin') no llevan tildes, espacios ni puntos,
-// así que no chocan con el separador del formato. Se valida contra la lista
-// cerrada de roles reales — ni "leído en claro" significa "de confianza".
+// El rol no se codifica en base64url como el nombre: los valores de `ROLES`
+// no llevan tildes, espacios ni puntos, así que no chocan con el separador
+// del formato. Se valida contra `ROLES` (lib/cotizador/usuarios.ts) y no
+// contra literales repetidos acá — un type predicate escrito a mano no lo
+// valida el compilador contra `Rol`, así que agregar un tercer rol al tipo
+// sin agregarlo acá compilaría limpio y quedaría rechazado en silencio. Con
+// `ROLES` como única fuente, agregar un rol es tocar un solo lugar. Ni
+// "leído en claro" significa "de confianza".
 function esRolValido(valor: string): valor is Rol {
-  return valor === 'vendedor' || valor === 'superadmin';
+  return (ROLES as readonly string[]).includes(valor);
 }
 
 export function emitirSesion(nombre: string, rol: Rol): { cookie: string; csrf: string } {
