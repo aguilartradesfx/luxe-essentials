@@ -1,14 +1,9 @@
 import { NextResponse } from 'next/server';
 import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { autorizarSuperadmin, listarEquipo } from '@/lib/cotizador/equipo';
+import { autorizarSuperadmin, listarEquipo, SIN_PERMISO } from '@/lib/cotizador/equipo';
 
 export const runtime = 'nodejs';
-
-// Mismo texto en las cuatro rutas de este directorio: quien no es
-// superadmin (de verdad, releído de la base — ver `autorizarSuperadmin`)
-// recibe siempre este mensaje, nunca uno distinto según la ruta.
-const SIN_PERMISO = 'No tenés permiso para administrar el equipo.';
 
 export async function POST(request: Request) {
   let crudo: unknown;

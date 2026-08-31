@@ -2,11 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { autorizarSuperadmin, reenviarInvitacion } from '@/lib/cotizador/equipo';
+import { autorizarSuperadmin, reenviarInvitacion, SIN_PERMISO, type ResultadoReenviar } from '@/lib/cotizador/equipo';
 
 export const runtime = 'nodejs';
-
-const SIN_PERMISO = 'No tenés permiso para administrar el equipo.';
 
 const Entrada = z.object({
   id: z.uuid('El id no es válido.'),
@@ -42,11 +40,19 @@ export async function POST(request: Request) {
     );
   }
 
-  const resultado = await reenviarInvitacion(
-    db,
-    { apiKey: process.env.RESEND_API_KEY ?? '', remitente: process.env.LUXE_CORREO_REMITENTE ?? '' },
-    parseado.data.id,
-  );
+  // Ver el mismo comentario en /invitar: `reenviarInvitacion` ya captura el
+  // fallo de `enviarInvitacion`, pero ese invariante no es de este módulo.
+  let resultado: ResultadoReenviar;
+  try {
+    resultado = await reenviarInvitacion(
+      db,
+      { apiKey: process.env.RESEND_API_KEY ?? '', remitente: process.env.LUXE_CORREO_REMITENTE ?? '' },
+      parseado.data.id,
+    );
+  } catch (err) {
+    console.error('[cotizador] Fallo inesperado al reenviar.', err instanceof Error ? err.message : String(err));
+    return NextResponse.json({ ok: false, error: 'No se pudo reenviar la invitación.' }, { status: 500 });
+  }
 
   if (!resultado.ok) {
     if (resultado.motivo === 'no_encontrado') {

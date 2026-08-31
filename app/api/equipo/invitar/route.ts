@@ -2,16 +2,14 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { autorizarSuperadmin, invitarPersona } from '@/lib/cotizador/equipo';
+import { autorizarSuperadmin, invitarPersona, SIN_PERMISO, type ResultadoInvitar } from '@/lib/cotizador/equipo';
 import { ROLES } from '@/lib/cotizador/usuarios';
 
 export const runtime = 'nodejs';
 
-const SIN_PERMISO = 'No tenés permiso para administrar el equipo.';
-
 const Entrada = z.object({
   correo: z.string().trim().pipe(z.email('El correo no es válido.')),
-  nombre: z.string().trim().min(1, 'Falta el nombre.').max(120, 'Escribe un nombre más corto.'),
+  nombre: z.string().trim().min(1, 'Falta el nombre.').max(120, 'Escribí un nombre más corto.'),
   rol: z.enum(ROLES, { message: 'El rol debe ser "vendedor" o "superadmin".' }),
 });
 
@@ -47,15 +45,36 @@ export async function POST(request: Request) {
     );
   }
 
-  const resultado = await invitarPersona(
-    db,
-    { apiKey: process.env.RESEND_API_KEY ?? '', remitente: process.env.LUXE_CORREO_REMITENTE ?? '' },
-    parseado.data,
-  );
+  // Ronda de correcciones 1: `invitarPersona` no debería lanzar (la propia
+  // función ya captura el fallo de `enviarInvitacion`), pero ese invariante
+  // vive en otro módulo. Sin este `try`, el día que deje de cumplirse, esta
+  // ruta devolvería un 500 sin cuerpo JSON reconocible — y la fila ya
+  // creada quedaría sin que quien invitó se entere.
+  let resultado: ResultadoInvitar;
+  try {
+    resultado = await invitarPersona(
+      db,
+      { apiKey: process.env.RESEND_API_KEY ?? '', remitente: process.env.LUXE_CORREO_REMITENTE ?? '' },
+      parseado.data,
+    );
+  } catch (err) {
+    console.error('[cotizador] Fallo inesperado al invitar.', err instanceof Error ? err.message : String(err));
+    return NextResponse.json({ ok: false, error: 'No se pudo invitar a esa persona.' }, { status: 500 });
+  }
 
   if (!resultado.ok) {
     if (resultado.motivo === 'duplicado') {
       return NextResponse.json({ ok: false, error: 'Ese correo ya está en el equipo.' }, { status: 409 });
+    }
+    if (resultado.motivo === 'nombre_duplicado') {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'Ya hay alguien en el equipo con ese nombre. Usá un nombre que lo distinga (por ejemplo, con el apellido).',
+        },
+        { status: 409 },
+      );
     }
     console.error('[cotizador] No se pudo invitar a la persona.', resultado.error);
     return NextResponse.json({ ok: false, error: 'No se pudo invitar a esa persona.' }, { status: 500 });

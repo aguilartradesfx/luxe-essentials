@@ -9,6 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // base. Si la cookie fuera inválida o el CSRF faltara, la ruta rechazaría
 // por ese motivo primero y la prueba no probaría nada.
 //
+// Ronda de correcciones 1: el revisor sustituyó `autorizarSuperadmin` por
+// `{ ok: true }` en `invitar`, `reenviar` y `estado` A LA VEZ y la suite
+// anterior seguía en verde — el único caso sin cookie que tocaba esas
+// rutas moría en el 401 de `autenticarPeticion`, antes de llegar a la
+// autorización. Ahora el bloque de autorización se repite, CON el token
+// anti-CSRF correcto, contra las CUATRO rutas.
+//
 // Se mockea `@/lib/cotizador/correo-invitacion` entero (mismo criterio que
 // tests/api-cotizacion-sesion.test.ts con `@/lib/cotizador/correo`): ninguna
 // prueba de este archivo llama a la API de Resend de verdad. La propia
@@ -47,7 +54,16 @@ let filas: Fila[];
 let erroresLectura: { message: string } | null;
 let erroresInsert: { code?: string; message: string } | null;
 let erroresEscritura: { message: string } | null;
+let erroresRpc: { message: string } | null;
 let siguienteId: number;
+let llamadasRpc: { nombre: string; argumentos: Record<string, unknown> }[];
+let actualizacionesDirectas: number;
+// Ronda de correcciones 1, punto 5 (CAS de `reenviar`): cuando coincide con
+// el `id` de la fila que se está leyendo para reenviar, simula que OTRO
+// proceso (fijar-clave, corriendo al mismo tiempo) le puso `clave_hash`
+// justo después de esta lectura y antes de la escritura de más abajo — la
+// misma ventana de ~100 ms de scrypt que describe fijar-clave/route.ts.
+let simularClaveFijadaEntreLecturaYEscrituraId: string | null;
 
 function coincide(fila: Fila, filtros: [string, unknown][]): boolean {
   return filtros.every(([columna, valor]) => (fila as Record<string, unknown>)[columna] === valor);
@@ -60,16 +76,43 @@ function construirSelect(): any {
       filtros.push([columna, valor]);
       return nodo;
     },
+    is(columna: string, valor: unknown) {
+      filtros.push([columna, valor]);
+      return nodo;
+    },
     order() {
       return nodo;
     },
     maybeSingle: async () => {
       if (erroresLectura) return { data: null, error: erroresLectura };
-      return { data: filas.find((f) => coincide(f, filtros)) ?? null, error: null };
+      const coincidentes = filas.filter((f) => coincide(f, filtros));
+      // Mismo comportamiento que el cliente real de Supabase: con más de
+      // una fila, `.maybeSingle()` no elige "la primera" en silencio —
+      // devuelve el error PGRST116 ("multiple (or no) rows returned"). Sin
+      // esto, dos filas con el mismo `nombre` (ver el comentario de
+      // `autorizarSuperadmin` sobre por qué eso ya no debería poder pasar)
+      // habrían quedado sin cobertura: el doble le devolvía a la app una
+      // fila cualquiera en vez del error que la app tiene que saber manejar.
+      if (coincidentes.length > 1) {
+        return { data: null, error: { code: 'PGRST116', message: 'multiple (or no) rows returned' } };
+      }
+      const resultado = coincidentes[0] ?? null;
+      if (resultado === null) return { data: null, error: null };
+      // Snapshot ANTES de mutar: lo que este `await` le devuelve a quien
+      // llamó es el estado tal como estaba al leer (`clave_hash: null`) —
+      // exactamente lo que vería una lectura real que ganó la carrera
+      // contra la escritura de `fijar-clave`. La fila REAL del arreglo
+      // (no la copia) es la que se muta a continuación, para que la
+      // escritura de más abajo —evaluada contra el estado ACTUAL, no
+      // contra esta lectura— vea el cambio.
+      const copia = { ...resultado };
+      if (simularClaveFijadaEntreLecturaYEscrituraId === resultado.id) {
+        resultado.clave_hash = 'clave-fijada-en-el-medio-de-la-carrera';
+      }
+      return { data: copia, error: null };
     },
-    // Thenable: cubre `.select(...).eq(...).eq(...)` (el conteo de
-    // superadmins en `cambiarEstado`) y `.select(...).order(...)` (el
-    // listado completo), ninguno de los cuales llama a `.maybeSingle()`.
+    // Thenable: cubre `.select(...).eq(...).eq(...)` y `.select(...).order(...)`,
+    // ninguno de los cuales llama a `.maybeSingle()`.
     then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) => {
       const promesa = (async () => {
         if (erroresLectura) return { data: null, error: erroresLectura };
@@ -85,9 +128,13 @@ function construirInsert(cambios: Record<string, unknown>): any {
   return (async () => {
     if (erroresInsert) return { error: erroresInsert };
     const correo = String(cambios.correo);
-    if (filas.some((f) => f.correo === correo)) {
-      // Mismo código que devuelve Postgres al chocar contra el índice único
-      // sobre `lower(correo)` (migración 0014).
+    // El índice único real es sobre `lower(correo)`: el doble tiene que
+    // comparar igual de insensible a mayúsculas, o dejaría pasar un
+    // duplicado que Postgres sí rechazaría.
+    const correoNormalizado = correo.toLowerCase();
+    if (filas.some((f) => f.correo.toLowerCase() === correoNormalizado)) {
+      // Mismo código que devuelve Postgres al chocar contra ese índice
+      // único (migración 0014).
       return { error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
     }
     siguienteId += 1;
@@ -107,12 +154,27 @@ function construirInsert(cambios: Record<string, unknown>): any {
   })();
 }
 
+// `.update(cambios).eq(...)?.is(...)?.select()` — con `.select()`, se
+// resuelve al aplicarse (o no) el compare-and-swap, informando qué filas
+// tocó; sin `.select()`, se resuelve directo (thenable) como un `update`
+// sin condición extra que verificar.
 function construirUpdate(cambios: Record<string, unknown>): any {
+  actualizacionesDirectas += 1;
   const filtros: [string, unknown][] = [];
   const nodo: any = {
     eq(columna: string, valor: unknown) {
       filtros.push([columna, valor]);
       return nodo;
+    },
+    is(columna: string, valor: unknown) {
+      filtros.push([columna, valor]);
+      return nodo;
+    },
+    select: async () => {
+      if (erroresEscritura) return { data: null, error: erroresEscritura };
+      const coincidentes = filas.filter((f) => coincide(f, filtros));
+      for (const f of coincidentes) Object.assign(f, cambios);
+      return { data: coincidentes.map((f) => ({ id: f.id })), error: null };
     },
     then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) => {
       const promesa = (async () => {
@@ -128,6 +190,45 @@ function construirUpdate(cambios: Record<string, unknown>): any {
   return nodo;
 }
 
+// Reimplementación FIEL de `usuarios_panel_cambiar_estado`
+// (supabase/migrations/0015_equipo_cambiar_estado.sql) en JavaScript —
+// mismo criterio que el doble de `usuarios_panel_intento_fallido` en
+// tests/usuarios-autenticacion.test.ts. Lo que esto NO puede probar es la
+// atomicidad real del SQL (dos llamadas a este doble desde JS nunca
+// corren de verdad en paralelo). Lo que sí queda anclado sobre el código
+// de PRODUCCIÓN es el contrato: que `cambiarEstado` llama a esta función
+// por `rpc` con los argumentos correctos, y que ya NO hace ningún
+// `select`+`update` de dos pasos por su cuenta (ver la prueba
+// 'cambiarEstado no hace ninguna escritura directa: todo pasa por la rpc').
+async function ejecutarRpc(nombre: string, argumentos: Record<string, unknown>) {
+  llamadasRpc.push({ nombre, argumentos });
+  if (erroresRpc) return { data: null, error: erroresRpc };
+  if (nombre !== 'usuarios_panel_cambiar_estado') {
+    return { data: null, error: { message: `rpc no soportada en el doble: ${nombre}` } };
+  }
+
+  const p_id = argumentos.p_id as string;
+  const p_activo = argumentos.p_activo as boolean | null;
+  const p_rol = argumentos.p_rol as Fila['rol'] | null;
+
+  const fila = filas.find((f) => f.id === p_id);
+  if (!fila) return { data: 'no_encontrado', error: null };
+
+  const nuevoRol = p_rol ?? fila.rol;
+  const nuevoActivo = p_activo ?? fila.activo;
+  const eraSuperadminActivo = fila.rol === 'superadmin' && fila.activo;
+  const seguiraSuperadminActivo = nuevoRol === 'superadmin' && nuevoActivo;
+
+  if (eraSuperadminActivo && !seguiraSuperadminActivo) {
+    const activos = filas.filter((f) => f.rol === 'superadmin' && f.activo).length;
+    if (activos <= 1) return { data: 'ultimo_superadmin', error: null };
+  }
+
+  fila.rol = nuevoRol;
+  fila.activo = nuevoActivo;
+  return { data: 'ok', error: null };
+}
+
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
     from: () => ({
@@ -135,6 +236,7 @@ vi.mock('@/lib/supabase/server', () => ({
       insert: (cambios: Record<string, unknown>) => construirInsert(cambios),
       update: (cambios: Record<string, unknown>) => construirUpdate(cambios),
     }),
+    rpc: (nombre: string, argumentos: Record<string, unknown>) => ejecutarRpc(nombre, argumentos),
   }),
 }));
 
@@ -190,13 +292,17 @@ beforeEach(() => {
   erroresLectura = null;
   erroresInsert = null;
   erroresEscritura = null;
+  erroresRpc = null;
   siguienteId = 0;
   resendFalla = false;
   llamadasCorreo.length = 0;
+  llamadasRpc = [];
+  actualizacionesDirectas = 0;
+  simularClaveFijadaEntreLecturaYEscrituraId = null;
 });
 
-describe('autorizacion: el rol de la cookie no autoriza nada', () => {
-  it('un superadmin activo, de verdad en la base, entra (200) — control de que el guardia no rechaza a todos', async () => {
+describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)', () => {
+  it('un superadmin activo, de verdad en la base, entra a listar (200) — control de que el guardia no rechaza a todos', async () => {
     const { cookie } = sesion('Ana Solano');
     const res = await postListar(peticion({}, { cookie }));
     expect(res.status).toBe(200);
@@ -204,8 +310,8 @@ describe('autorizacion: el rol de la cookie no autoriza nada', () => {
 
   // La promesa central de la fase: la cookie firmada dice 'superadmin' —es
   // una cookie VÁLIDA, no forjada— pero la fila de esa persona en la base
-  // dice 'vendedor'. Tiene que rechazarse igual.
-  it('rechaza a un vendedor aunque su cookie firmada diga superadmin', async () => {
+  // dice 'vendedor'. Tiene que rechazarse igual, en las CUATRO rutas.
+  it('listar: rechaza a un vendedor aunque su cookie firmada diga superadmin', async () => {
     filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
     const { cookie } = sesion('Beto Vendedor');
     const res = await postListar(peticion({}, { cookie }));
@@ -213,14 +319,99 @@ describe('autorizacion: el rol de la cookie no autoriza nada', () => {
     expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
   });
 
+  it('invitar: rechaza a un vendedor aunque su cookie firmada diga superadmin (con CSRF válido)', async () => {
+    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    const { cookie, csrf } = sesion('Beto Vendedor');
+    const res = await postInvitar(
+      peticion({ correo: 'nuevo@luxe.cr', nombre: 'Nueva Persona', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
+    expect(filas.find((f) => f.correo === 'nuevo@luxe.cr')).toBeUndefined();
+    expect(llamadasCorreo).toHaveLength(0);
+  });
+
+  it('reenviar: rechaza a un vendedor aunque su cookie firmada diga superadmin (con CSRF válido)', async () => {
+    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    filas.push(
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'invitada@luxe.cr',
+        nombre: 'Invitada',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    );
+    const { cookie, csrf } = sesion('Beto Vendedor');
+    const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
+    expect(llamadasCorreo).toHaveLength(0);
+  });
+
+  it('estado: rechaza a un vendedor aunque su cookie firmada diga superadmin (con CSRF válido)', async () => {
+    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    const { cookie, csrf } = sesion('Beto Vendedor');
+    const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
+    // Y la fila objetivo no se tocó.
+    expect(filas.find((f) => f.id === UUID_U1)?.activo).toBe(true);
+    expect(llamadasRpc).toHaveLength(0);
+  });
+
   // Cookie válida con rol 'superadmin' Y la base también dice 'superadmin'
   // para ese nombre — pero `activo: false`. Sólo la desactivación distingue
-  // este caso del de control de arriba.
-  it('rechaza a un superadmin desactivado en la base', async () => {
+  // este caso del de control de arriba. Repetido en las cuatro rutas.
+  it('listar: rechaza a un superadmin desactivado en la base', async () => {
     filas = [filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
     const { cookie } = sesion('Carla Baja');
     const res = await postListar(peticion({}, { cookie }));
     expect(res.status).toBe(403);
+  });
+
+  it('invitar: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
+    filas = [filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
+    const { cookie, csrf } = sesion('Carla Baja');
+    const res = await postInvitar(
+      peticion({ correo: 'nuevo@luxe.cr', nombre: 'Nueva Persona', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(403);
+    expect(filas.find((f) => f.correo === 'nuevo@luxe.cr')).toBeUndefined();
+    expect(llamadasCorreo).toHaveLength(0);
+  });
+
+  it('reenviar: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
+    filas = [
+      filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'invitada@luxe.cr',
+        nombre: 'Invitada',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    ];
+    const { cookie, csrf } = sesion('Carla Baja');
+    const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(403);
+    expect(llamadasCorreo).toHaveLength(0);
+  });
+
+  it('estado: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
+    filas = [
+      filaBase({ id: UUID_U1 }),
+      filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
+    ];
+    const { cookie, csrf } = sesion('Carla Baja');
+    const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(403);
+    expect(filas.find((f) => f.id === UUID_U1)?.activo).toBe(true);
+    expect(llamadasRpc).toHaveLength(0);
   });
 
   it('un vendedor real (cookie y base de acuerdo) también recibe 403', async () => {
@@ -268,7 +459,7 @@ describe('CSRF: las tres rutas que escriben lo exigen; listar no', () => {
   });
 });
 
-describe('el ultimo superadmin activo no se puede tocar', () => {
+describe('el ultimo superadmin activo no se puede tocar (via rpc atomica)', () => {
   it('no deja desactivar al ultimo superadmin activo (409)', async () => {
     const { cookie, csrf } = sesion('Ana Solano');
     const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
@@ -307,8 +498,7 @@ describe('el ultimo superadmin activo no se puede tocar', () => {
   // El conteo tiene que filtrar por `activo: true` de verdad, no sólo por
   // `rol: 'superadmin'`. Hay DOS filas con rol superadmin, pero una ya está
   // desactivada — sigue habiendo un solo superadmin ACTIVO, así que la
-  // guarda tiene que rechazar igual. Si el conteo olvidara el filtro de
-  // `activo`, esta prueba lo detecta: contaría 2 y dejaría pasar.
+  // guarda tiene que rechazar igual.
   it('sigue siendo el ultimo superadmin ACTIVO aunque exista otra fila superadmin ya desactivada', async () => {
     filas.push(
       filaBase({ id: UUID_U2, correo: 'inactivo@luxeessentialscr.com', nombre: 'Superadmin Inactivo', activo: false }),
@@ -320,9 +510,7 @@ describe('el ultimo superadmin activo no se puede tocar', () => {
   });
 
   // Mismo argumento, del otro lado: el conteo tiene que filtrar por
-  // `rol: 'superadmin'` de verdad, no sólo por `activo: true`. Hay otra fila
-  // activa, pero es vendedor — sigue habiendo un solo superadmin activo. Si
-  // el conteo olvidara el filtro de `rol`, contaría 2 y dejaría pasar.
+  // `rol: 'superadmin'` de verdad, no sólo por `activo: true`.
   it('sigue siendo el ultimo superadmin activo aunque exista otra fila activa que es vendedor', async () => {
     filas.push(
       filaBase({ id: UUID_U2, correo: 'vendedor-activo@luxeessentialscr.com', nombre: 'Vendedor Activo', rol: 'vendedor' }),
@@ -331,6 +519,32 @@ describe('el ultimo superadmin activo no se puede tocar', () => {
     const res = await postEstado(peticion({ id: UUID_U1, rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(409);
     expect(filas.find((f) => f.id === UUID_U1)?.rol).toBe('superadmin');
+  });
+
+  // El contrato con la base: `cambiarEstado` llama a la rpc con los
+  // argumentos correctos, y NO hace ningún `select`/`update` de dos pasos
+  // por su cuenta — la atomicidad real vive en supabase/migrations/0015,
+  // no en este archivo (que no puede probarla: JS de un solo hilo no puede
+  // reproducir la carrera de verdad).
+  it('cambiarEstado llama a la rpc con los argumentos correctos y no hace ninguna escritura directa', async () => {
+    filas.push(filaBase({ id: UUID_U2, correo: 'vendedor@luxeessentialscr.com', nombre: 'Vendedor', rol: 'vendedor' }));
+    const { cookie, csrf } = sesion('Ana Solano');
+    await postEstado(peticion({ id: UUID_U2, activo: false }, { cookie, 'x-csrf-token': csrf }));
+    expect(llamadasRpc).toContainEqual({
+      nombre: 'usuarios_panel_cambiar_estado',
+      argumentos: { p_id: UUID_U2, p_activo: false, p_rol: null },
+    });
+    expect(actualizacionesDirectas).toBe(0);
+  });
+
+  it('un fallo de la rpc es 500, no 409 ni 200', async () => {
+    erroresRpc = { message: 'la base no responde' };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(500);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });
 
@@ -386,6 +600,17 @@ describe('invitar', () => {
     expect(llamadasCorreo).toHaveLength(0);
   });
 
+  // El índice único real es sobre `lower(correo)`: mayúsculas distintas
+  // tienen que seguir chocando.
+  it('rechaza un correo que ya esta, aunque las mayusculas sean distintas', async () => {
+    filas.push(filaBase({ id: 'u-existe', correo: 'existe@luxe.cr', nombre: 'Ya Existe', rol: 'vendedor' }));
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postInvitar(
+      peticion({ correo: 'EXISTE@Luxe.cr', nombre: 'X', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(409);
+  });
+
   it('rechaza un correo con formato invalido (400)', async () => {
     const { cookie, csrf } = sesion('Ana Solano');
     const res = await postInvitar(
@@ -400,6 +625,38 @@ describe('invitar', () => {
       peticion({ correo: 'nuevo@luxe.cr', nombre: 'X', rol: 'dueño' }, { cookie, 'x-csrf-token': csrf }),
     );
     expect(res.status).toBe(400);
+  });
+
+  // Ronda de correcciones 1, Importante 2: no hay índice único sobre
+  // `nombre`, y `autorizarSuperadmin` relee POR NOMBRE. Sin este rechazo,
+  // invitar a alguien con el mismo nombre que un superadmin existente lo
+  // deja sin forma de autorizar nada — ni siquiera para deshacerlo.
+  it('rechaza invitar con un nombre que ya existe (409)', async () => {
+    const cantidadAntes = filas.length;
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postInvitar(
+      peticion({ correo: 'otra-ana@luxe.cr', nombre: 'Ana Solano', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(409);
+    expect(filas).toHaveLength(cantidadAntes);
+    expect(llamadasCorreo).toHaveLength(0);
+  });
+
+  it('el rechazo por nombre repetido es insensible a mayusculas y a espacios de sobra', async () => {
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postInvitar(
+      peticion({ correo: 'otra-ana@luxe.cr', nombre: '  ana   SOLANO  ', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(409);
+  });
+
+  // Control: nombres genuinamente distintos no chocan entre sí.
+  it('nombres distintos no disparan el rechazo (200)', async () => {
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postInvitar(
+      peticion({ correo: 'otra-persona@luxe.cr', nombre: 'Otra Persona Distinta', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(200);
   });
 });
 
@@ -448,6 +705,60 @@ describe('reenviar', () => {
     const { cookie, csrf } = sesion('Ana Solano');
     const res = await postReenviar(peticion({ id: UUID_INEXISTENTE }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(404);
+  });
+
+  // Ronda de correcciones 1, punto 6: mismo contrato que `invitar` — si el
+  // correo falla, la respuesta tiene que decirlo. Acá es peor que en
+  // `invitar`: la invitación VIEJA ya quedó invalidada (la huella nueva ya
+  // se escribió) antes de intentar mandar el correo nuevo.
+  it('avisa cuando la invitacion se reenvio pero el correo fallo (200, correoEnviado: false)', async () => {
+    filas.push(
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'invitada@luxe.cr',
+        nombre: 'Invitada Pendiente',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_hash: 'huella-vieja',
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    );
+    resendFalla = true;
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).correoEnviado).toBe(false);
+    // Y la huella sí cambió (la invitación vieja quedó invalidada de todas
+    // formas): no se revierte el `update` porque el correo haya fallado.
+    expect(filas.find((f) => f.id === UUID_INVITADA)?.invitacion_hash).not.toBe('huella-vieja');
+  });
+
+  // Ronda de correcciones 1, punto 5 (compare-and-swap). Entre la lectura y
+  // la escritura de `reenviarInvitacion`, la persona invitada corre
+  // `fijar-clave` (simulado acá). Sin el `.is('clave_hash', null)` en el
+  // `update`, esta escritura pisaría la invitación nueva encima de una
+  // clave que la persona recién eligió.
+  it('no reenvia si la persona fijo su clave justo entre la lectura y la escritura (carrera)', async () => {
+    filas.push(
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'invitada@luxe.cr',
+        nombre: 'Invitada Pendiente',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_hash: 'huella-vieja',
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    );
+    simularClaveFijadaEntreLecturaYEscrituraId = UUID_INVITADA;
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(400);
+    expect(llamadasCorreo).toHaveLength(0);
+    // La clave que la persona fijó "en el medio" sigue intacta.
+    expect(filas.find((f) => f.id === UUID_INVITADA)?.clave_hash).toBe('clave-fijada-en-el-medio-de-la-carrera');
   });
 });
 
@@ -561,5 +872,42 @@ describe('listar', () => {
     const cuerpo = await res.json();
     const fila = cuerpo.equipo.find((f: { id: string }) => f.id === 'inv-baja');
     expect(fila.estado).toBe('desactivada');
+  });
+});
+
+describe('autorizarSuperadmin: diagnostico de un fallo de lectura vs. sin fila', () => {
+  // Ronda de correcciones 1, Importante 4: antes `if (error || !data)` se
+  // tragaba las dos causas en el mismo `{ ok: false }` mudo. Ahora cada una
+  // deja su propia línea en el log — comprobamos que hay una, sin atarnos
+  // al texto exacto (eso es un detalle de redacción, no el contrato).
+  it('una base caída al autorizar deja una linea en el log, no silencio', async () => {
+    erroresLectura = { message: 'conexión caída' };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie } = sesion('Ana Solano');
+    const res = await postListar(peticion({}, { cookie }));
+    expect(res.status).toBe(403);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('una cookie con un nombre sin fila en el equipo deja una linea en el log', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie } = sesion('Nombre Que No Existe En La Base');
+    const res = await postListar(peticion({}, { cookie }));
+    expect(res.status).toBe(403);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  // Dos filas con el mismo nombre (dato preexistente corrupto, o una
+  // invitación que se coló antes de que existiera el rechazo de la
+  // Tarea 5): `.maybeSingle()` devuelve el error PGRST116 real de
+  // Supabase, no una fila cualquiera — y `autorizarSuperadmin` lo trata
+  // como cualquier otro fallo de lectura: cierra, no revienta.
+  it('dos filas con el mismo nombre no hacen que la ruta explote: cierra con 403', async () => {
+    filas = [filaBase({ id: 'dup-1' }), filaBase({ id: 'dup-2' })];
+    const { cookie } = sesion('Ana Solano');
+    const res = await postListar(peticion({}, { cookie }));
+    expect(res.status).toBe(403);
   });
 });

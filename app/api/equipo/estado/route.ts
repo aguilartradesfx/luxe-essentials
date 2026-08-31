@@ -2,12 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { autorizarSuperadmin, cambiarEstado } from '@/lib/cotizador/equipo';
+import { autorizarSuperadmin, cambiarEstado, SIN_PERMISO, type ResultadoCambiarEstado } from '@/lib/cotizador/equipo';
 import { ROLES } from '@/lib/cotizador/usuarios';
 
 export const runtime = 'nodejs';
-
-const SIN_PERMISO = 'No tenés permiso para administrar el equipo.';
 
 const Entrada = z
   .object({
@@ -53,7 +51,16 @@ export async function POST(request: Request) {
 
   const { id, ...cambios } = parseado.data;
 
-  const resultado = await cambiarEstado(db, id, cambios);
+  let resultado: ResultadoCambiarEstado;
+  try {
+    resultado = await cambiarEstado(db, id, cambios);
+  } catch (err) {
+    console.error(
+      '[cotizador] Fallo inesperado al cambiar el estado del equipo.',
+      err instanceof Error ? err.message : String(err),
+    );
+    return NextResponse.json({ ok: false, error: 'No se pudo guardar el cambio.' }, { status: 500 });
+  }
 
   if (!resultado.ok) {
     if (resultado.motivo === 'no_encontrado') {
