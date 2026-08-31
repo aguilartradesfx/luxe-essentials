@@ -250,9 +250,21 @@ describe('la sesión recuerda al vendedor', () => {
   // Las cookies del formato viejo (`<emitidoEn>.<firma>`) no traen vendedor.
   // Aceptarlas dejaría entrar con la clave compartida a quien tuviera una
   // guardada, que es justo el hueco que esta fase cierra.
+  //
+  // Ronda de correcciones 1: mismo defecto que se encontró y arregló en la
+  // prueba hermana de tres partes (más abajo, describe 'la sesión recuerda
+  // el rol') — 'deadbeef' nunca coincide con ninguna firma real, así que
+  // esta prueba pasaba igual con o sin el chequeo de cantidad de partes: un
+  // mutante que agregara soporte para el formato de dos segmentos
+  // (firmando sobre `<emitidoEn>` solo, con un nombre/rol inventados)
+  // seguiría rechazando esta cookie puntual por la firma inventada.
+  // Firmada de verdad, el único motivo de rechazo posible es que el
+  // formato de dos partes ya no existe.
   it('rechaza una cookie del formato anterior, de dos partes', () => {
+    const emitidoEn = String(Date.now());
+    const firma = createHmac('sha256', 'secreta').update(emitidoEn).digest('hex');
     const req = new Request('https://luxeessentialscr.com/x', {
-      headers: { cookie: 'luxe_sesion=1756000000000.deadbeef' },
+      headers: { cookie: `luxe_sesion=${emitidoEn}.${firma}` },
     });
     expect(sesionValida(req)).toBe(false);
     expect(sesionDe(req)).toBeNull();
