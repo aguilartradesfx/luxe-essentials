@@ -63,7 +63,18 @@ export const config = {
   VERSION_CONVERSACIONES: '2021-04-15',
   VERSION_CONTACTOS: '2021-07-28',
 
-  WORKFLOW_AVISO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
+  // Workflow "Notificación interna (Respondió el email)". Se dispara desde
+  // procesar.ts cuando el turno que se acaba de responder es una respuesta
+  // del contacto por correo electrónico (`esCorreo(ultimo.tipo)`, el mismo
+  // criterio que ese archivo usa para pasar el estado a 'email_respondido').
+  //
+  // Antes este campo se llamaba WORKFLOW_AVISO y el criterio era otro: nombre
+  // + un medio de contacto (correo o teléfono), o turnos agotados. Ese
+  // criterio viejo avisaba por cosas que no eran "respondió el email" —el
+  // nombre del workflow en GoHighLevel mentía sobre cuándo se disparaba de
+  // verdad. `debeAvisar` en procesar.ts sigue garantizando una sola vez por
+  // contacto vía `notificado_at`.
+  WORKFLOW_EMAIL_RESPONDIDO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
 
   // Workflow "Cotización nueva". Se dispara desde
   // app/api/cotizacion/route.ts en cuanto la cotización queda registrada y

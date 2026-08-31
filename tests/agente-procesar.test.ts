@@ -200,33 +200,36 @@ describe('correo', () => {
   });
 });
 
-describe('aviso al equipo', () => {
-  it('dispara el workflow cuando hay nombre y un medio de contacto', async () => {
+describe('aviso al equipo (workflow "Notificación interna — Respondió el email")', () => {
+  it('dispara el workflow con el id correcto cuando el turno es una respuesta por correo', async () => {
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_EMAIL_RESPONDIDO, expect.anything());
+  });
+
+  // El criterio viejo (nombre + un medio de contacto) ya no dispara nada por
+  // sí solo: el nombre del workflow prometía "respondió el email", no "el
+  // agente ya tiene con quién hablar".
+  it('no dispara por WhatsApp aunque haya nombre y un medio de contacto', async () => {
     generar.mockResolvedValue({
       ok: true,
       salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@x.com' } },
     });
     await procesar('c1', deps);
-    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO, expect.anything());
+    expect(dispararWorkflow).not.toHaveBeenCalled();
   });
 
-  it('no dispara con nombre pero sin correo ni teléfono', async () => {
-    generar.mockResolvedValue({
-      ok: true, salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Ana' } },
-    });
+  // El criterio viejo también disparaba sólo por agotar los turnos, sin
+  // datos. Ya no: agotar los turnos por WhatsApp no es "respondió el email".
+  it('no dispara sólo por agotar los turnos si el canal no es correo', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
     await procesar('c1', deps);
     expect(dispararWorkflow).not.toHaveBeenCalled();
   });
 
-  // Para que el equipo se entere aunque el cliente nunca suelte sus datos.
-  it('dispara igual al agotar los turnos, sin datos', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
-    await procesar('c1', deps);
-    expect(dispararWorkflow).toHaveBeenCalled();
-  });
-
   it('no dispara dos veces para el mismo contacto', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3, notificado_at: '2026-08-24T10:00:00Z' });
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, notificado_at: '2026-08-24T10:00:00Z' });
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
     await procesar('c1', deps);
     expect(dispararWorkflow).not.toHaveBeenCalled();
   });
@@ -274,7 +277,7 @@ describe('durabilidad', () => {
   // Estampar y luego disparar perdería el aviso para siempre ante un 500
   // pasajero: debeAvisar no volvería a autorizarlo nunca.
   it('no da el aviso por hecho si el workflow falló', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
     dispararWorkflow.mockResolvedValue('GHL workflow 500: boom');
     await procesar('c1', deps);
     const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
@@ -282,7 +285,7 @@ describe('durabilidad', () => {
   });
 
   it('estampa el aviso cuando el workflow sí salió', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
     await procesar('c1', deps);
     const cambios = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(typeof cambios.notificado_at).toBe('string');
@@ -312,7 +315,7 @@ describe('durabilidad', () => {
   // Si el aviso saliera antes, el asesor abriría la notificación y encontraría
   // el contacto todavía en blanco.
   it('avisa al equipo sólo después de escribir el contacto y la nota', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
     const orden: string[] = [];
     actualizarContacto.mockImplementation(async () => { orden.push('contacto'); return undefined; });
     agregarNota.mockImplementation(async () => { orden.push('nota'); return undefined; });
@@ -322,7 +325,7 @@ describe('durabilidad', () => {
   });
 
   it('estampa el aviso en una escritura aparte, no junto al resto del estado', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
     await procesar('c1', deps);
     const ultima = guardar.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(Object.keys(ultima)).toEqual(['notificado_at']);

@@ -4,7 +4,7 @@ import { hidratar, ultimoReal, huboRespuestaHumana } from '@/lib/agente/conversa
 import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
 import { enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
-import { leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Datos, type Fila } from '@/lib/agente/estado';
+import { leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Fila } from '@/lib/agente/estado';
 import { registrarIntencion } from '@/lib/cotizador/borrador';
 
 // No hay variante 'agotado': al consumir el último turno el desenlace sigue
@@ -23,13 +23,15 @@ export type DepsProcesar = {
   fetchImpl?: typeof fetch;
 };
 
-// El equipo se entera cuando tenemos con quién hablar y cómo contactarlo, o
-// cuando el agente se quedó sin turnos — esto último para que un cliente que
-// nunca da sus datos no desaparezca en silencio.
-function debeAvisar(fila: Fila, datos: Datos, turnos: number): boolean {
+// El equipo se entera cuando el contacto responde por correo electrónico —
+// es justo lo que dice el nombre del workflow que dispara este aviso,
+// "Notificación interna (Respondió el email)" (config.WORKFLOW_EMAIL_RESPONDIDO).
+// Antes el criterio era otro (nombre + un medio de contacto, o turnos
+// agotados) y avisaba por cosas que el nombre del workflow no prometía.
+// `notificado_at` sigue siendo la guarda de una sola vez por contacto.
+function debeAvisar(fila: Fila, esCorreoRespuesta: boolean): boolean {
   if (fila.notificado_at) return false;
-  if (datos.nombre && (datos.email || datos.telefono)) return true;
-  return turnos >= config.TOPE_TURNOS;
+  return esCorreoRespuesta;
 }
 
 // El arriendo se toma ANTES del trabajo caro, así que hay que soltarlo también
@@ -122,9 +124,10 @@ export async function procesar(
 
   const datos = fusionarDatos(fila.datos, generado.salida.datos);
   const turnos = fila.turnos + 1;
-  const avisar = debeAvisar(fila, datos, turnos);
+  const esCorreoRespuesta = esCorreo(ultimo.tipo);
+  const avisar = debeAvisar(fila, esCorreoRespuesta);
 
-  const estado = esCorreo(ultimo.tipo)
+  const estado = esCorreoRespuesta
     ? 'email_respondido'
     : turnos >= config.TOPE_TURNOS
       ? 'agotado'
@@ -133,10 +136,11 @@ export async function procesar(
   // El aviso al equipo se dispara ANTES de estampar `notificado_at`, y sólo se
   // estampa si salió bien. Al revés —estampar y luego disparar— un 500 pasajero
   // de GHL perdería el aviso para siempre: `debeAvisar` no volvería a
-  // autorizarlo nunca. Y si eso ocurre en el turno del tope, el contacto queda
-  // 'agotado' y no hay ningún evento futuro que lo reintente: un lead
-  // cualificado del que nadie se entera, que es justo lo que este agente existe
-  // para evitar.
+  // autorizarlo nunca. Y como un turno de correo deja al contacto en
+  // 'email_respondido' (guarda 1/2 sólo procesan `estado === 'activo'`), no hay
+  // ningún turno futuro de este contacto que reintente el aviso: un lead que sí
+  // respondió y del que nadie en Luxe se entera, que es justo lo que este
+  // agente existe para evitar.
   // El estado se persiste PRIMERO, en cuanto el mensaje salió, porque es lo
   // único de lo que dependen las guardas del turno siguiente: perder `enviados`
   // deja al agente confundiendo su propio saliente con el de un asesor. Las
@@ -184,7 +188,7 @@ export async function procesar(
   // después— un 500 pasajero de GHL perdería el aviso para siempre, porque
   // `debeAvisar` no volvería a autorizarlo nunca.
   if (avisar) {
-    const errorAviso = await dispararWorkflow(contactId, config.WORKFLOW_AVISO, escritura);
+    const errorAviso = await dispararWorkflow(contactId, config.WORKFLOW_EMAIL_RESPONDIDO, escritura);
     errores.push(errorAviso);
     if (!errorAviso) {
       errores.push(await guardar(contactId, { notificado_at: new Date().toISOString() }, db));
