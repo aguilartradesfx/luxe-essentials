@@ -36,8 +36,13 @@ export const BLOQUEO_MINUTOS = 15;
 export const ROLES = ['vendedor', 'superadmin'] as const;
 export type Rol = (typeof ROLES)[number];
 
+// `id` (Ronda de correcciones 2, Tarea 5 de invitaciones y roles): lo
+// necesita `entrar/route.ts` para emitir la cookie — desde esa ronda,
+// `emitirSesion` exige el id de la fila, no sólo el nombre y el rol (ver
+// lib/sesion.ts). `autenticarUsuario` ya leyó la fila para todo lo demás;
+// no cuesta nada relayar también su id.
 export type ResultadoEntrada =
-  | { ok: true; nombre: string; rol: Rol }
+  | { ok: true; id: string; nombre: string; rol: Rol }
   | { ok: false; motivo: 'credenciales' | 'bloqueado' };
 
 type FilaUsuario = {
@@ -126,7 +131,7 @@ export async function autenticarUsuario(
     bloqueado_hasta: null,
     ultimo_acceso: ahora.toISOString(),
   });
-  return { ok: true, nombre: fila.nombre, rol: fila.rol };
+  return { ok: true, id: fila.id, nombre: fila.nombre, rol: fila.rol };
 }
 
 // Cuenta un intento fallido y, si toca, bloquea la cuenta. Devuelve si quedó

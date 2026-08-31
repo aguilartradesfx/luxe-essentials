@@ -23,11 +23,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // en tests/correo-invitacion.test.ts; acá sólo importa CUÁNDO se llama, con
 // qué correo y qué pasa cuando falla.
 let resendFalla = false;
+// Ronda de correcciones 2, punto 3: distinto de `resendFalla`. `enviarInvitacion`
+// nunca lanza EN PRODUCCIÓN (contrato documentado en
+// lib/cotizador/correo-invitacion.ts), pero `invitarPersona`/`reenviarInvitacion`
+// no pueden darlo por sentado para siempre — por eso llaman a través de
+// `enviarInvitacionSinLanzar`, que atrapa justo esta posibilidad. Esta
+// bandera simula que el contrato se rompió, para comprobar que ese `try/catch`
+// hace lo que dice: nada menos, y nada más, que lo mismo que un fallo normal
+// de Resend (`correoEnviado: false`, fila creada igual).
+let resendLanza = false;
 const llamadasCorreo: { para: string; nombre: string; enlace: string }[] = [];
 
 vi.mock('@/lib/cotizador/correo-invitacion', () => ({
   enviarInvitacion: vi.fn(async (p: { para: string; nombre: string; enlace: string }) => {
     llamadasCorreo.push(p);
+    if (resendLanza) throw new Error('fallo simulado: enviarInvitacion rompió su contrato de "nunca lanza"');
     if (resendFalla) return { ok: false, error: 'Resend simulado: fallo forzado por la prueba.' };
     return { ok: true, resendId: 're_test' };
   }),
@@ -58,6 +68,11 @@ let erroresRpc: { message: string } | null;
 let siguienteId: number;
 let llamadasRpc: { nombre: string; argumentos: Record<string, unknown> }[];
 let actualizacionesDirectas: number;
+// Ronda de correcciones 2, punto 2: `undefined` significa "responder con la
+// lógica normal del doble"; cualquier otro valor (incluido `null`) se
+// devuelve tal cual como `data`, saltándose esa lógica — para simular que la
+// rpc devolvió algo que no es ninguno de los tres textos reales.
+let resultadoRpcForzado: unknown;
 // Ronda de correcciones 1, punto 5 (CAS de `reenviar`): cuando coincide con
 // el `id` de la fila que se está leyendo para reenviar, simula que OTRO
 // proceso (fijar-clave, corriendo al mismo tiempo) le puso `clave_hash`
@@ -190,19 +205,39 @@ function construirUpdate(cambios: Record<string, unknown>): any {
   return nodo;
 }
 
-// Reimplementación FIEL de `usuarios_panel_cambiar_estado`
-// (supabase/migrations/0015_equipo_cambiar_estado.sql) en JavaScript —
-// mismo criterio que el doble de `usuarios_panel_intento_fallido` en
-// tests/usuarios-autenticacion.test.ts. Lo que esto NO puede probar es la
-// atomicidad real del SQL (dos llamadas a este doble desde JS nunca
-// corren de verdad en paralelo). Lo que sí queda anclado sobre el código
-// de PRODUCCIÓN es el contrato: que `cambiarEstado` llama a esta función
-// por `rpc` con los argumentos correctos, y que ya NO hace ningún
-// `select`+`update` de dos pasos por su cuenta (ver la prueba
-// 'cambiarEstado no hace ninguna escritura directa: todo pasa por la rpc').
+// AVISO EXPLÍCITO, para quien lea esto dentro de un año: lo de abajo es
+// una REIMPLEMENTACIÓN EN JAVASCRIPT de la lógica de
+// `usuarios_panel_cambiar_estado` (supabase/migrations/0015_equipo_cambiar_estado.sql),
+// no la función real. Copia su forma —incluido el `for update` sobre el
+// conjunto de superadmins activos, acá simulado como un `.filter().length`
+// síncrono— pero JavaScript de un solo hilo NO PUEDE reproducir la carrera
+// que esa función existe para cerrar: dos llamadas a este doble nunca
+// corren de verdad en paralelo, así que estas pruebas no demuestran que la
+// función de Postgres sea atómica. Si algún día la migración 0015
+// divergiera de esta copia —un `for update` mal puesto, un `<=` que
+// debería ser `<`—, esta suite seguiría en verde sin enterarse.
+//
+// La decisión de no perseguir esa prueba —levantar una base desechable en
+// CI— es del coordinador, tomada y aceptada (Ronda de correcciones 1,
+// hallazgo "R1"). La verificación de que la guarda real, contra Postgres,
+// rechaza la carrera de dos superadmins concurrentes es un PASO MANUAL,
+// documentado como tal en el README (Tarea 8) — mismo criterio que ya
+// existe para `usuarios_panel_intento_fallido` (ver el comentario de
+// tests/usuarios-autenticacion.test.ts).
+//
+// Lo que SÍ queda anclado sobre el código de PRODUCCIÓN, y por eso vale la
+// pena que este doble exista: el CONTRATO — que `cambiarEstado` llama a
+// esta función por `rpc` con los argumentos correctos, y que ya no hace
+// ningún `select`+`update` de dos pasos por su cuenta (ver la prueba
+// 'cambiarEstado llama a la rpc con los argumentos correctos y no hace
+// ninguna escritura directa').
 async function ejecutarRpc(nombre: string, argumentos: Record<string, unknown>) {
   llamadasRpc.push({ nombre, argumentos });
   if (erroresRpc) return { data: null, error: erroresRpc };
+  // Ronda de correcciones 2, punto 2: deja simular que la rpc devuelve un
+  // `data` que no es ninguno de los tres textos reales — el caso que
+  // `cambiarEstado` tiene que tratar como error, no como éxito silencioso.
+  if (resultadoRpcForzado !== undefined) return { data: resultadoRpcForzado, error: null };
   if (nombre !== 'usuarios_panel_cambiar_estado') {
     return { data: null, error: { message: `rpc no soportada en el doble: ${nombre}` } };
   }
@@ -255,18 +290,40 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   });
 }
 
+// Ronda de correcciones 2 (Tarea 5, invitaciones y roles): `autorizarSuperadmin`
+// relee por ID, no por nombre (ver lib/cotizador/equipo.ts) — así que el id
+// de cada fila es ahora el dato que de verdad importa para las pruebas de
+// autorización. `UUID_U1` es el id por defecto de `filaBase()`, más abajo:
+// las dos únicas cosas que tienen que coincidir SIEMPRE son "el id que lleva
+// la cookie" y "el id de la fila que `autorizarSuperadmin` va a releer".
+const UUID_U1 = 'aaaaaaaa-0000-4000-8000-000000000001';
+const UUID_U2 = 'aaaaaaaa-0000-4000-8000-000000000002';
+const UUID_INVITADA = 'bbbbbbbb-0000-4000-8000-000000000001';
+const UUID_ACTIVA = 'cccccccc-0000-4000-8000-000000000001';
+const UUID_INEXISTENTE = 'dddddddd-0000-4000-8000-000000000001';
+const UUID_BETO_VENDEDOR = 'eeeeeeee-0000-4000-8000-000000000001';
+const UUID_CARLA_BAJA = 'eeeeeeee-0000-4000-8000-000000000002';
+const UUID_DARIO_REAL = 'eeeeeeee-0000-4000-8000-000000000003';
+// Con forma válida de UUID (pasa `esIdValido` en lib/sesion.ts, así que
+// `emitirSesion` no lo rechaza), pero que a propósito no corresponde a
+// ninguna fila de `filas`.
+const UUID_SIN_FILA = 'ffffffff-0000-4000-8000-000000000001';
+
 // Cookie firmada de verdad, con el csrf que le corresponde. `rol` es el que
-// declara la COOKIE — no tiene por qué coincidir con lo que diga la base;
-// eso es justo lo que las pruebas de la promesa central necesitan poder
-// separar.
-function sesion(nombre: string, rol: 'vendedor' | 'superadmin' = 'superadmin') {
-  const { cookie, csrf } = emitirSesion(nombre, rol);
+// declara la COOKIE — no tiene por qué coincidir con lo que diga la base —
+// e `id` es el de la fila que `autorizarSuperadmin` va a releer: por
+// defecto, `UUID_U1`, el id de la superadmin principal que arma
+// `filaBase()`. Eso es justo lo que las pruebas de la promesa central
+// necesitan poder separar: una cookie VÁLIDA y FIRMADA que apunta —por
+// nombre, por rol, o por id— a una fila cuyo estado real es otro.
+function sesion(nombre: string, rol: 'vendedor' | 'superadmin' = 'superadmin', id: string = UUID_U1) {
+  const { cookie, csrf } = emitirSesion(nombre, rol, id);
   return { cookie: cookie.split(';')[0], csrf };
 }
 
 function filaBase(extra: Partial<Fila> = {}): Fila {
   return {
-    id: 'u1',
+    id: UUID_U1,
     correo: 'ana@luxeessentialscr.com',
     nombre: 'Ana Solano',
     rol: 'superadmin',
@@ -280,12 +337,6 @@ function filaBase(extra: Partial<Fila> = {}): Fila {
   };
 }
 
-const UUID_U1 = 'aaaaaaaa-0000-4000-8000-000000000001';
-const UUID_U2 = 'aaaaaaaa-0000-4000-8000-000000000002';
-const UUID_INVITADA = 'bbbbbbbb-0000-4000-8000-000000000001';
-const UUID_ACTIVA = 'cccccccc-0000-4000-8000-000000000001';
-const UUID_INEXISTENTE = 'dddddddd-0000-4000-8000-000000000001';
-
 beforeEach(() => {
   process.env.LUXE_SESION_SECRETO = 'secreto-de-firma-de-prueba';
   filas = [filaBase({ id: UUID_U1 })];
@@ -295,10 +346,12 @@ beforeEach(() => {
   erroresRpc = null;
   siguienteId = 0;
   resendFalla = false;
+  resendLanza = false;
   llamadasCorreo.length = 0;
   llamadasRpc = [];
   actualizacionesDirectas = 0;
   simularClaveFijadaEntreLecturaYEscrituraId = null;
+  resultadoRpcForzado = undefined;
 });
 
 describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)', () => {
@@ -312,16 +365,16 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   // una cookie VÁLIDA, no forjada— pero la fila de esa persona en la base
   // dice 'vendedor'. Tiene que rechazarse igual, en las CUATRO rutas.
   it('listar: rechaza a un vendedor aunque su cookie firmada diga superadmin', async () => {
-    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
-    const { cookie } = sesion('Beto Vendedor');
+    filas.push(filaBase({ id: UUID_BETO_VENDEDOR, nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    const { cookie } = sesion('Beto Vendedor', 'superadmin', UUID_BETO_VENDEDOR);
     const res = await postListar(peticion({}, { cookie }));
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
   });
 
   it('invitar: rechaza a un vendedor aunque su cookie firmada diga superadmin (con CSRF válido)', async () => {
-    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
-    const { cookie, csrf } = sesion('Beto Vendedor');
+    filas.push(filaBase({ id: UUID_BETO_VENDEDOR, nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    const { cookie, csrf } = sesion('Beto Vendedor', 'superadmin', UUID_BETO_VENDEDOR);
     const res = await postInvitar(
       peticion({ correo: 'nuevo@luxe.cr', nombre: 'Nueva Persona', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
     );
@@ -332,7 +385,7 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   });
 
   it('reenviar: rechaza a un vendedor aunque su cookie firmada diga superadmin (con CSRF válido)', async () => {
-    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    filas.push(filaBase({ id: UUID_BETO_VENDEDOR, nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
     filas.push(
       filaBase({
         id: UUID_INVITADA,
@@ -344,7 +397,7 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
         invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
       }),
     );
-    const { cookie, csrf } = sesion('Beto Vendedor');
+    const { cookie, csrf } = sesion('Beto Vendedor', 'superadmin', UUID_BETO_VENDEDOR);
     const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
@@ -352,8 +405,8 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   });
 
   it('estado: rechaza a un vendedor aunque su cookie firmada diga superadmin (con CSRF válido)', async () => {
-    filas.push(filaBase({ id: 'u-vendedor', nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
-    const { cookie, csrf } = sesion('Beto Vendedor');
+    filas.push(filaBase({ id: UUID_BETO_VENDEDOR, nombre: 'Beto Vendedor', correo: 'beto@luxeessentialscr.com', rol: 'vendedor' }));
+    const { cookie, csrf } = sesion('Beto Vendedor', 'superadmin', UUID_BETO_VENDEDOR);
     const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe('No tenés permiso para administrar el equipo.');
@@ -366,15 +419,15 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   // para ese nombre — pero `activo: false`. Sólo la desactivación distingue
   // este caso del de control de arriba. Repetido en las cuatro rutas.
   it('listar: rechaza a un superadmin desactivado en la base', async () => {
-    filas = [filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
-    const { cookie } = sesion('Carla Baja');
+    filas = [filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
+    const { cookie } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postListar(peticion({}, { cookie }));
     expect(res.status).toBe(403);
   });
 
   it('invitar: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
-    filas = [filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
-    const { cookie, csrf } = sesion('Carla Baja');
+    filas = [filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
+    const { cookie, csrf } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postInvitar(
       peticion({ correo: 'nuevo@luxe.cr', nombre: 'Nueva Persona', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
     );
@@ -385,7 +438,7 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
 
   it('reenviar: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
     filas = [
-      filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
+      filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
       filaBase({
         id: UUID_INVITADA,
         correo: 'invitada@luxe.cr',
@@ -396,7 +449,7 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
         invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
       }),
     ];
-    const { cookie, csrf } = sesion('Carla Baja');
+    const { cookie, csrf } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(403);
     expect(llamadasCorreo).toHaveLength(0);
@@ -405,9 +458,9 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   it('estado: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
     filas = [
       filaBase({ id: UUID_U1 }),
-      filaBase({ id: 'u-baja', nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
+      filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
     ];
-    const { cookie, csrf } = sesion('Carla Baja');
+    const { cookie, csrf } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(403);
     expect(filas.find((f) => f.id === UUID_U1)?.activo).toBe(true);
@@ -415,8 +468,29 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   });
 
   it('un vendedor real (cookie y base de acuerdo) también recibe 403', async () => {
-    filas.push(filaBase({ id: 'u-real', nombre: 'Dario Real', correo: 'dario@luxeessentialscr.com', rol: 'vendedor' }));
-    const { cookie } = sesion('Dario Real', 'vendedor');
+    filas.push(filaBase({ id: UUID_DARIO_REAL, nombre: 'Dario Real', correo: 'dario@luxeessentialscr.com', rol: 'vendedor' }));
+    const { cookie } = sesion('Dario Real', 'vendedor', UUID_DARIO_REAL);
+    const res = await postListar(peticion({}, { cookie }));
+    expect(res.status).toBe(403);
+  });
+
+  // Ronda de correcciones 2: la prueba decisiva de que `autorizarSuperadmin`
+  // relee por ID y no por nombre. En TODAS las demás pruebas de este
+  // describe, el nombre de la cookie coincide con el nombre de la fila que
+  // el id también identifica — así que una regresión a la búsqueda por
+  // nombre de antes de esta ronda las pasaría igual, por el motivo
+  // equivocado. Acá el nombre de la cookie ('Ana Solano') es el de una
+  // superadmin ACTIVA de verdad, pero el id apunta a OTRA fila —un
+  // vendedor—. Si `autorizarSuperadmin` buscara por nombre, encontraría a
+  // Ana y autorizaría (200); buscando por id, como debe, encuentra al
+  // vendedor y rechaza (403).
+  it('el nombre de la cookie no importa: autoriza (o no) según la fila que señala el ID, no el nombre', async () => {
+    filas.push(
+      filaBase({ id: UUID_DARIO_REAL, nombre: 'Dario Real', correo: 'dario@luxeessentialscr.com', rol: 'vendedor' }),
+    );
+    // El nombre de la cookie es 'Ana Solano' —superadmin activa real—, pero
+    // el id que lleva es el de Darío, que es vendedor.
+    const { cookie } = sesion('Ana Solano', 'superadmin', UUID_DARIO_REAL);
     const res = await postListar(peticion({}, { cookie }));
     expect(res.status).toBe(403);
   });
@@ -546,6 +620,38 @@ describe('el ultimo superadmin activo no se puede tocar (via rpc atomica)', () =
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
+
+  // Ronda de correcciones 2, punto 2: el `else` de `cambiarEstado` era
+  // fail-open — cualquier `data` que no fuera ninguno de los dos motivos de
+  // rechazo, incluido `null`, caía en `return { ok: true }` y la ruta
+  // respondía 200 sin que se hubiera escrito nada. Hoy es inalcanzable con
+  // la función real (sólo devuelve 'ok' | 'no_encontrado' | 'ultimo_superadmin'),
+  // pero esta prueba fuerza justo ese valor inesperado a través del doble
+  // (`resultadoRpcForzado`) para anclar que la rama por defecto es un
+  // error registrado, no un éxito silencioso.
+  it('un valor inesperado de la rpc (ni ok, ni un motivo de rechazo conocido) es error, no un 200 fantasma', async () => {
+    resultadoRpcForzado = 'algo-que-la-funcion-real-nunca-devolveria';
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(500);
+    expect(consoleError).toHaveBeenCalled();
+    // Y no se coló ningún éxito fantasma: la fila sigue como estaba.
+    expect(filas.find((f) => f.id === UUID_U1)?.activo).toBe(true);
+    consoleError.mockRestore();
+  });
+
+  // Mismo argumento con `data: null` en particular: es el valor más fácil
+  // de producir por accidente (una rpc que no existe, un `select` sin
+  // `returning`), y el que un `else` fail-open dejaría pasar más seguido.
+  it('data: null de la rpc tambien es error, no un 200 fantasma', async () => {
+    resultadoRpcForzado = null;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(500);
+    consoleError.mockRestore();
+  });
 });
 
 describe('invitar', () => {
@@ -585,6 +691,26 @@ describe('invitar', () => {
     expect((await res.json()).correoEnviado).toBe(false);
     // La fila igual quedo creada.
     expect(filas.find((f) => f.correo === 'nuevo@luxe.cr')).toBeTruthy();
+  });
+
+  // Ronda de correcciones 2, punto 3: el revisor quitó el `try/catch` de
+  // `enviarInvitacionSinLanzar` y la suite anterior (48/48) seguía en
+  // verde — el mock nunca lanzaba, así que nada lo ejercitaba. Esta prueba
+  // hace que el mock SÍ lance, y afirma el comportamiento exacto que ese
+  // `try/catch` existe para garantizar: el mismo 200 con
+  // `correoEnviado: false` que un fallo NORMAL de Resend, no un 500 que
+  // esconda que la fila ya se creó.
+  it('si enviarInvitacion LANZA (no sólo falla), invitar igual responde 200 con correoEnviado:false y la fila creada', async () => {
+    resendLanza = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postInvitar(
+      peticion({ correo: 'nuevo@luxe.cr', nombre: 'X', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).correoEnviado).toBe(false);
+    expect(filas.find((f) => f.correo === 'nuevo@luxe.cr')).toBeTruthy();
+    consoleError.mockRestore();
   });
 
   it('rechaza invitar a un correo que ya esta (409)', async () => {
@@ -734,6 +860,30 @@ describe('reenviar', () => {
     expect(filas.find((f) => f.id === UUID_INVITADA)?.invitacion_hash).not.toBe('huella-vieja');
   });
 
+  // Mismo caso que la prueba equivalente de `invitar`: `enviarInvitacionSinLanzar`
+  // protege a los dos escritores, no sólo a uno.
+  it('si enviarInvitacion LANZA al reenviar, la ruta igual responde 200 con correoEnviado:false', async () => {
+    filas.push(
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'invitada@luxe.cr',
+        nombre: 'Invitada Pendiente',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_hash: 'huella-vieja',
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    );
+    resendLanza = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, csrf } = sesion('Ana Solano');
+    const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).correoEnviado).toBe(false);
+    consoleError.mockRestore();
+  });
+
   // Ronda de correcciones 1, punto 5 (compare-and-swap). Entre la lectura y
   // la escritura de `reenviarInvitacion`, la persona invitada corre
   // `fijar-clave` (simulado acá). Sin el `.is('clave_hash', null)` en el
@@ -810,7 +960,7 @@ describe('listar', () => {
 
   it('deriva el estado de cada fila: activa, invitada, vencida, desactivada', async () => {
     filas = [
-      filaBase({ id: 'act', correo: 'activa@luxe.cr', nombre: 'Activa', clave_hash: 'h' }),
+      filaBase({ id: UUID_U1, correo: 'activa@luxe.cr', nombre: 'Activa', clave_hash: 'h' }),
       filaBase({
         id: 'inv',
         correo: 'invitada@luxe.cr',
@@ -842,7 +992,7 @@ describe('listar', () => {
     const res = await postListar(peticion({}, { cookie }));
     const cuerpo = await res.json();
     const estadoDe = (id: string) => cuerpo.equipo.find((f: { id: string }) => f.id === id)?.estado;
-    expect(estadoDe('act')).toBe('activa');
+    expect(estadoDe(UUID_U1)).toBe('activa');
     expect(estadoDe('inv')).toBe('invitada');
     expect(estadoDe('venc')).toBe('vencida');
     expect(estadoDe('baja')).toBe('desactivada');
@@ -855,7 +1005,7 @@ describe('listar', () => {
   // fijar-clave/route.ts ya le cierra la puerta.
   it('una invitacion pendiente y desactivada se ve como desactivada, no invitada', async () => {
     filas = [
-      filaBase({ id: 'act', nombre: 'Activa' }),
+      filaBase({ id: UUID_U1, nombre: 'Activa' }),
       filaBase({
         id: 'inv-baja',
         correo: 'inv-baja@luxe.cr',
@@ -890,24 +1040,27 @@ describe('autorizarSuperadmin: diagnostico de un fallo de lectura vs. sin fila',
     consoleError.mockRestore();
   });
 
-  it('una cookie con un nombre sin fila en el equipo deja una linea en el log', async () => {
+  // Ronda de correcciones 2: antes esto probaba "un nombre sin fila" —
+  // `autorizarSuperadmin` releía por nombre. Ahora relee por id (ver su
+  // comentario en lib/cotizador/equipo.ts), así que el escenario
+  // equivalente es una cookie con un id bien formado —pasa `esIdValido`,
+  // `emitirSesion` no la rechaza al emitirla— que no corresponde a
+  // ninguna fila: una cuenta borrada después de que la cookie ya existía,
+  // por ejemplo.
+  it('una cookie con un id sin fila en el equipo deja una linea en el log', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { cookie } = sesion('Nombre Que No Existe En La Base');
+    const { cookie } = sesion('Cualquiera', 'superadmin', UUID_SIN_FILA);
     const res = await postListar(peticion({}, { cookie }));
     expect(res.status).toBe(403);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
 
-  // Dos filas con el mismo nombre (dato preexistente corrupto, o una
-  // invitación que se coló antes de que existiera el rechazo de la
-  // Tarea 5): `.maybeSingle()` devuelve el error PGRST116 real de
-  // Supabase, no una fila cualquiera — y `autorizarSuperadmin` lo trata
-  // como cualquier otro fallo de lectura: cierra, no revienta.
-  it('dos filas con el mismo nombre no hacen que la ruta explote: cierra con 403', async () => {
-    filas = [filaBase({ id: 'dup-1' }), filaBase({ id: 'dup-2' })];
-    const { cookie } = sesion('Ana Solano');
-    const res = await postListar(peticion({}, { cookie }));
-    expect(res.status).toBe(403);
-  });
+  // Ronda de correcciones 2: la prueba que vivía acá ("dos filas con el
+  // mismo nombre no hacen que la ruta explote") quedó retirada — probaba
+  // el error PGRST116 de `.maybeSingle()` sobre una búsqueda POR NOMBRE,
+  // que ya no existe en `autorizarSuperadmin` (ahora busca por id, la
+  // clave primaria de la tabla: dos filas jamás pueden compartirlo). La
+  // guarda contra nombres repetidos sigue viva en `invitarPersona` —ver
+  // el describe 'invitar', más abajo—, pero ya no por este motivo.
 });

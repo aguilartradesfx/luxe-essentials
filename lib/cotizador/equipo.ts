@@ -43,44 +43,52 @@ export type FilaEquipo = {
 // la fila de la base en cada llamada y decide sobre el dato de AHORA, nunca
 // sobre el que traía la cookie cuando se firmó.
 //
-// Se relee por NOMBRE, no por id: es el mismo criterio de identidad que ya
-// usa el resto del panel (la cookie sólo lleva el nombre, ver
-// `lib/sesion.ts`); no hay un id de usuario viajando en la sesión. Como no
-// hay un índice único sobre `nombre`, dos filas con el mismo nombre
-// dejarían a esa persona sin forma de autorizar nada —`maybeSingle()` le
-// devolvería un error (`PGRST116`, "multiple rows returned") en vez de una
-// fila— así que `invitarPersona` (más abajo) rechaza un nombre repetido
-// ANTES de crear la fila: es el único lugar del sistema que escribe
-// `nombre`, y cerrar el camino ahí cierra el camino entero.
+// Ronda de correcciones 2: releía por NOMBRE, no por id. Era el mismo
+// criterio de identidad que usaba el resto del panel en ese momento —la
+// cookie sólo llevaba el nombre—, pero un nombre no es único, y esa
+// elección se pagó dos veces: primero como un bloqueo irreversible
+// (invitar a alguien con el mismo nombre que un superadmin lo dejaba sin
+// forma de autorizar nada, ni para deshacerlo), y después como una
+// ventana de carrera en el chequeo agregado para evitarlo (dos
+// inserciones concurrentes con el mismo nombre podían pasar las dos el
+// chequeo antes de que cualquiera escribiera). El id es la clave primaria
+// de `usuarios_panel` — único por definición de la base, no por
+// disciplina de la aplicación — así que ahora la cookie lo lleva (ver
+// `lib/sesion.ts`) y esta función relee por ahí: cierra el problema de
+// raíz en vez de agregarle otro chequeo al costado.
+//
+// `invitarPersona` (más abajo) sigue rechazando un nombre repetido, pero
+// ya no por esto: dos personas con el mismo nombre en el listado del
+// equipo son confusas, no un agujero de seguridad.
 //
 // Ronda de correcciones 1: antes `if (error || !data)` se tragaba las dos
 // causas en el mismo `{ ok: false }` silencioso — una base caída le
 // aparecía a la única superadmin del equipo como "no tenés permiso", sin
-// una sola línea en el log para distinguir "no pude leer" de "no hay nadie
-// con ese nombre". Fallar cerrado en los dos casos sigue siendo lo
-// correcto; fallar cerrado y mudo, no.
+// una sola línea en el log para distinguir "no pude leer" de "no hay
+// ninguna fila con ese id". Fallar cerrado en los dos casos sigue siendo
+// lo correcto; fallar cerrado y mudo, no.
 export async function autorizarSuperadmin(
-  vendedor: string,
+  id: string,
   db: Db,
 ): Promise<{ ok: true; id: string } | { ok: false }> {
   const { data, error } = await db
     .from(TABLA)
     .select('id, rol, activo')
-    .eq('nombre', vendedor)
+    .eq('id', id)
     .maybeSingle();
 
   if (error) {
     console.error(
       '[cotizador] No se pudo releer la fila del equipo para autorizar.',
-      vendedor,
+      id,
       error.message,
     );
     return { ok: false };
   }
   if (!data) {
     console.error(
-      '[cotizador] La cookie trae un nombre sin fila en el equipo al autorizar.',
-      vendedor,
+      '[cotizador] La cookie trae un id sin fila en el equipo al autorizar.',
+      id,
     );
     return { ok: false };
   }
@@ -186,14 +194,11 @@ export async function invitarPersona(
 ): Promise<ResultadoInvitar> {
   const correo = normalizarCorreo(datos.correo);
 
-  // No hay índice único sobre `nombre` (ver el comentario de
-  // `autorizarSuperadmin`, arriba): esta comprobación en la aplicación es
-  // lo único que impide crear una segunda fila con el mismo nombre que una
-  // ya existente, lo que dejaría a AMBAS sin forma de autorizar nada en
-  // /api/equipo/* —incluida la persona original, que hasta ese momento
-  // administraba el equipo sin problema—. `invitar` es el único lugar del
-  // sistema que escribe `nombre`, así que esta es la única puerta que hace
-  // falta cerrar.
+  // Ronda de correcciones 2: ya no hace falta por seguridad —
+  // `autorizarSuperadmin` relee por id, no por nombre (ver su comentario,
+  // arriba)—, pero se conserva: dos personas con el mismo nombre en el
+  // listado del equipo son confusas para quien administra, y no hay
+  // ningún motivo para permitirlo.
   const nombreNormalizado = normalizarNombre(datos.nombre);
   const { data: existentes, error: errorNombres } = await db.from(TABLA).select('nombre');
   if (errorNombres) {
@@ -338,5 +343,18 @@ export async function cambiarEstado(
   if (error) return { ok: false, motivo: 'error', error: error.message };
   if (data === 'no_encontrado') return { ok: false, motivo: 'no_encontrado' };
   if (data === 'ultimo_superadmin') return { ok: false, motivo: 'ultimo_superadmin' };
-  return { ok: true };
+  // Ronda de correcciones 2: antes esto era un `return { ok: true }` sin
+  // condición — cualquier `data` que no fuera ninguno de los dos motivos
+  // de rechazo, incluido `null`, caía acá y la ruta respondía 200 sin que
+  // se hubiera escrito nada. Hoy es inalcanzable (la función de Postgres
+  // sólo devuelve estos tres textos), pero "inalcanzable hoy" no es una
+  // garantía del tipo — es estricto a propósito: sólo `'ok'` cuenta como
+  // éxito, y cualquier otra cosa es un error registrado, no un 200 fantasma.
+  if (data === 'ok') return { ok: true };
+  console.error(
+    '[cotizador] La rpc de cambiar estado devolvió un valor inesperado.',
+    id,
+    JSON.stringify(data),
+  );
+  return { ok: false, motivo: 'error', error: `Valor inesperado de la base: ${String(data)}` };
 }

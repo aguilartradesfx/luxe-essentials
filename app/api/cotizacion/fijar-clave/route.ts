@@ -148,7 +148,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { cookie, csrf } = emitirSesion(fila.nombre, fila.rol);
+    const { cookie, csrf } = emitirSesion(fila.nombre, fila.rol, fila.id);
     const respuesta = NextResponse.json({
       ok: true,
       csrf,

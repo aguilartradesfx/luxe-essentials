@@ -108,7 +108,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
 
   describe('POST /api/cotizacion (escribe): exige CSRF cuando entra por cookie', () => {
     it('mata el mutante 1: cookie válida SIN el token anti-CSRF en la cabecera → 401', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, { cookie: valor }),
@@ -117,7 +117,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('cookie válida con un token anti-CSRF que no coincide → 401', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, {
@@ -129,7 +129,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('cookie válida CON el token anti-CSRF correcto → pasa (200)', async () => {
-      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor');
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, {
@@ -160,14 +160,14 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
 
   describe('rutas de solo lectura: aceptan la cookie sin exigir CSRF', () => {
     it('mata el mutante 3: /catalogo con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await postCatalogo(peticion('http://localhost/api/cotizacion/catalogo', {}, { cookie: valor }));
       expect(res.status).toBe(200);
     });
 
     it('/previsualizar con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await postPrevisualizar(
         peticion('http://localhost/api/cotizacion/previsualizar', previsualizarValida, { cookie: valor }),
@@ -176,7 +176,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('/borradores con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
       const valor = cookie.split(';')[0];
       const res = await postBorradores(
         peticion('http://localhost/api/cotizacion/borradores', {}, { cookie: valor }),
@@ -221,7 +221,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('con credenciales correctas → 200, con csrf en el cuerpo y Set-Cookie con SameSite=None', async () => {
-      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
+      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, id: 'aaaaaaaa-0000-4000-8000-000000000001', nombre: 'Guillermo Rojas', rol: 'vendedor' });
       const res = await postEntrar(
         peticion('http://localhost/api/cotizacion/entrar', { correo: 'guillermo@luxeessentialscr.com', clave: 'secreta' }),
       );
@@ -268,7 +268,7 @@ describe('POST /api/cotizacion/entrar', () => {
   // Ronda de correcciones 1: el nombre moqueado es 'Marta Vargas' —
   // deliberadamente distinto del 'Guillermo Rojas' que usa el resto del
   // archivo (y que fue el valor fijo provisional de esta misma ruta antes de
-  // esta tarea). Si alguien reintrodujera `emitirSesion('Guillermo Rojas', 'vendedor')`
+  // esta tarea). Si alguien reintrodujera `emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001')`
   // a mano en la ruta, esta prueba (y sólo esta, entre las de este archivo)
   // lo notaría: es la única que compara `vendedor` contra un nombre que no
   // coincide con esa regresión. El `toHaveBeenCalledWith` además fija el
@@ -277,7 +277,7 @@ describe('POST /api/cotizacion/entrar', () => {
   // pasaba en verde antes de este ajuste, porque el mock resuelve igual sin
   // mirar con qué lo llamaron.
   it('emite una sesión con el nombre real del vendedor autenticado, en el orden correcto de argumentos', async () => {
-    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Marta Vargas', rol: 'vendedor' });
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, id: 'aaaaaaaa-0000-4000-8000-000000000001', nombre: 'Marta Vargas', rol: 'vendedor' });
     const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'x' }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
@@ -344,7 +344,7 @@ describe('POST /api/cotizacion/entrar', () => {
   // el secreto en Vercel —el caso exacto de un despliegue nuevo— la ruta
   // devolvía un 500 genérico de Next, sin una sola línea que dijera por qué.
   it('si falta LUXE_SESION_SECRETO, devuelve 500 con un diagnóstico explícito en el log', async () => {
-    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, id: 'aaaaaaaa-0000-4000-8000-000000000001', nombre: 'Guillermo Rojas', rol: 'vendedor' });
     delete process.env.LUXE_SESION_SECRETO;
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -368,7 +368,7 @@ describe('POST /api/cotizacion/salir', () => {
 
   it('caduca la cookie con Max-Age=0 y los mismos atributos con que se emitió', async () => {
     const { POST: postSalir } = await import('@/app/api/cotizacion/salir/route');
-    const { cookie: emitida } = emitirSesion('Guillermo Rojas', 'vendedor');
+    const { cookie: emitida } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
 
     const res = await postSalir();
 
@@ -405,12 +405,12 @@ describe('autenticarPeticion', () => {
   it('devuelve el vendedor de la sesión', async () => {
     const { emitirSesion } = await import('@/lib/sesion');
     const { autenticarPeticion } = await import('@/lib/autenticacion-cotizador');
-    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
     const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado', {
       headers: { cookie: cookie.split(';')[0] },
     });
     const r = autenticarPeticion(req, {}, { requiereCsrf: false });
-    expect(r).toEqual({ ok: true, vendedor: 'Guillermo Rojas', rol: 'vendedor' });
+    expect(r).toEqual({ ok: true, vendedor: 'Guillermo Rojas', rol: 'vendedor', id: 'aaaaaaaa-0000-4000-8000-000000000001' });
   });
 
   it('ya no acepta la clave compartida en el cuerpo', async () => {

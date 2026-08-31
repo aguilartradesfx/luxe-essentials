@@ -95,7 +95,7 @@ export async function POST(request: Request) {
   // "entramos bien y no pasa nada", con la causa a la vista sólo para quien
   // fuera a leer el código.
   try {
-    const { cookie, csrf } = emitirSesion(resultado.nombre, resultado.rol);
+    const { cookie, csrf } = emitirSesion(resultado.nombre, resultado.rol, resultado.id);
     const respuesta = NextResponse.json({
       ok: true,
       csrf,

@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   // `auth.rol` sale de la cookie y no autoriza nada (lib/autenticacion-cotizador.ts).
   // `autorizarSuperadmin` relee la fila de quien hace la petición antes de
   // dejarlo ver el equipo entero, incluidas cuentas ajenas.
-  const autorizacion = await autorizarSuperadmin(auth.vendedor, db);
+  const autorizacion = await autorizarSuperadmin(auth.id, db);
   if (!autorizacion.ok) {
     return NextResponse.json({ ok: false, error: SIN_PERMISO }, { status: 403 });
   }

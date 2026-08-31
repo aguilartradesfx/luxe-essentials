@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
   const db = supabaseAdmin();
 
-  const autorizacion = await autorizarSuperadmin(auth.vendedor, db);
+  const autorizacion = await autorizarSuperadmin(auth.id, db);
   if (!autorizacion.ok) {
     return NextResponse.json({ ok: false, error: SIN_PERMISO }, { status: 403 });
   }

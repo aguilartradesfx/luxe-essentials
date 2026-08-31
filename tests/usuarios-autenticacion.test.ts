@@ -81,13 +81,13 @@ describe('autenticarUsuario', () => {
   it('devuelve el nombre con la clave correcta', async () => {
     const { cliente } = db(await filaDe('Turrialba-2026'));
     const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
-    expect(r).toEqual({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
+    expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'vendedor' });
   });
 
   it('devuelve el rol junto al nombre', async () => {
     const { cliente } = db(await filaDe('Turrialba-2026', { rol: 'superadmin' }));
     const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
-    expect(r).toEqual({ ok: true, nombre: 'Guillermo Rojas', rol: 'superadmin' });
+    expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'superadmin' });
   });
 
   it('el rol por defecto es vendedor', async () => {
@@ -210,7 +210,7 @@ describe('autenticarUsuario', () => {
 
     const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente, ahora);
 
-    expect(r).toEqual({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
+    expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'vendedor' });
     // Se intentó anotar, y el fallo quedó registrado ruidosamente: la
     // anotación se pierde, pero no en silencio.
     expect(escrituras).toHaveLength(1);

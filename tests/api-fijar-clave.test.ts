@@ -27,7 +27,7 @@ let escrituras: Record<string, unknown>[];
 
 function filaInvitacionValida(extra: Record<string, unknown> = {}) {
   return {
-    id: 'u1',
+    id: 'aaaaaaaa-0000-4000-8000-000000000001',
     correo: 'guillermo@luxeessentialscr.com',
     nombre: 'Guillermo Rojas',
     rol: 'vendedor',

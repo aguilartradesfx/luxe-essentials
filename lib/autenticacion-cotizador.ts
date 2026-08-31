@@ -46,8 +46,14 @@ import type { Rol } from '@/lib/cotizador/usuarios';
 // otras cuentas — confiar en este campo ahí sería dejar a un superadmin
 // recién degradado seguir administrando el equipo hasta que su cookie
 // caduque.
+// `id` (Ronda de correcciones 2, Tarea 5 de invitaciones y roles): sale de
+// la misma cookie firmada que `vendedor` y `rol`, así que tampoco autoriza
+// nada por sí solo — pero es lo que `autorizarSuperadmin`
+// (lib/cotizador/equipo.ts) usa ahora para releer la fila, en vez del
+// nombre. Ver el comentario grande en lib/sesion.ts sobre por qué el
+// nombre dejó de ser la identidad de la sesión.
 export type ResultadoAutenticacion =
-  | { ok: true; vendedor: string; rol: Rol }
+  | { ok: true; vendedor: string; rol: Rol; id: string }
   | { ok: false; status: number; error: string };
 
 export function autenticarPeticion(
@@ -78,5 +84,5 @@ export function autenticarPeticion(
     }
   }
 
-  return { ok: true, vendedor: sesion.nombre, rol: sesion.rol };
+  return { ok: true, vendedor: sesion.nombre, rol: sesion.rol, id: sesion.id };
 }
