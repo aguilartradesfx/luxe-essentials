@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Cotizador, { CSRF_STORAGE_KEY } from '@/app/cotizador/Panel';
 import { PantallaClave } from '@/app/cotizador/PantallaClave';
@@ -136,6 +136,12 @@ type OpcionesFetch = {
   // ninguna vía de respaldo desde la Fase 3) falla — y `establecerSesion`
   // (Panel.tsx) ya no deja entrar en ese caso.
   cookieBloqueada?: boolean;
+  // Catálogo (sin precios) que devuelve `/api/cotizacion/catalogo`. Por
+  // defecto `SKUS` (3 productos, uno por familia) — las pruebas del
+  // catálogo desplegable por familia lo cambian por uno con más de un
+  // producto en la misma familia, para poder afirmar que el contador
+  // agrupa de verdad y no solo cuenta "1" siempre.
+  skus?: typeof SKUS;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -159,9 +165,10 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       // sonda que usa `Panel` al montar como la verificación que hace
       // `establecerSesion` justo después de `/entrar`.
       if (cookieEstablecida) {
-        return new Response(JSON.stringify({ ok: true, skus: SKUS, csrf, vendedor: 'Guillermo Rojas' }), {
-          status: 200,
-        });
+        return new Response(
+          JSON.stringify({ ok: true, skus: opciones.skus ?? SKUS, csrf, vendedor: 'Guillermo Rojas' }),
+          { status: 200 },
+        );
       }
       return new Response(JSON.stringify({ ok: false, error: 'Tu sesión no está activa o venció.' }), { status: 401 });
     }
@@ -963,6 +970,102 @@ describe('Cotizador', () => {
       expect(screen.getByText(/fallo de red/i)).toBeInTheDocument();
     });
     expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument();
+  });
+
+  // Quien no se sabe el nombre del producto de memoria antes no tenía forma
+  // de encontrarlo salvo adivinar qué escribir. Ahora el catálogo completo
+  // se puede desplegar sin escribir nada, agrupado por familia (la misma
+  // `familia` que ya traía cada SKU — no es una taxonomía nueva). Cada
+  // familia de `SKUS` (arriba) tiene un solo producto, así que el contador
+  // de cada una debe leer "(1)".
+  describe('Catálogo desplegable por familia', () => {
+    it('con el buscador vacío se ve una familia por cada grupo, con su cantidad, sin desplegar nada', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      // Las tres familias de `SKUS` están a la vista antes de escribir nada.
+      for (const familia of ['Sets de cama 600 hilos', 'Uniformes', 'Edredones']) {
+        const resumen = screen
+          .getAllByText(familia)
+          .find((el) => el.tagName === 'SUMMARY');
+        expect(resumen).toBeTruthy();
+      }
+      // Una familia por producto en este mock: el contador de las tres debe
+      // leer "(1)" ANTES de abrir ninguna — mata el mutante que solo pone el
+      // contador al desplegar, o que no lo pone nunca.
+      expect(screen.getAllByText('(1)')).toHaveLength(3);
+
+      // Cerrado por defecto: el botón "Agregar" de un producto agrupado no
+      // es interactuable hasta desplegar su familia.
+      const [boton] = screen.getAllByRole('button', { name: /agregar/i });
+      expect(boton).not.toBeVisible();
+    });
+
+    it('agrupa dos productos de la misma familia bajo un solo desplegable, con la cuenta correcta', async () => {
+      const skus = [
+        { id: 'uni-a', nombre: 'filipina a', familia: 'Uniformes' },
+        { id: 'uni-b', nombre: 'filipina b', familia: 'Uniformes' },
+        { id: 'toalla-a', nombre: 'toalla a', familia: 'Toallas' },
+      ];
+      mockFetch({ skus });
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      // Un solo desplegable "Uniformes", con las dos filas adentro — no dos
+      // desplegables repetidos ni uno por cada SKU.
+      const resumenesUniformes = screen
+        .getAllByText('Uniformes')
+        .filter((el) => el.tagName === 'SUMMARY');
+      expect(resumenesUniformes).toHaveLength(1);
+      expect(screen.getByText('(2)')).toBeInTheDocument();
+      expect(screen.getByText('(1)')).toBeInTheDocument();
+    });
+
+    it('despliega una familia, agrega uno de sus productos sin haber escrito nada, y queda en las líneas', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      const resumen = screen
+        .getAllByText('Uniformes')
+        .find((el) => el.tagName === 'SUMMARY')!;
+      await usuario.click(resumen);
+
+      // Con las tres familias en el DOM (jsdom no oculta por CSS el
+      // contenido de un `<details>` cerrado), hay que acotar la búsqueda del
+      // botón al desplegable que sí se abrió — igual que un vendedor de
+      // verdad, que solo puede tocar el que tiene abierto en pantalla.
+      const boton = within(resumen.closest('details')!).getByRole('button', { name: /agregar/i });
+      expect(boton).toBeVisible();
+      await usuario.click(boton);
+
+      // "filipina tradicional manga corta" ahora aparece dos veces en
+      // pantalla: la fila del catálogo (que sigue en el DOM) y la línea
+      // recién agregada — se acota a la sección de líneas, la que de
+      // verdad importa para esta prueba.
+      const seccionLineas = screen.getByText('Líneas de la cotización').closest('div')!;
+      expect(within(seccionLineas).queryByText(/todavía no agregaste/i)).not.toBeInTheDocument();
+      expect(within(seccionLineas).getByText('filipina tradicional manga corta')).toBeInTheDocument();
+    });
+
+    it('al escribir en el buscador, el catálogo por familia desaparece — y vuelve al borrar el texto', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      expect(screen.queryAllByRole('group')).not.toHaveLength(0);
+
+      await usuario.type(screen.getByLabelText(/buscar/i), 'inserto');
+      expect(screen.queryAllByRole('group')).toHaveLength(0);
+
+      await usuario.clear(screen.getByLabelText(/buscar/i));
+      expect(screen.queryAllByRole('group')).not.toHaveLength(0);
+    });
   });
 });
 

@@ -124,6 +124,29 @@ function formatearFecha(iso: string): string {
   return `${dos(f.getDate())}/${dos(f.getMonth() + 1)}/${f.getFullYear()} ${dos(f.getHours())}:${dos(f.getMinutes())}`;
 }
 
+// Una fila de producto, con su botón "Agregar". La usan tanto los
+// resultados de la búsqueda como el catálogo desplegable por familia (ver
+// más abajo) — un solo marcado para las dos vías de elegir un SKU, así que
+// un cambio de estilo o de comportamiento no puede quedar aplicado a una
+// sí y a la otra no.
+function FilaSku({ sku, onAgregar }: { sku: SkuUI; onAgregar: (skuId: string) => void }) {
+  return (
+    <li className="flex items-center justify-between gap-3 py-2">
+      <div>
+        <p className="text-sm text-navy">{sku.nombre}</p>
+        <p className="text-xs text-teal">{sku.familia}</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => onAgregar(sku.id)}
+        className="shrink-0 rounded-lg border border-[var(--carta-border)] px-3 py-1.5 text-xs font-medium text-navy hover:bg-navy hover:text-beige"
+      >
+        Agregar
+      </button>
+    </li>
+  );
+}
+
 type Props = {
   // El catálogo (sin precios) que ya bajó `Panel` tras validar la sesión.
   skus: SkuUI[];
@@ -213,6 +236,24 @@ export function VistaCrear({
       .filter((sku) => normalizar(sku.nombre).includes(q) || normalizar(sku.familia).includes(q))
       .slice(0, 20);
   }, [busqueda, skus]);
+
+  // Para quien no se sabe el nombre de memoria: el catálogo completo,
+  // agrupado como la gente ya lo piensa (uniformes, sets de cama, toallas…)
+  // en vez de una lista plana de 70 productos. `familia` es la misma que ya
+  // trae cada SKU (lib/cotizador/tipos.ts) — no es una taxonomía nueva, es
+  // la que ya existía para agruparlos en la pantalla y en el PDF. El orden
+  // es el de primera aparición en `skus` (que ya llega agrupado por familia
+  // desde el catálogo), no alfabético — así "Uniformes" queda primero, que
+  // es la familia con más SKUs y la que más gente busca.
+  const familiasCatalogo = useMemo(() => {
+    const porFamilia = new Map<string, SkuUI[]>();
+    for (const sku of skus) {
+      const lista = porFamilia.get(sku.familia);
+      if (lista) lista.push(sku);
+      else porFamilia.set(sku.familia, [sku]);
+    }
+    return Array.from(porFamilia.entries()).map(([familia, items]) => ({ familia, items }));
+  }, [skus]);
 
   // Solo las líneas con una cantidad válida entran al cálculo y al envío.
   // `hayLineaInvalida` es lo que de verdad bloquea el botón: una línea con
@@ -599,25 +640,32 @@ export function VistaCrear({
             className="mt-2 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2.5 text-sm text-navy placeholder:text-teal/60"
           />
           {busqueda.trim() === '' ? (
-            <p className="mt-3 text-xs text-teal/70">Escribí para buscar entre los {skus.length} productos del catálogo.</p>
+            <>
+              <p className="mt-3 text-xs text-teal/70">
+                Escribí para buscar entre los {skus.length} productos del catálogo, o desplegá una familia para ver
+                todo.
+              </p>
+              <div className="mt-3 space-y-2">
+                {familiasCatalogo.map(({ familia, items }) => (
+                  <details key={familia} className="group rounded-lg border border-[var(--carta-border)]">
+                    <summary className="cursor-pointer select-none rounded-lg px-3 py-2 text-sm font-medium text-navy hover:bg-[color:var(--carta-border)]/30">
+                      {familia} <span className="font-normal text-teal">({items.length})</span>
+                    </summary>
+                    <ul className="divide-y divide-[var(--carta-border)] border-t border-[var(--carta-border)] px-3">
+                      {items.map((sku) => (
+                        <FilaSku key={sku.id} sku={sku} onAgregar={agregar} />
+                      ))}
+                    </ul>
+                  </details>
+                ))}
+              </div>
+            </>
           ) : resultadosBusqueda.length === 0 ? (
             <p className="mt-3 text-xs text-teal/70">Sin resultados para «{busqueda}».</p>
           ) : (
             <ul className="mt-3 divide-y divide-[var(--carta-border)]">
               {resultadosBusqueda.map((sku) => (
-                <li key={sku.id} className="flex items-center justify-between gap-3 py-2">
-                  <div>
-                    <p className="text-sm text-navy">{sku.nombre}</p>
-                    <p className="text-xs text-teal">{sku.familia}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => agregar(sku.id)}
-                    className="shrink-0 rounded-lg border border-[var(--carta-border)] px-3 py-1.5 text-xs font-medium text-navy hover:bg-navy hover:text-beige"
-                  >
-                    Agregar
-                  </button>
-                </li>
+                <FilaSku key={sku.id} sku={sku} onAgregar={agregar} />
               ))}
             </ul>
           )}
