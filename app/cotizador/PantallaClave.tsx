@@ -3,21 +3,30 @@
 import { useState } from 'react';
 
 // Pantalla de acceso, extraída de lo que antes vivía al principio de
-// Cotizador.tsx (Tarea 9). No decide ella misma cómo se valida el usuario ni
+// Cotizador.tsx (Tarea 9). No decide ella misma cómo se valida el correo ni
 // la clave ni qué pasa al entrar — eso es responsabilidad de `Panel`, que le
-// pasa `onEntrar`. Esta pieza solo sabe pedir el usuario y la clave, mostrar
+// pasa `onEntrar`. Esta pieza solo sabe pedir el correo y la clave, mostrar
 // el error que le devuelvan y reflejar el estado "entrando" mientras la
 // promesa está en vuelo. Al estilo de app/q7m4/Taller.tsx.
 //
 // Tarea 3 (usuarios del panel): antes solo pedía la clave compartida. Ahora
-// el panel identifica a la persona, así que hace falta también el usuario —
+// el panel identifica a la persona, así que hace falta también el correo —
 // `onEntrar` manda los dos juntos a `/api/cotizacion/entrar`.
+//
+// Tarea 6 (pestaña de equipo): el primer campo se llamaba `usuario`, pero
+// desde la Tarea 3 el valor que de verdad viaja acá es un correo (así lo
+// identifica `/entrar` — ver lib/cotizador/usuarios.ts). Se renombra a
+// `correo` para que el nombre no mienta, y la etiqueta, el marcador de
+// posición y el `type` del campo pasan a reflejar eso. `autoComplete`
+// se queda en `"username"`, no `"email"`: es el valor correcto para un
+// correo que actúa como identidad de acceso — así lo entienden los
+// gestores de contraseñas, más allá de la forma del texto.
 type Props = {
   // Devuelve el mensaje de error a mostrar (el que manda el propio
   // servidor — "usuario o clave incorrectos", "cuenta bloqueada", etc.), o
   // `null` si la entrada fue correcta y ya se entró. `Panel` es quien
   // decide qué endpoint llamar y cómo interpretar la respuesta.
-  onEntrar: (usuario: string, clave: string) => Promise<string | null>;
+  onEntrar: (correo: string, clave: string) => Promise<string | null>;
   // Ronda de correcciones 2 (Tarea 9, hallazgo importante): explica POR QUÉ
   // se está pidiendo la clave, cuando no es la primera vez — típicamente
   // porque la sesión venció a mitad de una cotización (`Panel` se la manda
@@ -31,7 +40,7 @@ type Props = {
 };
 
 export function PantallaClave({ onEntrar, mensaje }: Props) {
-  const [usuario, setUsuario] = useState('');
+  const [correo, setCorreo] = useState('');
   const [clave, setClave] = useState('');
   const [claveError, setClaveError] = useState('');
   const [entrando, setEntrando] = useState(false);
@@ -41,7 +50,7 @@ export function PantallaClave({ onEntrar, mensaje }: Props) {
     setClaveError('');
     setEntrando(true);
     try {
-      const error = await onEntrar(usuario, clave);
+      const error = await onEntrar(correo, clave);
       if (error) setClaveError(error);
     } finally {
       setEntrando(false);
@@ -58,16 +67,16 @@ export function PantallaClave({ onEntrar, mensaje }: Props) {
             {mensaje}
           </p>
         )}
-        <label htmlFor="usuario-cotizador" className="mt-6 block text-xs font-medium uppercase tracking-wide text-teal">
-          Usuario
+        <label htmlFor="correo-cotizador" className="mt-6 block text-xs font-medium uppercase tracking-wide text-teal">
+          Correo
         </label>
         <input
-          id="usuario-cotizador"
-          type="text"
+          id="correo-cotizador"
+          type="email"
           autoComplete="username"
-          value={usuario}
-          onChange={(e) => setUsuario(e.target.value)}
-          placeholder="Usuario"
+          value={correo}
+          onChange={(e) => setCorreo(e.target.value)}
+          placeholder="Correo"
           autoFocus
           className="mt-2 w-full rounded-lg border border-[var(--carta-border)] bg-white px-4 py-3 text-sm text-navy placeholder:text-teal/60"
         />

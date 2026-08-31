@@ -4,8 +4,15 @@ import { useEffect, useState } from 'react';
 import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import { PantallaClave } from './PantallaClave';
 import { VistaCrear } from './VistaCrear';
+import { VistaEquipo } from './VistaEquipo';
 import { VistaListado } from './VistaListado';
 import { VistaMetricas } from './VistaMetricas';
+
+// Mismo motivo que la duplicación de `Estado` en VistaListado.tsx: `Rol`
+// vive en lib/cotizador/usuarios.ts, que arranca con `import 'server-only'`
+// — un componente de cliente no puede importarlo. Se repite acá el mismo par
+// de valores ('vendedor' | 'superadmin' — ver ROLES en ese archivo).
+type Rol = 'vendedor' | 'superadmin';
 
 // Lo único que el vendedor necesita para buscar y elegir un SKU. Nada de
 // `precioLista` ni `grupo`: eso es la lista de precios de Luxe, y esta forma
@@ -25,7 +32,7 @@ export type PrefillCotizacion = {
   lineas: LineaEntrada[];
 };
 
-type Pestana = 'crear' | 'cotizaciones' | 'metricas';
+type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo';
 
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
 // React: solo lo entrega la respuesta de `/api/cotizacion/entrar` (y, desde
@@ -97,6 +104,11 @@ export default function Panel() {
   // así que `Panel` no puede leerla directo para saber de quién es).
   // `null` hasta que alguna de las dos respuestas lo entregue.
   const [vendedor, setVendedor] = useState<string | null>(null);
+  // Tarea 6: qué rol tiene quien está adentro. Sólo controla si la pestaña
+  // "Equipo" se DIBUJA (ver el comentario, más abajo, junto a la pestaña) —
+  // no protege nada por sí mismo. `null` hasta que `/entrar` o `/catalogo`
+  // lo entreguen, igual que `vendedor`.
+  const [rol, setRol] = useState<Rol | null>(null);
   const [pestana, setPestana] = useState<Pestana>('crear');
   // Tarea 10 ("Duplicar"): lo que precarga en `VistaCrear`. `VistaListado`
   // no decide nada más — arma el dato y lo manda para acá; `Panel` decide
@@ -158,6 +170,9 @@ export default function Panel() {
         // solo llega, si no, en la respuesta de `/entrar`, que ocurre una
         // sola vez).
         if (typeof datos.vendedor === 'string') setVendedor(datos.vendedor);
+        // Tarea 6: mismo motivo — un refresco de página no debe perder de
+        // vista si quien está adentro es superadmin o vendedor.
+        if (datos.rol === 'vendedor' || datos.rol === 'superadmin') setRol(datos.rol);
         // Esta respuesta trae el token anti-CSRF derivado de la cookie que
         // acaba de demostrarse válida (ver app/api/cotizacion/catalogo/route.ts):
         // guardarlo acá repara `sessionStorage` en cualquier pestaña donde
@@ -215,14 +230,16 @@ export default function Panel() {
   // endurecimiento anti-CSRF más adelante debe saber que ahora también es la
   // puerta de entrada, no sólo una protección de la sesión ya abierta.
   async function establecerSesion(
-    usuario: string,
+    correo: string,
     claveIngresada: string,
-  ): Promise<{ ok: true; skus: SkuUI[]; vendedor: string } | { ok: false; error: string }> {
+  ): Promise<
+    { ok: true; skus: SkuUI[]; vendedor: string; rol: Rol } | { ok: false; error: string }
+  > {
     try {
       const res = await fetch('/api/cotizacion/entrar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ usuario, clave: claveIngresada }),
+        body: JSON.stringify({ correo, clave: claveIngresada }),
       });
       const datos = await res.json().catch(() => null);
       if (!res.ok || !datos?.ok) {
@@ -256,7 +273,18 @@ export default function Panel() {
           : typeof datos.vendedor === 'string'
             ? datos.vendedor
             : '';
-      return { ok: true, skus: datosVerificacion.skus, vendedor };
+      // Tarea 6: mismo guard que `vendedor`, mismo motivo. Si por lo que sea
+      // ninguna de las dos respuestas trae un rol reconocible, se cae al
+      // menos privilegiado ('vendedor') — esto sólo decide si se DIBUJA la
+      // pestaña "Equipo" (ver el comentario junto a ella), así que fallar
+      // hacia el lado que oculta de más es lo seguro.
+      const rol: Rol =
+        datosVerificacion.rol === 'superadmin' || datosVerificacion.rol === 'vendedor'
+          ? datosVerificacion.rol
+          : datos.rol === 'superadmin' || datos.rol === 'vendedor'
+            ? datos.rol
+            : 'vendedor';
+      return { ok: true, skus: datosVerificacion.skus, vendedor, rol };
     } catch (e) {
       console.error(
         '[cotizador] No se pudo establecer la sesión por cookie (fallo de red).',
@@ -315,6 +343,10 @@ export default function Panel() {
     }
     limpiarCsrf();
     setVendedor(null);
+    // Tarea 6: mismo motivo que `setVendedor(null)` — dejar el rol de la
+    // persona anterior pintado (aunque sea solo para dibujar una pestaña)
+    // sería otro resto de su sesión sobreviviendo a "Salir".
+    setRol(null);
     setMensajePantallaClave(null);
     setPidiendoClave(true);
   }
@@ -347,11 +379,12 @@ export default function Panel() {
   // que la cookie haya cuajado en este navegador y trae el catálogo—; acá
   // solo se traduce ese resultado a estado de React. Al estilo de
   // app/q7m4/Taller.tsx.
-  async function onEntrar(usuario: string, claveIngresada: string): Promise<string | null> {
-    const resultado = await establecerSesion(usuario, claveIngresada);
+  async function onEntrar(correo: string, claveIngresada: string): Promise<string | null> {
+    const resultado = await establecerSesion(correo, claveIngresada);
     if (!resultado.ok) return resultado.error;
     setSkus(resultado.skus);
     setVendedor(resultado.vendedor);
+    setRol(resultado.rol);
     setDentro(true);
     setPidiendoClave(false);
     setMensajePantallaClave(null);
@@ -401,14 +434,28 @@ export default function Panel() {
 
           {/* Tres pestañas (Tarea 9): solo "Crear" tiene contenido hoy —lo que ya
               existía en Cotizador.tsx—. "Cotizaciones" y "Métricas" quedan como
-              marcadores; se llenan en las próximas dos tareas. */}
+              marcadores; se llenan en las próximas dos tareas.
+
+              Tarea 6: se suma "Equipo", pero SOLO en esta lista si `rol` es
+              'superadmin' — es decir, sólo se DIBUJA el botón. Esto es
+              cosmético, no una protección: quien manipule el estado de React
+              de este componente (o llame a las rutas directo) no gana nada,
+              porque las cuatro rutas de app/api/equipo/* releen la fila de
+              quien hace la petición en la base antes de actuar
+              (`autorizarSuperadmin`, lib/cotizador/equipo.ts) — nunca
+              confían en este `rol`, que sale de la cookie y puede estar
+              desactualizado hasta 30 días (ver el comentario de `establecerSesion`,
+              arriba). Ocultar el botón es sólo para no ofrecerle a un
+              vendedor una pestaña que el servidor le va a rechazar con 403
+              de todas formas. */}
           <nav className="mt-4 flex gap-4 border-b border-[var(--carta-border)]" aria-label="Secciones del panel">
             {(
               [
                 ['crear', 'Crear'],
                 ['cotizaciones', 'Cotizaciones'],
                 ['metricas', 'Métricas'],
-              ] as const
+                ...(rol === 'superadmin' ? ([['equipo', 'Equipo']] as [Pestana, string][]) : []),
+              ] as [Pestana, string][]
             ).map(([valor, etiqueta]) => (
               <button
                 key={valor}
@@ -462,6 +509,17 @@ export default function Panel() {
             )}
             {pestana === 'metricas' && (
               <VistaMetricas onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />
+            )}
+            {/* Tarea 6: mismo `rol === 'superadmin'` de la pestaña, no sólo
+                `pestana === 'equipo'` — sin este segundo chequeo, un
+                vendedor que estuvo en esta pestaña como superadmin en una
+                sesión previa (mismo tab del navegador, sesión reautenticada
+                con una cuenta distinta luego de "Salir") vería el contenido
+                un instante, aunque las rutas igual lo rechacen con 403 al
+                primer fetch. De nuevo: cosmético, no protección — ver el
+                comentario junto a la pestaña. */}
+            {pestana === 'equipo' && rol === 'superadmin' && (
+              <VistaEquipo obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
             )}
           </div>
         </main>
