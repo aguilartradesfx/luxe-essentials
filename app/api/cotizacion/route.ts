@@ -176,8 +176,15 @@ export async function POST(request: Request) {
   // cualquier trigger configurado en la interfaz de GoHighLevel — no hace
   // falta (ni conviene) configurar ahí, además, un trigger para "cotización
   // nueva", o el aviso saldría duplicado.
+  //
+  // Se declara afuera del `if` (igual que `notaError` más abajo) porque este
+  // error también se suma a `erroresGhl`/`ghl_error`: sin eso, un fallo acá
+  // sólo quedaba en los registros de Vercel — que nadie mira — y la vista de
+  // cotizaciones fallidas, hecha justo para que los problemas con
+  // GoHighLevel se vean, nunca se enteraba de que el aviso interno no salió.
+  let errorWorkflowCotizacion: string | undefined;
   if (contactId) {
-    const errorWorkflowCotizacion = await dispararWorkflow(
+    errorWorkflowCotizacion = await dispararWorkflow(
       contactId,
       configAgente.WORKFLOW_COTIZACION_NUEVA,
       { apiKey: process.env.LUXE_GHL_API_KEY ?? '' },
@@ -311,14 +318,17 @@ export async function POST(request: Request) {
   // (rondas de correcciones 1 y 2) se quedaba en 'creada' porque
   // `crearEstimate` nunca llama al envío de GoHighLevel; el envío real es
   // este correo con el PDF de Luxe adjunto.
-  // Junta el error de la Opportunity/Estimate (si lo hubo) con el de la nota
-  // (si lo hubo): las dos cosas son "algo le pasó a GoHighLevel con esta
-  // cotización" y comparten la misma columna. Ninguna de las dos baja el
-  // `estado` — ver el comentario grande de arriba sobre por qué el estado
-  // sigue al correo, no a GoHighLevel.
-  const erroresGhl = [ghl.ok ? ghl.opportunityError : ghl.error, notaError].filter(
-    (e): e is string => Boolean(e),
-  );
+  // Junta el error de la Opportunity/Estimate (si lo hubo), el del workflow
+  // de "cotización nueva" (si lo hubo) y el de la nota (si lo hubo): las tres
+  // cosas son "algo le pasó a GoHighLevel con esta cotización" y comparten la
+  // misma columna. Ninguna de las tres baja el `estado` — ver el comentario
+  // grande de arriba sobre por qué el estado sigue al correo, no a
+  // GoHighLevel.
+  const erroresGhl = [
+    ghl.ok ? ghl.opportunityError : ghl.error,
+    errorWorkflowCotizacion,
+    notaError,
+  ].filter((e): e is string => Boolean(e));
   const ghlError = erroresGhl.length > 0 ? erroresGhl.join(' | ') : null;
 
   const { error: errorActualizacion } = await supabaseAdmin()

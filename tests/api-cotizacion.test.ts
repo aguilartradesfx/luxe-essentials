@@ -667,5 +667,24 @@ describe('POST /api/cotizacion', () => {
         'contacto-del-vendedor', configAgente.WORKFLOW_COTIZACION_NUEVA, expect.anything(),
       );
     });
+
+    // El hallazgo que motiva este arreglo: antes, un fallo de
+    // `dispararWorkflow` sólo quedaba en `console.error` (los registros de
+    // Vercel, que nadie mira) y nunca llegaba a `ghl_error` — la vista de
+    // cotizaciones fallidas, hecha justo para que los problemas con
+    // GoHighLevel se vean, no se enteraba. Mismo patrón que ya sigue el
+    // fallo de `agregarNota` (la nota) unas pruebas más abajo: se suma a
+    // `ghl_error` sin bajar el estado, porque la cotización ya existe, el
+    // PDF ya se generó y el correo ya salió.
+    it('guarda el error del workflow en ghl_error si falla, sin bajar el estado de "enviada"', async () => {
+      vi.mocked(dispararWorkflow).mockResolvedValueOnce('GHL workflow 500: boom');
+      const res = await POST(peticionAutenticada(valido));
+      expect(res.status).toBe(200);
+      expect(actualizados).toHaveLength(1);
+      expect(actualizados[0]).toMatchObject({
+        estado: 'enviada',
+        ghl_error: expect.stringContaining('GHL workflow 500: boom'),
+      });
+    });
   });
 });
