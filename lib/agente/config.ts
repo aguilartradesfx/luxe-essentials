@@ -58,6 +58,16 @@ SOBRE LO QUE TE MANDEN
 FORMATO DE SALIDA
 Devuelves un objeto con dos campos: "respuesta" (el texto que se le envía al cliente) y "datos" (lo que hayas logrado saber hasta ahora, con null en lo que aún no sepas). En "datos" acumula también lo que ya sabías de mensajes anteriores.`;
 
+// Etiqueta que un asesor pone a mano en el contacto de GoHighLevel para
+// tomar la conversación. Es un interruptor vivo, no un cierre permanente:
+// `procesar.ts` la revisa en cada mensaje entrante, así que en cuanto el
+// asesor se la quita el agente vuelve a responder solo.
+//
+// GoHighLevel normaliza las etiquetas y puede devolverlas en minúsculas, así
+// que la comparación (ver `tieneEtiquetaStopBot` más abajo) es insensible a
+// mayúsculas. Sin eso la función no se dispara nunca y nadie entiende por qué.
+const ETIQUETA_STOP_BOT = 'Stop_bot';
+
 export const config = {
   BASE_GHL: 'https://services.leadconnectorhq.com',
   VERSION_CONVERSACIONES: '2021-04-15',
@@ -90,10 +100,17 @@ export const config = {
   CAMPO_PERSONA: 'contact.persona_contacto',
   TOPE_TURNOS: 4,
   TAGS_BASE: ['agente-ia'],
+  ETIQUETA_STOP_BOT,
 
   PROMPT_SISTEMA,
 
   tagDeProducto(producto: Producto | null): string | null {
     return producto ? `interes-${producto}` : null;
+  },
+
+  // Insensible a mayúsculas: ver el comentario de `ETIQUETA_STOP_BOT`.
+  tieneEtiquetaStopBot(etiquetas: string[]): boolean {
+    const buscada = ETIQUETA_STOP_BOT.toLowerCase();
+    return etiquetas.some((e) => e.toLowerCase() === buscada);
   },
 };

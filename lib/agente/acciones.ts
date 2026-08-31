@@ -58,6 +58,33 @@ export async function enviarMensaje(
   }
 }
 
+// Lee las etiquetas actuales del contacto en GoHighLevel. La usa
+// `procesar.ts` para decidir si el agente debe callarse por
+// `config.ETIQUETA_STOP_BOT`. Nunca lanza: devuelve el error para que quien
+// llama decida qué hacer con la lectura fallida (ver ese archivo para la
+// decisión que toma).
+export async function leerEtiquetas(
+  contactId: string, deps: DepsEscritura,
+): Promise<{ ok: true; etiquetas: string[] } | { ok: false; error: string }> {
+  const { apiKey, fetchImpl = fetch } = deps;
+  try {
+    const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
+      headers: cabeceras(apiKey, config.VERSION_CONTACTOS),
+    });
+    const texto = await res.text();
+    if (!res.ok) return { ok: false, error: `GHL lectura de contacto ${res.status}: ${texto.slice(0, 200)}` };
+
+    const datos = JSON.parse(texto) as { contact?: { tags?: unknown } };
+    const tags = datos.contact?.tags;
+    return {
+      ok: true,
+      etiquetas: Array.isArray(tags) ? tags.filter((t): t is string => typeof t === 'string') : [],
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // Nunca lanza: un fallo guardando los datos no debe borrar el hecho de que al
 // cliente ya se le respondió. Devuelve el texto del error para el log.
 //

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
+import {
+  enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerEtiquetas,
+} from '@/lib/agente/acciones';
 import { DATOS_VACIOS } from '@/lib/agente/estado';
 
 const deps = { apiKey: 'llave' };
@@ -199,6 +201,39 @@ describe('dispararWorkflow', () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
     const err = await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
     expect(err).toContain('500');
+  });
+});
+
+describe('leerEtiquetas', () => {
+  it('lee las etiquetas del contacto con la versión de contactos', async () => {
+    const fetchImpl = ok({ contact: { tags: ['agente-ia', 'Stop_bot'] } });
+    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
+    expect(r).toEqual({ ok: true, etiquetas: ['agente-ia', 'Stop_bot'] });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toContain('/contacts/c1');
+    expect(init.headers.Version).toBe('2021-07-28');
+  });
+
+  it('devuelve un array vacío si el contacto no trae tags', async () => {
+    const fetchImpl = ok({ contact: {} });
+    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
+    expect(r).toEqual({ ok: true, etiquetas: [] });
+  });
+
+  it('devuelve el error sin lanzar cuando GHL responde con un error', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
+    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain('500');
+  });
+
+  it('devuelve el error sin lanzar cuando la red falla', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain('ECONNRESET');
   });
 });
 

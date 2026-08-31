@@ -18,6 +18,22 @@ describe('config del agente', () => {
     expect(config.CAMPO_PERSONA).toBe('contact.persona_contacto');
   });
 
+  it('expone la etiqueta que calla al agente', () => {
+    expect(config.ETIQUETA_STOP_BOT).toBe('Stop_bot');
+  });
+
+  it('tieneEtiquetaStopBot es insensible a mayúsculas', () => {
+    expect(config.tieneEtiquetaStopBot(['Stop_bot'])).toBe(true);
+    expect(config.tieneEtiquetaStopBot(['stop_bot'])).toBe(true);
+    expect(config.tieneEtiquetaStopBot(['STOP_BOT'])).toBe(true);
+  });
+
+  it('tieneEtiquetaStopBot no se confunde con otras etiquetas', () => {
+    expect(config.tieneEtiquetaStopBot(['otra-cosa'])).toBe(false);
+    expect(config.tieneEtiquetaStopBot(['stop_bot_temporal'])).toBe(false);
+    expect(config.tieneEtiquetaStopBot([])).toBe(false);
+  });
+
   it('mapea cada producto a su tag, y null cuando no hay producto', () => {
     expect(config.tagDeProducto('uniformes')).toBe('interes-uniformes');
     expect(config.tagDeProducto('hogar')).toBe('interes-hogar');

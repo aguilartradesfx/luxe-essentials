@@ -3,7 +3,9 @@ import { canalDeEnvio, esCorreo } from '@/lib/agente/canal';
 import { hidratar, ultimoReal, huboRespuestaHumana } from '@/lib/agente/conversacion';
 import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
-import { enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota } from '@/lib/agente/acciones';
+import {
+  enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerEtiquetas,
+} from '@/lib/agente/acciones';
 import { leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Fila } from '@/lib/agente/estado';
 import { registrarIntencion } from '@/lib/cotizador/borrador';
 
@@ -12,7 +14,7 @@ import { registrarIntencion } from '@/lib/cotizador/borrador';
 // SIGUIENTE el que sale por 'inactivo'.
 export type Desenlace =
   | 'respondido' | 'sin-entrante' | 'humano-presente' | 'duplicado'
-  | 'inactivo' | 'canal-no-soportado' | 'error';
+  | 'inactivo' | 'canal-no-soportado' | 'stop-bot' | 'error';
 
 export type DepsProcesar = {
   db: Db;
@@ -51,6 +53,36 @@ export async function procesar(
 
   const fila = await leerOCrear(contactId, db);
   if (fila.estado !== 'activo') return { desenlace: 'inactivo', detalle: fila.estado };
+
+  // Guarda 0, la más temprana de todas: si un asesor puso la etiqueta
+  // Stop_bot a mano, el agente no gasta nada más en este turno. Va antes de
+  // hidratar la conversación, preparar medios o llamar al modelo — pedirle a
+  // Claude qué contestar para después tirar la respuesta sería pagar por
+  // nada. Es un interruptor vivo: se revisa en cada mensaje entrante (no se
+  // persiste ningún latch como en la guarda del humano), así que en cuanto la
+  // etiqueta se quita el agente vuelve a responder solo.
+  //
+  // Si la lectura de GHL falla, el agente se calla igual (fail-closed) en vez
+  // de responder. Se eligió así porque el costo de las dos opciones no es
+  // simétrico: un cliente que espera un poco más se recupera solo —no se
+  // persiste nada en este punto, así que su próximo mensaje (o un reintento
+  // de webhook de GHL) vuelve a intentar el turno desde cero—, mientras que
+  // una respuesta que se le habla encima a un asesor que puso la etiqueta ya
+  // salió y no hay forma de deshacerla. Es la misma asimetría que ya rige la
+  // guarda del humano más abajo (`huboRespuestaHumana`): ante la duda sobre
+  // si hay alguien más atendiendo, el agente se calla.
+  const etiquetas = await leerEtiquetas(contactId, { apiKey: ghlApiKey, fetchImpl });
+  if (!etiquetas.ok) {
+    console.error(
+      '[agente] No se pudieron leer las etiquetas del contacto; se calla por seguridad.',
+      'contacto:', contactId, etiquetas.error,
+    );
+    return { desenlace: 'stop-bot', detalle: 'lectura de etiquetas fallida' };
+  }
+  if (config.tieneEtiquetaStopBot(etiquetas.etiquetas)) {
+    console.error('[agente] Se calla: el contacto tiene la etiqueta Stop_bot.', 'contacto:', contactId);
+    return { desenlace: 'stop-bot' };
+  }
 
   const hidratado = await hidratar(contactId, { apiKey: ghlApiKey, locationId, fetchImpl });
   if (!hidratado.ok) return { desenlace: 'error', detalle: hidratado.error };
