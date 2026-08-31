@@ -25,37 +25,43 @@ const RPC_INTENTO_FALLIDO = 'usuarios_panel_intento_fallido';
 export const MAX_INTENTOS = 5;
 export const BLOQUEO_MINUTOS = 15;
 
+export type Rol = 'vendedor' | 'superadmin';
+
 export type ResultadoEntrada =
-  | { ok: true; nombre: string }
+  | { ok: true; nombre: string; rol: Rol }
   | { ok: false; motivo: 'credenciales' | 'bloqueado' };
 
 type FilaUsuario = {
   id: string;
-  usuario: string;
+  correo: string;
   nombre: string;
-  clave_hash: string;
-  clave_sal: string;
+  rol: Rol;
+  // Una persona invitada todavía no eligió su clave: la migración 0014 le
+  // quitó el `not null` a estas dos columnas justo para permitir esa fila a
+  // medio llenar.
+  clave_hash: string | null;
+  clave_sal: string | null;
   activo: boolean;
   intentos: number;
   bloqueado_hasta: string | null;
 };
 
-export function normalizarUsuario(usuario: string): string {
-  return usuario.trim().toLowerCase();
+export function normalizarCorreo(correo: string): string {
+  return correo.trim().toLowerCase();
 }
 
 export async function autenticarUsuario(
-  usuario: string,
+  correo: string,
   clave: string,
   db: Db,
   ahora: Date = new Date(),
 ): Promise<ResultadoEntrada> {
-  const nombreUsuario = normalizarUsuario(usuario);
+  const correoNormalizado = normalizarCorreo(correo);
 
   const { data, error } = await db
     .from(TABLA)
-    .select('id, usuario, nombre, clave_hash, clave_sal, activo, intentos, bloqueado_hasta')
-    .eq('usuario', nombreUsuario)
+    .select('id, correo, nombre, rol, clave_hash, clave_sal, activo, intentos, bloqueado_hasta')
+    .eq('correo', correoNormalizado)
     .maybeSingle();
 
   // Un fallo de lectura NO es "credenciales incorrectas". Devolverlo como tal
@@ -88,6 +94,17 @@ export async function autenticarUsuario(
     }
   }
 
+  // Una invitación pendiente no es una credencial: la fila existe y está
+  // activa, pero `clave_hash`/`clave_sal` son nulos hasta que la persona entre
+  // por el enlace y elija su clave. Se gasta igual el tiempo de hash y se
+  // devuelve el mismo motivo que una clave mala — si no, responder distinto
+  // (o al instante) delataría por tiempo o por mensaje qué correos tienen una
+  // invitación esperando.
+  if (fila.clave_hash === null || fila.clave_sal === null) {
+    await gastarTiempoDeHash();
+    return { ok: false, motivo: 'credenciales' };
+  }
+
   const coincide = await verificarClave(clave, fila.clave_hash, fila.clave_sal);
 
   if (!coincide) {
@@ -100,7 +117,7 @@ export async function autenticarUsuario(
     bloqueado_hasta: null,
     ultimo_acceso: ahora.toISOString(),
   });
-  return { ok: true, nombre: fila.nombre };
+  return { ok: true, nombre: fila.nombre, rol: fila.rol };
 }
 
 // Cuenta un intento fallido y, si toca, bloquea la cuenta. Devuelve si quedó
