@@ -14,7 +14,7 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
 // Fase 3: la clave compartida ya no autentica. Ruta de solo lectura: la
 // cookie de sesión basta, sin token anti-CSRF.
 function peticionAutenticada(cuerpo: unknown) {
-  const { cookie } = emitirSesion('Guillermo Rojas');
+  const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
   return peticion(cuerpo, { cookie: cookie.split(';')[0] });
 }
 

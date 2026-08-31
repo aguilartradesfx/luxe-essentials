@@ -13,7 +13,7 @@ export const runtime = 'nodejs';
 // abre el panel ni firma nada (revisión final, Crítico 1 — la cookie se firma
 // con `LUXE_SESION_SECRETO`).
 const Entrada = z.object({
-  usuario: z.string().trim().min(1, 'Falta el usuario.').max(64),
+  correo: z.string().trim().email('Falta el correo.').max(200),
   clave: z.string().min(1, 'Falta la clave.').max(200),
 });
 
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   const parseado = Entrada.safeParse(crudo);
   if (!parseado.success) {
     return NextResponse.json(
-      { ok: false, error: 'Escribí tu usuario y tu clave.' },
+      { ok: false, error: 'Escribí tu correo y tu clave.' },
       { status: 400 },
     );
   }
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   let resultado;
   try {
     resultado = await autenticarUsuario(
-      parseado.data.usuario,
+      parseado.data.correo,
       parseado.data.clave,
       supabaseAdmin(),
     );
@@ -55,9 +55,9 @@ export async function POST(request: Request) {
   }
 
   if (!resultado.ok) {
-    // El usuario NO se registra, ni entero ni truncado: el modo de fallo más
+    // El correo NO se registra, ni entero ni truncado: el modo de fallo más
     // común de un formulario de acceso es que la persona escriba la clave en
-    // el campo de usuario por error, y en ese caso hasta un prefijo de tres
+    // el campo de correo por error, y en ese caso hasta un prefijo de tres
     // caracteres deja pedazos de una clave real en los logs de Vercel,
     // retenidos y buscables (revisión final, M5).
     //
@@ -68,14 +68,14 @@ export async function POST(request: Request) {
     // es una etiqueta estable para agrupar líneas de log.
     console.error(
       '[cotizador] Entrada rechazada al panel.',
-      'usuario (hash):', createHash('sha256').update(parseado.data.usuario).digest('hex').slice(0, 8),
+      'correo (hash):', createHash('sha256').update(parseado.data.correo).digest('hex').slice(0, 8),
       'motivo:', resultado.motivo,
       request.headers.get('x-forwarded-for') ?? 'ip desconocida',
     );
     // El bloqueo se dice tal cual. Confirma que la cuenta existe, sí — pero el
-    // nombre de usuario de un equipo de cinco personas no es el secreto, la
-    // clave lo es; y un vendedor bloqueado que no puede distinguirlo de "clave
-    // mala" seguiría probando hasta rendirse.
+    // correo de un equipo de cinco personas no es el secreto, la clave lo
+    // es; y un vendedor bloqueado que no puede distinguirlo de "clave mala"
+    // seguiría probando hasta rendirse.
     if (resultado.motivo === 'bloqueado') {
       return NextResponse.json(
         { ok: false, error: 'Cuenta bloqueada por intentos fallidos. Probá en 15 minutos.' },
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
       );
     }
     return NextResponse.json(
-      { ok: false, error: 'Usuario o clave incorrectos.' },
+      { ok: false, error: 'Correo o clave incorrectos.' },
       { status: 401 },
     );
   }
@@ -95,8 +95,13 @@ export async function POST(request: Request) {
   // "entramos bien y no pasa nada", con la causa a la vista sólo para quien
   // fuera a leer el código.
   try {
-    const { cookie, csrf } = emitirSesion(resultado.nombre);
-    const respuesta = NextResponse.json({ ok: true, csrf, vendedor: resultado.nombre });
+    const { cookie, csrf } = emitirSesion(resultado.nombre, resultado.rol);
+    const respuesta = NextResponse.json({
+      ok: true,
+      csrf,
+      vendedor: resultado.nombre,
+      rol: resultado.rol,
+    });
     respuesta.headers.set('Set-Cookie', cookie);
     return respuesta;
   } catch (err) {

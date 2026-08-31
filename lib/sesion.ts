@@ -1,5 +1,6 @@
 import 'server-only';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import type { Rol } from '@/lib/cotizador/usuarios';
 
 // El panel vive embebido en un iframe de GoHighLevel (Tarea 6): la clave ya
 // no puede pedirse en cada carga de pantalla, y por eso existe esta sesión
@@ -8,8 +9,15 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 //
 // Tarea 3 (usuarios del panel): la cookie ya no solo prueba que hubo una
 // entrada válida — identifica a qué vendedor pertenece la sesión. El nombre
-// viaja dentro del propio valor firmado (ver `emitirSesion` y
-// `nombreDeSesion`, más abajo).
+// viaja dentro del propio valor firmado (ver `emitirSesion` y `sesionDe`, más
+// abajo).
+//
+// Tarea 3 de invitaciones-roles: la cookie suma un cuarto segmento con el rol
+// (`'vendedor' | 'superadmin'`), también dentro del valor firmado. No es un
+// secreto — cualquiera puede leer su propia cookie decodificando base64url —
+// pero si viajara aparte de la firma, o la firma no lo cubriera, cualquier
+// vendedor podría ascenderse a superadmin editando su propia cookie a mano.
+// Por eso la firma se calcula sobre `<emitidoEn>.<nombre>.<rol>` entero.
 //
 // La cookie necesita `SameSite=None` para que el navegador la mande dentro
 // de un iframe de otro origen (app.gohighlevel.com). Esa es justo la
@@ -123,7 +131,15 @@ function decodificarNombre(codificado: string): string | null {
   }
 }
 
-export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
+// El rol no se codifica en base64url como el nombre: los dos valores
+// posibles ('vendedor', 'superadmin') no llevan tildes, espacios ni puntos,
+// así que no chocan con el separador del formato. Se valida contra la lista
+// cerrada de roles reales — ni "leído en claro" significa "de confianza".
+function esRolValido(valor: string): valor is Rol {
+  return valor === 'vendedor' || valor === 'superadmin';
+}
+
+export function emitirSesion(nombre: string, rol: Rol): { cookie: string; csrf: string } {
   if (!secreto()) {
     throw new Error('LUXE_SESION_SECRETO no está configurada: no se puede emitir una sesión.');
   }
@@ -131,10 +147,16 @@ export function emitirSesion(nombre: string): { cookie: string; csrf: string } {
   if (typeof nombre !== 'string' || nombre.trim().length === 0) {
     throw new Error('No se puede emitir una sesión sin el nombre del vendedor.');
   }
+  // Igual con el rol: emitir una sesión con un valor fuera de la lista
+  // cerrada dejaría una cookie que ninguna lectura futura podría aceptar (o
+  // peor, una que `sesionDe` decida interpretar a su manera).
+  if (!esRolValido(rol)) {
+    throw new Error(`No se puede emitir una sesión con un rol inválido: ${String(rol)}`);
+  }
 
   const emitidoEn = String(Date.now());
   const codificado = codificarNombre(nombre.trim());
-  const contenido = `${emitidoEn}.${codificado}`;
+  const contenido = `${emitidoEn}.${codificado}.${rol}`;
   const firma = firmar(contenido);
   const valor = `${contenido}.${firma}`;
   const csrf = derivarCsrf(valor);
@@ -170,31 +192,34 @@ function armarCookie(valor: string, maxEdadSegundos: number): string {
 //
 // `Max-Age=0` es la forma estándar de pedirle al navegador que la borre ya. El
 // valor va vacío para que, si algún navegador ignorara el `Max-Age`, lo que
-// quede tampoco valide: una cadena vacía no pasa el formato de tres partes.
+// quede tampoco valide: una cadena vacía no pasa el formato de cuatro partes.
 export function cookieDeCierre(): string {
   return armarCookie('', 0);
 }
 
-// Devuelve el vendedor de la sesión, o null si no hay una válida. Es la función
-// de verdad: `sesionValida` es su versión booleana. Las mismas comprobaciones
-// de siempre —firma, caducidad real en el servidor, emisión no futura— más el
-// formato de tres partes.
-export function nombreDeSesion(request: Request): string | null {
+// Devuelve el vendedor y el rol de la sesión, o null si no hay una válida. Es
+// la función de verdad: `sesionValida` es su versión booleana. Las mismas
+// comprobaciones de siempre —firma, caducidad real en el servidor, emisión no
+// futura— más el formato de cuatro partes exactas y un rol de la lista
+// cerrada.
+export function sesionDe(request: Request): { nombre: string; rol: Rol } | null {
   const esperado = secreto();
   if (!esperado) return null;
 
   const valor = obtenerCookie(request, NOMBRE_COOKIE);
   if (!valor) return null;
 
-  // Tres partes exactas. Una cookie del formato anterior (dos partes) no trae
-  // vendedor: aceptarla dejaría entrar a quien conserve una emitida con la
-  // clave compartida, que es justo el hueco que esta fase cierra.
+  // Cuatro partes exactas. Una cookie del formato anterior (tres partes, sin
+  // rol) no valida: aceptarla dejaría entrar con una sesión de antes de esta
+  // tarea, sin forma de saber a qué rol pertenece.
   const partes = valor.split('.');
-  if (partes.length !== 3) return null;
-  const [emitidoEnTexto, codificado, firma] = partes;
-  if (!emitidoEnTexto || !codificado || !firma) return null;
+  if (partes.length !== 4) return null;
+  const [emitidoEnTexto, codificado, rolTexto, firma] = partes;
+  if (!emitidoEnTexto || !codificado || !rolTexto || !firma) return null;
 
-  if (!igualesEnTiempoConstante(firma, firmar(`${emitidoEnTexto}.${codificado}`))) return null;
+  if (!igualesEnTiempoConstante(firma, firmar(`${emitidoEnTexto}.${codificado}.${rolTexto}`))) {
+    return null;
+  }
 
   const emitidoEn = Number(emitidoEnTexto);
   if (!Number.isFinite(emitidoEn)) return null;
@@ -203,11 +228,16 @@ export function nombreDeSesion(request: Request): string | null {
   if (emitidoEn > ahora + TOLERANCIA_RELOJ_MS) return null;
   if (ahora - emitidoEn > MAX_EDAD_MS) return null;
 
-  return decodificarNombre(codificado);
+  if (!esRolValido(rolTexto)) return null;
+
+  const nombre = decodificarNombre(codificado);
+  if (!nombre) return null;
+
+  return { nombre, rol: rolTexto };
 }
 
 export function sesionValida(request: Request): boolean {
-  return nombreDeSesion(request) !== null;
+  return sesionDe(request) !== null;
 }
 
 export function csrfValido(request: Request, enviado: string | undefined): boolean {

@@ -1,5 +1,6 @@
 import 'server-only';
-import { nombreDeSesion, csrfValido } from '@/lib/sesion';
+import { sesionDe, csrfValido } from '@/lib/sesion';
+import type { Rol } from '@/lib/cotizador/usuarios';
 
 // Fase 3: la clave compartida en el cuerpo dejó de ser una credencial válida.
 // Antes esta función aceptaba dos vías —clave o cookie— y la clave se conservó
@@ -34,8 +35,19 @@ import { nombreDeSesion, csrfValido } from '@/lib/sesion';
 // procedimiento está en README.md, y el propio script lo dice en consola al
 // desactivar — lo que NO era defendible era dejarlo sin decidir, con un script
 // que ofrece `desactivar` y quien lo corre creyendo que ya está.
+// Tarea 3 (invitaciones y roles): el rol que devuelve esta función NO
+// AUTORIZA NADA. Sale de la cookie firmada, así que no se puede falsificar,
+// pero es un dato viejo desde el momento en que se emitió la sesión —hasta
+// 30 días— y esta función no vuelve a tocar la base para confirmar que
+// sigue siendo cierto. Sirve únicamente para que la interfaz decida qué
+// dibujar (por ejemplo, ocultar la pantalla de equipo a quien no es
+// superadmin). Las rutas de `/api/equipo/*` (tarea posterior) tienen que
+// releer el rol desde la base antes de autorizar cualquier acción sobre
+// otras cuentas — confiar en este campo ahí sería dejar a un superadmin
+// recién degradado seguir administrando el equipo hasta que su cookie
+// caduque.
 export type ResultadoAutenticacion =
-  | { ok: true; vendedor: string }
+  | { ok: true; vendedor: string; rol: Rol }
   | { ok: false; status: number; error: string };
 
 export function autenticarPeticion(
@@ -43,8 +55,8 @@ export function autenticarPeticion(
   _crudo: unknown,
   opciones: { requiereCsrf: boolean },
 ): ResultadoAutenticacion {
-  const vendedor = nombreDeSesion(request);
-  if (!vendedor) {
+  const sesion = sesionDe(request);
+  if (!sesion) {
     // Dentro del iframe con las cookies de terceros bloqueadas, el vendedor
     // nunca llegó a tener sesión — no es que "venció". Un mensaje que sólo
     // dice "venció" lo manda a reintentar en círculo, como si volver a
@@ -66,5 +78,5 @@ export function autenticarPeticion(
     }
   }
 
-  return { ok: true, vendedor };
+  return { ok: true, vendedor: sesion.nombre, rol: sesion.rol };
 }

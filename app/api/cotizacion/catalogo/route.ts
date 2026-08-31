@@ -69,5 +69,11 @@ export async function POST(request: Request) {
   // pero sin saber de quién es. `auth.vendedor` sale de la misma cookie que
   // ya se validó arriba — no es un dato nuevo que este endpoint decida exponer
   // de más.
-  return NextResponse.json({ ok: true, skus, vendedor: auth.vendedor, ...(csrf ? { csrf } : {}) });
+  return NextResponse.json({
+    ok: true,
+    skus,
+    vendedor: auth.vendedor,
+    rol: auth.rol,
+    ...(csrf ? { csrf } : {}),
+  });
 }

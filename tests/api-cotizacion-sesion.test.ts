@@ -96,7 +96,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
 
   describe('POST /api/cotizacion (escribe): exige CSRF cuando entra por cookie', () => {
     it('mata el mutante 1: cookie válida SIN el token anti-CSRF en la cabecera → 401', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, { cookie: valor }),
@@ -105,7 +105,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('cookie válida con un token anti-CSRF que no coincide → 401', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, {
@@ -117,7 +117,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('cookie válida CON el token anti-CSRF correcto → pasa (200)', async () => {
-      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const res = await postCotizacion(
         peticion('http://localhost/api/cotizacion', cotizacionValida, {
@@ -148,14 +148,14 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
 
   describe('rutas de solo lectura: aceptan la cookie sin exigir CSRF', () => {
     it('mata el mutante 3: /catalogo con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const res = await postCatalogo(peticion('http://localhost/api/cotizacion/catalogo', {}, { cookie: valor }));
       expect(res.status).toBe(200);
     });
 
     it('/previsualizar con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const res = await postPrevisualizar(
         peticion('http://localhost/api/cotizacion/previsualizar', previsualizarValida, { cookie: valor }),
@@ -164,7 +164,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('/borradores con cookie válida y sin clave en el cuerpo → pasa (200)', async () => {
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const res = await postBorradores(
         peticion('http://localhost/api/cotizacion/borradores', {}, { cookie: valor }),
@@ -202,7 +202,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     it('con credenciales incorrectas → 401 y sin cabecera Set-Cookie', async () => {
       vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
       const res = await postEntrar(
-        peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'otra' }),
+        peticion('http://localhost/api/cotizacion/entrar', { correo: 'guillermo@luxeessentialscr.com', clave: 'otra' }),
       );
       expect(res.status).toBe(401);
       expect(res.headers.get('set-cookie')).toBeNull();
@@ -211,7 +211,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     it('con credenciales correctas → 200, con csrf en el cuerpo y Set-Cookie con SameSite=None', async () => {
       vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
       const res = await postEntrar(
-        peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'secreta' }),
+        peticion('http://localhost/api/cotizacion/entrar', { correo: 'guillermo@luxeessentialscr.com', clave: 'secreta' }),
       );
       expect(res.status).toBe(200);
       const cuerpo = await res.json();
@@ -227,7 +227,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     it('registra en consola un rechazo de credenciales (hace visible un ataque de fuerza bruta)', async () => {
       vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await postEntrar(peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'otra' }));
+      await postEntrar(peticion('http://localhost/api/cotizacion/entrar', { correo: 'guillermo@luxeessentialscr.com', clave: 'otra' }));
       expect(consoleError).toHaveBeenCalled();
       consoleError.mockRestore();
     });
@@ -253,34 +253,34 @@ describe('POST /api/cotizacion/entrar', () => {
   // Ronda de correcciones 1: el nombre moqueado es 'Marta Vargas' —
   // deliberadamente distinto del 'Guillermo Rojas' que usa el resto del
   // archivo (y que fue el valor fijo provisional de esta misma ruta antes de
-  // esta tarea). Si alguien reintrodujera `emitirSesion('Guillermo Rojas')` a
-  // mano en la ruta, esta prueba (y sólo esta, entre las de este archivo) lo
-  // notaría: es la única que compara `vendedor` contra un nombre que no
+  // esta tarea). Si alguien reintrodujera `emitirSesion('Guillermo Rojas', 'vendedor')`
+  // a mano en la ruta, esta prueba (y sólo esta, entre las de este archivo)
+  // lo notaría: es la única que compara `vendedor` contra un nombre que no
   // coincide con esa regresión. El `toHaveBeenCalledWith` además fija el
-  // ORDEN de los argumentos: invertir `usuario`/`clave` en la llamada a
+  // ORDEN de los argumentos: invertir `correo`/`clave` en la llamada a
   // `autenticarUsuario` (que en producción significa "nadie puede entrar")
   // pasaba en verde antes de este ajuste, porque el mock resuelve igual sin
   // mirar con qué lo llamaron.
   it('emite una sesión con el nombre real del vendedor autenticado, en el orden correcto de argumentos', async () => {
     vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Marta Vargas', rol: 'vendedor' });
-    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'x' }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
     expect(cuerpo.vendedor).toBe('Marta Vargas');
     expect(typeof cuerpo.csrf).toBe('string');
     expect(res.headers.get('set-cookie')).toContain('luxe_sesion=');
-    expect(autenticarUsuario).toHaveBeenCalledWith('guillermo', 'x', expect.anything());
+    expect(autenticarUsuario).toHaveBeenCalledWith('guillermo@luxeessentialscr.com', 'x', expect.anything());
   });
 
   it('rechaza credenciales incorrectas con 401', async () => {
     vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
-    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'mala' }));
+    const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'mala' }));
     expect(res.status).toBe(401);
   });
 
   it('distingue una cuenta bloqueada, con 429 y un mensaje propio', async () => {
     vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'bloqueado' });
-    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'x' }));
     expect(res.status).toBe(429);
     expect((await res.json()).error).toMatch(/bloquead/i);
   });
@@ -294,30 +294,30 @@ describe('POST /api/cotizacion/entrar', () => {
     expect(vi.mocked(autenticarUsuario)).not.toHaveBeenCalled();
   });
 
-  it('rechaza un cuerpo sin usuario con 400', async () => {
-    const res = await postEntrar(peticionEntrada({ usuario: '', clave: 'x' }));
+  it('rechaza un correo vacío con 400', async () => {
+    const res = await postEntrar(peticionEntrada({ correo: '', clave: 'x' }));
     expect(res.status).toBe(400);
   });
 
   it('devuelve 500, no 401, si la base falla', async () => {
     vi.mocked(autenticarUsuario).mockRejectedValue(new Error('conexión caída'));
-    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'x' }));
     expect(res.status).toBe(500);
   });
 
-  // Revisión final, M5: el usuario no puede quedar en los logs, ni entero ni
+  // Revisión final, M5: el correo no puede quedar en los logs, ni entero ni
   // truncado. El modo de fallo clásico de un formulario de acceso es escribir
-  // la clave en el campo de usuario, y en ese caso hasta tres caracteres son
+  // la clave en el campo de correo, y en ese caso hasta tres caracteres son
   // pedazos de una credencial real, retenidos y buscables en Vercel.
-  it('no deja el usuario en el log de rechazo, ni siquiera un prefijo', async () => {
+  it('no deja el correo en el log de rechazo, ni siquiera un prefijo', async () => {
     vi.mocked(autenticarUsuario).mockResolvedValue({ ok: false, motivo: 'credenciales' });
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     // Lo que se teclea acá es, en el caso que importa, una clave real.
-    await postEntrar(peticionEntrada({ usuario: 'Turrialba-2026', clave: 'x' }));
+    await postEntrar(peticionEntrada({ correo: 'Turrialba-2026@luxeessentialscr.com', clave: 'x' }));
 
     const registrado = consoleError.mock.calls.flat().join(' ');
-    expect(registrado).not.toContain('Turrialba-2026');
+    expect(registrado).not.toContain('Turrialba-2026@luxeessentialscr.com');
     expect(registrado).not.toContain('Tur');
     // Sigue habiendo con qué distinguir intentos contra cuentas distintas.
     expect(registrado).toMatch(/[0-9a-f]{8}/);
@@ -332,7 +332,7 @@ describe('POST /api/cotizacion/entrar', () => {
     delete process.env.LUXE_SESION_SECRETO;
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
+    const res = await postEntrar(peticionEntrada({ correo: 'guillermo@luxeessentialscr.com', clave: 'x' }));
 
     expect(res.status).toBe(500);
     expect(res.headers.get('set-cookie')).toBeNull();
@@ -352,7 +352,7 @@ describe('POST /api/cotizacion/salir', () => {
 
   it('caduca la cookie con Max-Age=0 y los mismos atributos con que se emitió', async () => {
     const { POST: postSalir } = await import('@/app/api/cotizacion/salir/route');
-    const { cookie: emitida } = emitirSesion('Guillermo Rojas');
+    const { cookie: emitida } = emitirSesion('Guillermo Rojas', 'vendedor');
 
     const res = await postSalir();
 
@@ -389,12 +389,12 @@ describe('autenticarPeticion', () => {
   it('devuelve el vendedor de la sesión', async () => {
     const { emitirSesion } = await import('@/lib/sesion');
     const { autenticarPeticion } = await import('@/lib/autenticacion-cotizador');
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado', {
       headers: { cookie: cookie.split(';')[0] },
     });
     const r = autenticarPeticion(req, {}, { requiereCsrf: false });
-    expect(r).toEqual({ ok: true, vendedor: 'Guillermo Rojas' });
+    expect(r).toEqual({ ok: true, vendedor: 'Guillermo Rojas', rol: 'vendedor' });
   });
 
   it('ya no acepta la clave compartida en el cuerpo', async () => {

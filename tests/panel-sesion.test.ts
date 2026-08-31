@@ -1,7 +1,7 @@
 // tests/panel-sesion.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { emitirSesion, sesionValida, csrfValido, csrfDeSesion, nombreDeSesion } from '@/lib/sesion';
+import { emitirSesion, sesionValida, csrfValido, csrfDeSesion, sesionDe } from '@/lib/sesion';
 
 function conCookie(valor: string, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/x', { headers: { cookie: valor, ...cabeceras } });
@@ -13,19 +13,19 @@ describe('sesión', () => {
   });
 
   it('la cookie es httpOnly, secure y sameSite=none', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('Secure');
     expect(cookie).toMatch(/SameSite=None/i);
   });
 
   it('dura 30 días', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     expect(cookie).toMatch(/Max-Age=2592000/);
   });
 
   it('acepta una sesión que ella misma emitió', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     const valor = cookie.split(';')[0];
     expect(sesionValida(conCookie(valor))).toBe(true);
   });
@@ -39,7 +39,7 @@ describe('sesión', () => {
   });
 
   it('rechaza una sesión firmada con otra clave', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     const valor = cookie.split(';')[0];
     process.env.LUXE_SESION_SECRETO = 'otra';
     expect(sesionValida(conCookie(valor))).toBe(false);
@@ -55,13 +55,13 @@ describe('sesión', () => {
   // `LUXE_SESION_SECRETO`, y NO hay respaldo a la clave del taller.
   describe('LUXE_TALLER_CLAVE ya no es la llave del panel', () => {
     // Fabrica una cookie con el formato exacto que produce `emitirSesion`
-    // (`<emitidoEn>.<nombre en base64url>.<firma>`), pero firmada con el
-    // secreto que se le pase. Con `LUXE_TALLER_CLAVE` es exactamente lo que
-    // podía armar cualquiera que hubiera usado el taller.
-    function cookieFirmadaCon(secreto: string, nombre: string): string {
+    // (`<emitidoEn>.<nombre en base64url>.<rol>.<firma>`), pero firmada con
+    // el secreto que se le pase. Con `LUXE_TALLER_CLAVE` es exactamente lo
+    // que podía armar cualquiera que hubiera usado el taller.
+    function cookieFirmadaCon(secreto: string, nombre: string, rol: string): string {
       const emitidoEn = String(Date.now());
       const codificado = Buffer.from(nombre, 'utf8').toString('base64url');
-      const contenido = `${emitidoEn}.${codificado}`;
+      const contenido = `${emitidoEn}.${codificado}.${rol}`;
       const firma = createHmac('sha256', secreto).update(contenido).digest('hex');
       return `luxe_sesion=${contenido}.${firma}`;
     }
@@ -73,9 +73,10 @@ describe('sesión', () => {
       const forjada = cookieFirmadaCon(
         process.env.LUXE_TALLER_CLAVE,
         'Vendedor Despedido',
+        'vendedor',
       );
       expect(sesionValida(conCookie(forjada))).toBe(false);
-      expect(nombreDeSesion(conCookie(forjada))).toBeNull();
+      expect(sesionDe(conCookie(forjada))).toBeNull();
       expect(csrfDeSesion(conCookie(forjada))).toBeNull();
 
       // Control: la misma fábrica, con el secreto correcto, SÍ produce una
@@ -84,28 +85,29 @@ describe('sesión', () => {
       const legitima = cookieFirmadaCon(
         process.env.LUXE_SESION_SECRETO,
         'Guillermo Rojas',
+        'vendedor',
       );
-      expect(nombreDeSesion(conCookie(legitima))).toBe('Guillermo Rojas');
+      expect(sesionDe(conCookie(legitima))).toEqual({ nombre: 'Guillermo Rojas', rol: 'vendedor' });
     });
 
     it('sin LUXE_SESION_SECRETO no hay respaldo: no se emite ni se valida ninguna sesión', () => {
       process.env.LUXE_SESION_SECRETO = 'secreto-de-firma-del-panel';
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
 
       delete process.env.LUXE_SESION_SECRETO;
       process.env.LUXE_TALLER_CLAVE = 'la-clave-que-se-teclea-en-q7m4';
 
-      expect(() => emitirSesion('Guillermo Rojas')).toThrow(/LUXE_SESION_SECRETO/);
+      expect(() => emitirSesion('Guillermo Rojas', 'vendedor')).toThrow(/LUXE_SESION_SECRETO/);
       expect(sesionValida(conCookie(valor))).toBe(false);
       expect(
-        sesionValida(conCookie(cookieFirmadaCon('la-clave-que-se-teclea-en-q7m4', 'X'))),
+        sesionValida(conCookie(cookieFirmadaCon('la-clave-que-se-teclea-en-q7m4', 'X', 'vendedor'))),
       ).toBe(false);
     });
   });
 
   it('el token anti-CSRF debe coincidir con el de la sesión', () => {
-    const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+    const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor');
     const valor = cookie.split(';')[0];
     expect(csrfValido(conCookie(valor), csrf)).toBe(true);
     expect(csrfValido(conCookie(valor), 'otro')).toBe(false);
@@ -113,7 +115,7 @@ describe('sesión', () => {
   });
 
   it('la cookie lleva Partitioned (CHIPS): sin esto es de terceros dentro del iframe y Safari/Chrome pueden bloquearla', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     expect(cookie).toMatch(/Partitioned/i);
   });
 
@@ -130,7 +132,7 @@ describe('sesión', () => {
 
     it('rechaza una sesión firmada hace más de 30 días', () => {
       vi.useFakeTimers();
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       // 30 días + 1 segundo: justo pasado el borde de Max-Age.
       vi.advanceTimersByTime(2592000 * 1000 + 1000);
@@ -139,7 +141,7 @@ describe('sesión', () => {
 
     it('acepta una sesión firmada hace 29 días (dentro de los 30)', () => {
       vi.useFakeTimers();
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       vi.advanceTimersByTime(29 * 24 * 60 * 60 * 1000);
       expect(sesionValida(conCookie(valor))).toBe(true);
@@ -149,7 +151,7 @@ describe('sesión', () => {
       vi.useFakeTimers();
       const ahoraReal = Date.now();
       vi.setSystemTime(ahoraReal + 60 * 60 * 1000); // "ahora" adelantado 1 hora.
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal); // vuelve al presente real: emitidoEn queda en el futuro.
       expect(sesionValida(conCookie(valor))).toBe(false);
@@ -163,7 +165,7 @@ describe('sesión', () => {
       vi.useFakeTimers();
       const ahoraReal = Date.now();
       vi.setSystemTime(ahoraReal + 60 * 1000); // "emitida" 60s adelantada.
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal);
       expect(sesionValida(conCookie(valor))).toBe(true);
@@ -173,7 +175,7 @@ describe('sesión', () => {
       vi.useFakeTimers();
       const ahoraReal = Date.now();
       vi.setSystemTime(ahoraReal + 61 * 1000); // "emitida" 61s adelantada: justo pasado el margen.
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       vi.setSystemTime(ahoraReal);
       expect(sesionValida(conCookie(valor))).toBe(false);
@@ -187,7 +189,7 @@ describe('sesión', () => {
     });
 
     it('con cookie válida, devuelve el mismo token que csrfValido acepta', () => {
-      const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+      const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       const derivado = csrfDeSesion(conCookie(valor));
       expect(derivado).toBe(csrf);
@@ -203,7 +205,7 @@ describe('sesión', () => {
     });
 
     it('con una sesión firmada con otra clave, devuelve null', () => {
-      const { cookie } = emitirSesion('Guillermo Rojas');
+      const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
       const valor = cookie.split(';')[0];
       process.env.LUXE_SESION_SECRETO = 'otra';
       expect(csrfDeSesion(conCookie(valor))).toBeNull();
@@ -220,24 +222,28 @@ function pedirCon(cookie: string): Request {
 }
 
 describe('la sesión recuerda al vendedor', () => {
+  beforeEach(() => {
+    process.env.LUXE_SESION_SECRETO = 'secreta';
+  });
+
   it('devuelve el nombre con el que se emitió', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
-    expect(nombreDeSesion(pedirCon(cookie))).toBe('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+    expect(sesionDe(pedirCon(cookie))).toEqual({ nombre: 'Guillermo Rojas', rol: 'vendedor' });
   });
 
   it('conserva tildes y eñes', () => {
-    const { cookie } = emitirSesion('José Peña');
-    expect(nombreDeSesion(pedirCon(cookie))).toBe('José Peña');
+    const { cookie } = emitirSesion('José Peña', 'vendedor');
+    expect(sesionDe(pedirCon(cookie))).toEqual({ nombre: 'José Peña', rol: 'vendedor' });
   });
 
   it('rechaza una cookie con el nombre alterado', () => {
-    const { cookie } = emitirSesion('Guillermo Rojas');
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
     const valor = cookie.split(';')[0].split('=')[1];
-    const [emitido, , firma] = valor.split('.');
+    const [emitido, , rol, firma] = valor.split('.');
     const otro = Buffer.from('Gerente General', 'utf8').toString('base64url');
-    const falsa = `luxe_sesion=${emitido}.${otro}.${firma}`;
+    const falsa = `luxe_sesion=${emitido}.${otro}.${rol}.${firma}`;
     const req = new Request('https://luxeessentialscr.com/x', { headers: { cookie: falsa } });
-    expect(nombreDeSesion(req)).toBeNull();
+    expect(sesionDe(req)).toBeNull();
     expect(sesionValida(req)).toBe(false);
   });
 
@@ -249,16 +255,70 @@ describe('la sesión recuerda al vendedor', () => {
       headers: { cookie: 'luxe_sesion=1756000000000.deadbeef' },
     });
     expect(sesionValida(req)).toBe(false);
-    expect(nombreDeSesion(req)).toBeNull();
+    expect(sesionDe(req)).toBeNull();
   });
 
   it('no emite una sesión sin nombre', () => {
-    expect(() => emitirSesion('')).toThrow();
-    expect(() => emitirSesion('   ')).toThrow();
+    expect(() => emitirSesion('', 'vendedor')).toThrow();
+    expect(() => emitirSesion('   ', 'vendedor')).toThrow();
   });
 
   it('sigue entregando el token anti-CSRF de la sesión', () => {
-    const { cookie, csrf } = emitirSesion('Guillermo Rojas');
+    const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor');
     expect(csrfDeSesion(pedirCon(cookie))).toBe(csrf);
+  });
+});
+
+// --- Tarea 3 de invitaciones-roles: el rol viaja dentro del valor firmado ---
+describe('la sesión recuerda el rol', () => {
+  beforeEach(() => {
+    process.env.LUXE_SESION_SECRETO = 'secreta';
+  });
+
+  it('recuerda el rol con el que se emitió', () => {
+    const { cookie } = emitirSesion('Guillermo Rojas', 'superadmin');
+    expect(sesionDe(pedirCon(cookie))).toEqual({ nombre: 'Guillermo Rojas', rol: 'superadmin' });
+  });
+
+  // Sin esto, cualquiera con una sesión de vendedor se asciende editando su
+  // propia cookie. La firma cubre el rol justamente para impedirlo.
+  it('rechaza una cookie con el rol alterado', () => {
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+    const valor = cookie.split(';')[0].split('=')[1];
+    const [emitido, nombre, , firma] = valor.split('.');
+    const falsa = `luxe_sesion=${emitido}.${nombre}.superadmin.${firma}`;
+    const req = new Request('https://luxeessentialscr.com/x', { headers: { cookie: falsa } });
+    expect(sesionDe(req)).toBeNull();
+  });
+
+  it('rechaza una cookie del formato anterior, de tres partes', () => {
+    const req = new Request('https://luxeessentialscr.com/x', {
+      headers: { cookie: 'luxe_sesion=1756000000000.R3VpbGxlcm1v.deadbeef' },
+    });
+    expect(sesionDe(req)).toBeNull();
+  });
+
+  // Corrección respecto del brief: la prueba original firmaba la cookie con
+  // 64 ceros. Esa firma nunca coincide con nada, así que la cookie se
+  // rechazaba por firma inválida SIN que el valor del rol llegara a
+  // mirarse — la prueba habría seguido en verde aunque se borrara la
+  // validación del rol en `sesionDe`. Acá se firma de verdad, con el mismo
+  // HMAC-SHA256 y el mismo secreto que usa el módulo, sobre
+  // `<emitidoEn>.<nombre>.dios`: así el único motivo de rechazo posible es
+  // el valor del rol.
+  it('rechaza un rol que no es ninguno de los dos', () => {
+    const { cookie } = emitirSesion('Guillermo Rojas', 'vendedor');
+    const valor = cookie.split(';')[0].split('=')[1];
+    const [emitido, nombre] = valor.split('.');
+    const contenido = `${emitido}.${nombre}.dios`;
+    const firma = createHmac('sha256', 'secreta').update(contenido).digest('hex');
+    expect(sesionDe(new Request('https://luxeessentialscr.com/x', {
+      headers: { cookie: `luxe_sesion=${contenido}.${firma}` },
+    }))).toBeNull();
+  });
+
+  it('no emite una sesión con un rol inválido', () => {
+    // @ts-expect-error se prueba el guard en tiempo de ejecución
+    expect(() => emitirSesion('Guillermo Rojas', 'dios')).toThrow();
   });
 });
