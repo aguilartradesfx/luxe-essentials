@@ -209,7 +209,7 @@ describe('rutas de app/api/cotizacion/* — sesión por cookie y CSRF', () => {
     });
 
     it('con credenciales correctas → 200, con csrf en el cuerpo y Set-Cookie con SameSite=None', async () => {
-      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas' });
+      vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
       const res = await postEntrar(
         peticion('http://localhost/api/cotizacion/entrar', { usuario: 'guillermo', clave: 'secreta' }),
       );
@@ -262,7 +262,7 @@ describe('POST /api/cotizacion/entrar', () => {
   // pasaba en verde antes de este ajuste, porque el mock resuelve igual sin
   // mirar con qué lo llamaron.
   it('emite una sesión con el nombre real del vendedor autenticado, en el orden correcto de argumentos', async () => {
-    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Marta Vargas' });
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Marta Vargas', rol: 'vendedor' });
     const res = await postEntrar(peticionEntrada({ usuario: 'guillermo', clave: 'x' }));
     expect(res.status).toBe(200);
     const cuerpo = await res.json();
@@ -328,7 +328,7 @@ describe('POST /api/cotizacion/entrar', () => {
   // el secreto en Vercel —el caso exacto de un despliegue nuevo— la ruta
   // devolvía un 500 genérico de Next, sin una sola línea que dijera por qué.
   it('si falta LUXE_SESION_SECRETO, devuelve 500 con un diagnóstico explícito en el log', async () => {
-    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas' });
+    vi.mocked(autenticarUsuario).mockResolvedValue({ ok: true, nombre: 'Guillermo Rojas', rol: 'vendedor' });
     delete process.env.LUXE_SESION_SECRETO;
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
