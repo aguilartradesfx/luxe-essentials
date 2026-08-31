@@ -116,8 +116,9 @@ invitación vigente), **vencida** (sin `clave_hash`, invitación caduca), **acti
 | `POST /api/cotizacion/fijar-clave` | cualquiera con enlace | Fija la clave y abre la sesión |
 
 `fijar-clave` es la única ruta del panel sin sesión previa, así que es la más expuesta: valida
-el enlace en tiempo constante, no dice nunca si un correo existe, y limita los intentos por
-enlace igual que la entrada normal.
+el enlace en tiempo constante y no dice nunca si un correo existe. El enlace son 256 bits al
+azar, se busca por huella con una igualdad indexada, y un contador no aportaría nada: no se
+implementa.
 
 ## Riesgos declarados
 
