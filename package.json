@@ -15,6 +15,7 @@
     "db:migrate": "node scripts/db.mjs migrate",
     "usuarios": "node scripts/usuarios.mjs",
     "demo:sembrar": "node scripts/demo-sembrar.mjs",
+    "demo:pdfs": "node scripts/demo-pdfs.mjs",
     "demo:limpiar": "node scripts/demo-limpiar.mjs"
   },
   "keywords": [],
