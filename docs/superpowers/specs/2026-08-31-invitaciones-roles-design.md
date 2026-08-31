@@ -53,6 +53,15 @@ Cada llamada a `/api/equipo/*` vuelve a leer la fila del usuario y comprueba `ro
 y `activo = true` contra la base. Son operaciones raras —invitar a alguien, desactivarlo— así
 que una lectura extra no cuesta nada.
 
+La cookie termina llevando, además del nombre y el rol, el **id** de la fila en
+`usuarios_panel` (un cuarto segmento dentro del mismo valor firmado). La relectura de arriba
+busca por ese id, no por el nombre: el nombre no es único —dos vendedores pueden llamarse
+igual— y releer por él dejó, en una ronda de correcciones, tanto un bloqueo irreversible
+(invitar a alguien con el mismo nombre que el único superadmin lo dejaba sin forma de
+autorizar nada) como una ventana de carrera en el chequeo agregado para evitarlo. El id es la
+clave primaria de la tabla, único por definición de la base y no por disciplina de la
+aplicación, así que cierra el problema de raíz.
+
 Esto cierra parcialmente el hueco que la fase 3 declaró y aceptó: allí `desactivar` no cortaba
 la sesión viva hasta 30 días. Sigue sin cortarla **para cotizar**, pero sí la corta de
 inmediato **para administrar al equipo**, que es donde el daño sería irreversible. Un superadmin
