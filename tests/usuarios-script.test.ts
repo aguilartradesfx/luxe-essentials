@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { construirSql, completarArgumentos, huellaDe as huellaDeScript } from '../scripts/usuarios.mjs';
 import { verificarClave } from '@/lib/cotizador/credenciales.mjs';
-import { huellaDe, generarInvitacion } from '@/lib/cotizador/invitaciones';
+import { huellaDe, generarInvitacion, HORAS_VIGENCIA } from '@/lib/cotizador/invitaciones';
 
 describe('construirSql: invitar', () => {
   it('invitar guarda la huella y nunca el enlace', async () => {
@@ -40,6 +40,25 @@ describe('construirSql: invitar', () => {
   it('exige correo y nombre', async () => {
     await expect(construirSql('invitar', ['g@luxe.cr'])).rejects.toThrow();
     await expect(construirSql('invitar', [])).rejects.toThrow();
+  });
+
+  // Ronda de correcciones 1: cambiar `HORAS_VIGENCIA` de 72 a 24 en el
+  // módulo TypeScript (la fuente de verdad) dejaba las 23 pruebas de
+  // entonces en verde igual, porque ninguna leía `invitacion_expira`. Esta
+  // prueba compara el vencimiento que guarda `invitar` contra
+  // `HORAS_VIGENCIA` importado de `lib/cotizador/invitaciones.ts`, así que
+  // una divergencia entre esa constante y la copia del script (ver arriba)
+  // la pone roja.
+  it('la invitación vence a las HORAS_VIGENCIA horas, no a otro plazo', async () => {
+    const antes = Date.now();
+    const { valores } = await construirSql('invitar', ['g@luxe.cr', 'Guillermo Rojas']);
+    const despues = Date.now();
+    const expira = new Date(valores[valores.length - 1] as string).getTime();
+
+    const esperadoMin = antes + HORAS_VIGENCIA * 3_600_000;
+    const esperadoMax = despues + HORAS_VIGENCIA * 3_600_000;
+    expect(expira).toBeGreaterThanOrEqual(esperadoMin);
+    expect(expira).toBeLessThanOrEqual(esperadoMax);
   });
 
   it('reconoce --sin-correo para no mandar la invitacion por Resend', async () => {
@@ -101,6 +120,18 @@ describe('construirSql: correo en vez de usuario', () => {
     expect(texto).toContain('intentos = 0');
     const [hash, sal] = valores;
     expect(await verificarClave('Turrialba-2027', hash, sal)).toBe(true);
+  });
+
+  // Ronda de correcciones 1: sin esto, fijar una clave a mano no invalida el
+  // enlace de invitación viejo (`fijar-clave/route.ts` sólo mira huella,
+  // vencimiento y `activo` — nunca si `clave_hash` ya está puesto), y de
+  // paso `listar` seguía mostrando a esa persona como "invitada"/"vencida"
+  // porque `derivarEstado` usa `invitacion_expira === null` como señal de
+  // "ya tiene clave".
+  it('clave también limpia la invitación pendiente: invitacion_hash e invitacion_expira quedan en null', async () => {
+    const { texto } = await construirSql('clave', ['g@luxe.cr', 'Turrialba-2027']);
+    expect(texto).toContain('invitacion_hash = null');
+    expect(texto).toContain('invitacion_expira = null');
   });
 
   it('desactivar y activar nunca borran la fila, sólo cambian activo', async () => {

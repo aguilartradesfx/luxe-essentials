@@ -149,11 +149,22 @@ export async function construirSql(orden, argumentos) {
       // Quien cambia la clave de alguien es porque esa persona no puede
       // entrar: de paso se limpia el bloqueo y el contador de intentos, si no
       // la clave nueva no serviría de nada hasta que venza el bloqueo viejo.
+      //
+      // Ronda de correcciones 1: también hay que limpiar `invitacion_hash` e
+      // `invitacion_expira`. Sin esto quedan dos problemas: `listar` usa
+      // `invitacion_expira === null` como señal de "ya tiene clave" (ver
+      // `derivarEstado`, más abajo), así que sin limpiarla la consola sigue
+      // mostrando a alguien con clave puesta como "invitada" o "vencida"; y
+      // peor, `fijar-clave/route.ts` sólo comprueba huella, vencimiento y
+      // `activo` — nunca si `clave_hash` ya está puesto —, así que el enlace
+      // de invitación viejo seguiría sirviendo para pisar la clave que se
+      // acaba de fijar a mano.
       const { hash, sal } = await hashClave(nueva);
       return {
         texto:
           'update public.usuarios_panel set clave_hash = $1, clave_sal = $2, ' +
-          'bloqueado_hasta = null, intentos = 0 where correo = $3',
+          'bloqueado_hasta = null, intentos = 0, invitacion_hash = null, invitacion_expira = null ' +
+          'where correo = $3',
         valores: [hash, sal, normalizarCorreo(correo)],
       };
     }
