@@ -304,31 +304,60 @@ describe('correo', () => {
   });
 });
 
-describe('aviso al equipo (workflow "Notificación interna — Respondió el email")', () => {
-  it('dispara el workflow con el id correcto cuando el turno es una respuesta por correo', async () => {
-    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
+describe('aviso al equipo (workflow config.WORKFLOW_AVISO_INTERNO, tres casos)', () => {
+  it('no dispara si no se cumple ninguno de los tres casos', async () => {
+    // Camino feliz por defecto: WhatsApp, sin datos captados todavía, lejos
+    // del tope de turnos. Control de que el aviso no es el comportamiento
+    // por defecto — si `debeAvisar` estuviera rota a `true` siempre, este es
+    // el que lo atraparía.
     await procesar('c1', deps);
-    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_EMAIL_RESPONDIDO, expect.anything());
+    expect(dispararWorkflow).not.toHaveBeenCalled();
   });
 
-  // El criterio viejo (nombre + un medio de contacto) ya no dispara nada por
-  // sí solo: el nombre del workflow prometía "respondió el email", no "el
-  // agente ya tiene con quién hablar".
-  it('no dispara por WhatsApp aunque haya nombre y un medio de contacto', async () => {
+  it('caso 1: dispara cuando el turno es una respuesta por correo', async () => {
+    hidratar.mockResolvedValue(conversacionCon([entrante({ tipo: 'TYPE_EMAIL' })]));
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
+  });
+
+  it('caso 2: dispara por WhatsApp cuando el turno capta nombre y correo', async () => {
     generar.mockResolvedValue({
       ok: true,
-      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@x.com' } },
+      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' } },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
+  });
+
+  it('caso 2: dispara por WhatsApp cuando el turno capta nombre y teléfono, sin correo', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-8888' } },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
+  });
+
+  it('no dispara sólo con el nombre, sin correo ni teléfono', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: { respuesta: '¿Me confirmás tu correo o teléfono?', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar' } },
     });
     await procesar('c1', deps);
     expect(dispararWorkflow).not.toHaveBeenCalled();
   });
 
-  // El criterio viejo también disparaba sólo por agotar los turnos, sin
-  // datos. Ya no: agotar los turnos por WhatsApp no es "respondió el email".
-  it('no dispara sólo por agotar los turnos si el canal no es correo', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+  // El caso real que costó el lead: WhatsApp, nombre y producto captados,
+  // pero sin correo ni teléfono — el contacto se agota de turnos sin haber
+  // cumplido el caso 2, y antes de este arreglo no avisaba a nadie.
+  it('caso 3: dispara al agotar los turnos aunque no haya lead cualificado', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: config.TOPE_TURNOS - 1 });
+    generar.mockResolvedValue({
+      ok: true,
+      salida: { respuesta: 'Gracias por escribirnos', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', producto: 'uniformes' } },
+    });
     await procesar('c1', deps);
-    expect(dispararWorkflow).not.toHaveBeenCalled();
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
   });
 
   it('no dispara dos veces para el mismo contacto', async () => {

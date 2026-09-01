@@ -88,18 +88,24 @@ export const config = {
   VERSION_CONVERSACIONES: '2021-04-15',
   VERSION_CONTACTOS: '2021-07-28',
 
-  // Workflow "Notificación interna (Respondió el email)". Se dispara desde
-  // procesar.ts cuando el turno que se acaba de responder es una respuesta
-  // del contacto por correo electrónico (`esCorreo(ultimo.tipo)`, el mismo
-  // criterio que ese archivo usa para pasar el estado a 'email_respondido').
+  // Workflow "Notificación interna (Respondió el email)" en GoHighLevel — ese
+  // es el nombre que tiene ahí, pero desde procesar.ts se dispara en tres
+  // casos, no sólo ese: el nombre del workflow ya no describe cuándo se
+  // dispara, por eso esta constante no se llama igual. Los tres casos
+  // (`debeAvisar` en procesar.ts):
+  //   1. el contacto responde por correo electrónico,
+  //   2. el turno captó un lead cualificado -nombre y además correo o
+  //      teléfono- por cualquier canal,
+  //   3. se agotaron los turnos (`estado === 'agotado'`) sin haber logrado
+  //      ninguno de los dos anteriores.
   //
-  // Antes este campo se llamaba WORKFLOW_AVISO y el criterio era otro: nombre
-  // + un medio de contacto (correo o teléfono), o turnos agotados. Ese
-  // criterio viejo avisaba por cosas que no eran "respondió el email" —el
-  // nombre del workflow en GoHighLevel mentía sobre cuándo se disparaba de
-  // verdad. `debeAvisar` en procesar.ts sigue garantizando una sola vez por
-  // contacto vía `notificado_at`.
-  WORKFLOW_EMAIL_RESPONDIDO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
+  // Antes este campo se llamaba WORKFLOW_AVISO y cubría exactamente estos
+  // mismos tres casos. Pasó por WORKFLOW_EMAIL_RESPONDIDO (sólo el caso 1) en
+  // un cambio que costó un lead real en producción: una conversación por
+  // WhatsApp captó nombre y producto, se agotó de turnos, y no avisó a nadie
+  // porque el nombre de la constante ya no incluía ese caso. `debeAvisar`
+  // sigue garantizando una sola vez por contacto vía `notificado_at`.
+  WORKFLOW_AVISO_INTERNO: '1235c311-b3e6-4b7d-be40-0ec2a1f01a60',
 
   // Workflow "Cotización nueva". Se dispara desde
   // app/api/cotizacion/route.ts en cuanto la cotización queda registrada y

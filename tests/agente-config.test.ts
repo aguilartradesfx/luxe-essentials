@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { config } from '@/lib/agente/config';
 
 describe('config del agente', () => {
-  it('expone el workflow de "Notificación interna (Respondió el email)"', () => {
-    expect(config.WORKFLOW_EMAIL_RESPONDIDO).toBe('1235c311-b3e6-4b7d-be40-0ec2a1f01a60');
+  it('expone el workflow del aviso interno al equipo', () => {
+    expect(config.WORKFLOW_AVISO_INTERNO).toBe('1235c311-b3e6-4b7d-be40-0ec2a1f01a60');
   });
 
   it('expone el workflow de "Cotización nueva"', () => {

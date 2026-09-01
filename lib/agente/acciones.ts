@@ -190,10 +190,10 @@ export function horaEventoGHL(ahora: Date = new Date()): string {
 }
 
 // `workflowId` es un parámetro y no una constante interna porque este agente
-// dispara más de un workflow: el de "Notificación interna (Respondió el
-// email)" desde procesar.ts (config.WORKFLOW_EMAIL_RESPONDIDO) y el de
-// "Cotización nueva" desde app/api/cotizacion/route.ts
-// (config.WORKFLOW_COTIZACION_NUEVA). Cada llamador decide cuál.
+// dispara más de un workflow: el aviso interno al equipo desde procesar.ts
+// (config.WORKFLOW_AVISO_INTERNO) y el de "Cotización nueva" desde
+// app/api/cotizacion/route.ts (config.WORKFLOW_COTIZACION_NUEVA). Cada
+// llamador decide cuál.
 //
 // `POST /contacts/{id}/workflow/{workflowId}` mete al contacto DIRECTO en el
 // workflow y SE SALTA cualquier trigger configurado en la interfaz de
