@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerEtiquetas,
+  enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerContacto,
   horaEventoGHL,
 } from '@/lib/agente/acciones';
 import { DATOS_VACIOS } from '@/lib/agente/estado';
@@ -236,11 +236,11 @@ describe('horaEventoGHL', () => {
   });
 });
 
-describe('leerEtiquetas', () => {
+describe('leerContacto', () => {
   it('lee las etiquetas del contacto con la versión de contactos', async () => {
     const fetchImpl = ok({ contact: { tags: ['agente-ia', 'Stop_bot'] } });
-    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
-    expect(r).toEqual({ ok: true, etiquetas: ['agente-ia', 'Stop_bot'] });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
+    expect(r).toEqual({ ok: true, etiquetas: ['agente-ia', 'Stop_bot'], nombre: null, email: null, telefono: null });
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toContain('/contacts/c1');
     expect(init.headers.Version).toBe('2021-07-28');
@@ -248,13 +248,45 @@ describe('leerEtiquetas', () => {
 
   it('devuelve un array vacío si el contacto no trae tags', async () => {
     const fetchImpl = ok({ contact: {} });
-    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
-    expect(r).toEqual({ ok: true, etiquetas: [] });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
+    expect(r).toEqual({ ok: true, etiquetas: [], nombre: null, email: null, telefono: null });
+  });
+
+  // El objeto entero ya se pedía para sacar las etiquetas; esto no cuesta una
+  // llamada HTTP aparte. `cerebro.ts` lo usa para confirmar en vez de volver a
+  // preguntar lo que el CRM ya sabía (ver el prompt del sistema).
+  it('devuelve también nombre, correo y teléfono de la ficha, en la misma llamada', async () => {
+    const fetchImpl = ok({
+      contact: { tags: [], firstName: 'Alejandro', lastName: 'Aguilar', email: 'ale@luxe.cr', phone: '+506 8888 8888' },
+    });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
+    expect(r).toEqual({
+      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: 'ale@luxe.cr', telefono: '+506 8888 8888',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('arma el nombre completo aunque sólo venga el firstName', async () => {
+    const fetchImpl = ok({ contact: { tags: [], firstName: 'Alejandro' } });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nombre).toBe('Alejandro');
+  });
+
+  it('trata los campos en blanco como ausentes, no como cadena vacía', async () => {
+    const fetchImpl = ok({ contact: { tags: [], firstName: '', email: '', phone: '' } });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nombre).toBeNull();
+    expect(r.email).toBeNull();
+    expect(r.telefono).toBeNull();
   });
 
   it('devuelve el error sin lanzar cuando GHL responde con un error', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
-    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain('500');
@@ -262,7 +294,7 @@ describe('leerEtiquetas', () => {
 
   it('devuelve el error sin lanzar cuando la red falla', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
-    const r = await leerEtiquetas('c1', { ...deps, fetchImpl });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain('ECONNRESET');

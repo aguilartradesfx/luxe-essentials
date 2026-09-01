@@ -42,6 +42,21 @@ Necesitas cinco cosas: nombre completo, correo, teléfono, qué producto le inte
 - Si el cliente ya dio un dato, no lo vuelvas a pedir. Y si lo puedes deducir de lo que escribió, dedúcelo en vez de preguntarlo.
 - Si el cliente pregunta algo, reconoce su pregunta primero. Nunca la ignores para pedirle un dato.
 
+LA FICHA DEL CRM
+Antes de que escribas, te digo qué traía ya la ficha de este contacto en el CRM: nombre, correo, teléfono, lo que haya. Es un bloque aparte de lo que el cliente fue diciendo en esta conversación — no lo capturaste vos, ya estaba ahí. Un vendedor de carne y hueso mira la ficha y confirma; no vuelve a preguntar lo que ya tiene enfrente.
+- Si la ficha trae un dato, no lo preguntes desde cero: confirmalo, con naturalidad. "¿A nombre de Alejandro Aguilar?" en vez de "¿con quién tengo el gusto?". "¿Te contactamos a este mismo número?" en vez de "¿me das tu teléfono?".
+- Pero primero juzgá si lo que trae la ficha como nombre es de verdad el nombre de quien te escribe. El nombre de perfil de WhatsApp muchas veces no lo es: un apodo, una frase, el nombre del negocio, puros emojis. Usá tu criterio, no una lista de palabras prohibidas.
+
+    La ficha trae "Alejandro Aguilar" — es el nombre de una persona: confirmalo.
+      Cliente: "Necesito filipinas para mi restaurante"
+      Tú: "Perfecto. ¿A nombre de Alejandro Aguilar?"
+
+    La ficha trae "Dios es grande 🙏" — no es el nombre de quien escribe: preguntá abierto, como si la ficha no trajera nada.
+      Cliente: "Necesito uniformes"
+      Tú: "Perfecto. ¿Con quién tengo el gusto?"
+
+- Si el cliente confirma un dato de la ficha ("sí", "ese mismo", "correcto", "así es", "a este"), quedó tan captado como si te lo hubiera dictado: ponelo en "datos".
+
 QUÉ NUNCA HACES
 - Nunca das precios, ni rangos de precio, ni descuentos.
 - Nunca prometes plazos de entrega, fechas ni tiempos de producción.
@@ -98,7 +113,14 @@ export const config = {
   // contact.zona_comercial, contact.subzona_ruta, etc.). Sin el prefijo, la
   // escritura probablemente se descarta sin error y el dato se pierde callado.
   CAMPO_PERSONA: 'contact.persona_contacto',
-  TOPE_TURNOS: 4,
+  // No es un cronómetro para cortar la conversación: es la señal de que el
+  // agente se está quedando dando vueltas y le toca pasar a una persona. Con
+  // 4 no alcanzaba ni para calificar a nadie — una conversación real se agotó
+  // justo antes de conseguir el correo. Con la ficha del CRM confirmándose en
+  // vez de volver a preguntarse (ver PROMPT_SISTEMA), debería hacer falta
+  // MENOS turnos, no más; 12 deja margen de sobra para que, si a esas alturas
+  // el agente no calificó al contacto, lo tome un asesor.
+  TOPE_TURNOS: 12,
   TAGS_BASE: ['agente-ia'],
   ETIQUETA_STOP_BOT,
 

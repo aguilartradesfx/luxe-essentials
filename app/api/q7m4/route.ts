@@ -66,6 +66,9 @@ export async function POST(request: Request) {
       transcripciones: [],
       bloques: [],
       datosPrevios,
+      // El banco de pruebas no lee ningún contacto real de GHL, así que no
+      // hay ficha de CRM que simular: siempre llega vacía.
+      fichaCRM: { nombre: null, email: null, telefono: null },
       huboFallosDeMedios: false,
       esCorreo,
     },

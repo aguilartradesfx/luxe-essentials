@@ -58,14 +58,30 @@ export async function enviarMensaje(
   }
 }
 
-// Lee las etiquetas actuales del contacto en GoHighLevel. La usa
-// `procesar.ts` para decidir si el agente debe callarse por
-// `config.ETIQUETA_STOP_BOT`. Nunca lanza: devuelve el error para que quien
-// llama decida qué hacer con la lectura fallida (ver ese archivo para la
-// decisión que toma).
-export async function leerEtiquetas(
+// Lo que el contacto ya tenía en GoHighLevel ANTES de este turno: sus
+// etiquetas (para la guarda de `config.ETIQUETA_STOP_BOT`) y el nombre,
+// correo y teléfono de su ficha, para que el cerebro pueda CONFIRMARLOS en
+// vez de preguntarlos desde cero (ver `cerebro.ts` y el prompt del sistema).
+// `nombre` combina firstName + lastName porque así es como lo maneja
+// `Datos.nombre` (lib/agente/estado.ts) y como se le pide al modelo.
+export type FichaContacto = {
+  etiquetas: string[];
+  nombre: string | null;
+  email: string | null;
+  telefono: string | null;
+};
+
+// Lee el contacto en GoHighLevel: etiquetas, nombre, correo y teléfono. La
+// usa `procesar.ts` para decidir si el agente debe callarse por
+// `config.ETIQUETA_STOP_BOT` y para pasarle al cerebro lo que la ficha ya
+// traía. Es una sola llamada HTTP — antes sólo se leían las etiquetas y se
+// tiraba el resto de la respuesta, así que ampliar lo que se devuelve no
+// cuesta ninguna llamada adicional. Nunca lanza: devuelve el error para que
+// quien llama decida qué hacer con la lectura fallida (ver procesar.ts para
+// la decisión que toma).
+export async function leerContacto(
   contactId: string, deps: DepsEscritura,
-): Promise<{ ok: true; etiquetas: string[] } | { ok: false; error: string }> {
+): Promise<{ ok: true } & FichaContacto | { ok: false; error: string }> {
   const { apiKey, fetchImpl = fetch } = deps;
   try {
     const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
@@ -74,11 +90,22 @@ export async function leerEtiquetas(
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `GHL lectura de contacto ${res.status}: ${texto.slice(0, 200)}` };
 
-    const datos = JSON.parse(texto) as { contact?: { tags?: unknown } };
-    const tags = datos.contact?.tags;
+    const datos = JSON.parse(texto) as {
+      contact?: { tags?: unknown; firstName?: unknown; lastName?: unknown; email?: unknown; phone?: unknown };
+    };
+    const contacto = datos.contact ?? {};
+    const tags = contacto.tags;
+
+    const primero = typeof contacto.firstName === 'string' ? contacto.firstName.trim() : '';
+    const apellido = typeof contacto.lastName === 'string' ? contacto.lastName.trim() : '';
+    const nombre = [primero, apellido].filter(Boolean).join(' ') || null;
+    const email = typeof contacto.email === 'string' && contacto.email.trim() ? contacto.email.trim() : null;
+    const telefono = typeof contacto.phone === 'string' && contacto.phone.trim() ? contacto.phone.trim() : null;
+
     return {
       ok: true,
       etiquetas: Array.isArray(tags) ? tags.filter((t): t is string => typeof t === 'string') : [],
+      nombre, email, telefono,
     };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
