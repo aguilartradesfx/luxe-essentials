@@ -64,12 +64,25 @@ export type Uso = {
   cacheLeido: number;
 };
 
+// Lo que la ficha del contacto ya traía en GoHighLevel antes de esta
+// conversación (ver `leerContacto` en acciones.ts). Va aparte de
+// `datosPrevios`: eso es lo que el CLIENTE fue diciendo turno a turno, esto es
+// lo que el CRM ya sabía sin que nadie lo escribiera aquí. El prompt le pide
+// al modelo confirmarlo en vez de preguntarlo — pero sólo si de verdad parece
+// el nombre de una persona.
+export type FichaCRM = {
+  nombre: string | null;
+  email: string | null;
+  telefono: string | null;
+};
+
 export type EntradaCerebro = {
   mensajes: MensajeReal[];
   mios: string[];
   transcripciones: string[];
   bloques: BloqueImagen[];
   datosPrevios: Datos;
+  fichaCRM: FichaCRM;
   huboFallosDeMedios: boolean;
   esCorreo: boolean;
 };
@@ -120,6 +133,22 @@ function construirMensajes(e: EntradaCerebro) {
       text: '[el cliente envió un adjunto que no se pudo leer; pídele amablemente que lo repita por escrito]',
     });
   }
+
+  // La ficha del CRM va como un bloque APARTE del que sigue (lo que el
+  // cliente fue diciendo en la conversación): el prompt le pide al modelo
+  // distinguir uno de otro, porque a lo que trae la ficha se lo confirma, no
+  // se lo pregunta desde cero — y sólo si de verdad parece el nombre de una
+  // persona, no un apodo o el nombre de un negocio.
+  const yaTraiaLaFicha = Object.entries(e.fichaCRM)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(', ');
+  ultimo.content.push({
+    type: 'text',
+    text: yaTraiaLaFicha
+      ? `[esto ya estaba en la ficha del contacto en el CRM, antes de que esta persona escribiera nada en esta conversación: ${yaTraiaLaFicha}]`
+      : '[la ficha del contacto en el CRM no traía nombre, correo ni teléfono]',
+  });
 
   // Los datos ya capturados van como contexto para que no los vuelva a pedir.
   const yaSe = Object.entries(e.datosPrevios)

@@ -17,14 +17,14 @@ const enviarMensaje = vi.fn();
 const actualizarContacto = vi.fn();
 const agregarNota = vi.fn();
 const dispararWorkflow = vi.fn();
-const leerEtiquetas = vi.fn();
+const leerContacto = vi.fn();
 vi.mock('@/lib/agente/acciones', async (original) => ({
   ...(await original<typeof import('@/lib/agente/acciones')>()),
   enviarMensaje: (...a: unknown[]) => enviarMensaje(...a),
   actualizarContacto: (...a: unknown[]) => actualizarContacto(...a),
   agregarNota: (...a: unknown[]) => agregarNota(...a),
   dispararWorkflow: (...a: unknown[]) => dispararWorkflow(...a),
-  leerEtiquetas: (...a: unknown[]) => leerEtiquetas(...a),
+  leerContacto: (...a: unknown[]) => leerContacto(...a),
 }));
 
 const leerOCrear = vi.fn();
@@ -89,7 +89,7 @@ beforeEach(() => {
   actualizarContacto.mockResolvedValue(undefined);
   agregarNota.mockResolvedValue(undefined);
   dispararWorkflow.mockResolvedValue(undefined);
-  leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: [] });
+  leerContacto.mockResolvedValue({ ok: true, etiquetas: [], nombre: null, email: null, telefono: null });
   hidratar.mockResolvedValue(conversacionCon([entrante()]));
 });
 
@@ -114,9 +114,36 @@ describe('camino feliz', () => {
   });
 });
 
+describe('ficha del CRM', () => {
+  // `leerContacto` ya pedía el contacto entero para sacar las etiquetas; el
+  // nombre, el correo y el teléfono de esa misma respuesta tienen que llegar
+  // al cerebro para que confirme en vez de volver a preguntar (ver el prompt
+  // del sistema en config.ts).
+  it('pasa al cerebro el nombre, correo y teléfono que ya traía la ficha', async () => {
+    leerContacto.mockResolvedValue({
+      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: null, telefono: '8888-8888',
+    });
+    await procesar('c1', deps);
+    expect(generar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fichaCRM: { nombre: 'Alejandro Aguilar', email: null, telefono: '8888-8888' },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('manda la ficha vacía cuando el CRM no traía nada', async () => {
+    await procesar('c1', deps);
+    expect(generar).toHaveBeenCalledWith(
+      expect.objectContaining({ fichaCRM: { nombre: null, email: null, telefono: null } }),
+      expect.anything(),
+    );
+  });
+});
+
 describe('guarda 0 — etiqueta Stop_bot', () => {
   it('no responde cuando el contacto tiene la etiqueta', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('stop-bot');
     expect(enviarMensaje).not.toHaveBeenCalled();
@@ -125,20 +152,20 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
   // Se comprueba antes de hidratar: pedirle a Claude qué contestar para
   // después tirar la respuesta sería pagar por nada.
   it('ni siquiera hidrata la conversación cuando la etiqueta está puesta', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
     await procesar('c1', deps);
     expect(hidratar).not.toHaveBeenCalled();
     expect(generar).not.toHaveBeenCalled();
   });
 
   it('la comparación es insensible a mayúsculas: la detecta en minúsculas', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['stop_bot'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['stop_bot'] });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('stop-bot');
   });
 
   it('la comparación es insensible a mayúsculas: la detecta toda en mayúsculas', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['STOP_BOT'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['STOP_BOT'] });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('stop-bot');
   });
@@ -148,14 +175,14 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
   // quitar la comparación de `tieneEtiquetaStopBot`, es porque algo más la
   // haría fallar y estaría protegiendo lo que no es.
   it('sí responde cuando el contacto no tiene la etiqueta', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['otra-cosa'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['otra-cosa'] });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('respondido');
     expect(enviarMensaje).toHaveBeenCalled();
   });
 
   it('no se confunde con una etiqueta parecida pero distinta', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['stop_bot_temporal'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['stop_bot_temporal'] });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('respondido');
   });
@@ -164,7 +191,7 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
   // (fail-closed) en vez de arriesgarse a hablarle encima a un asesor. Ver el
   // comentario en procesar.ts para el porqué.
   it('se calla por seguridad si no pudo leer las etiquetas del contacto', async () => {
-    leerEtiquetas.mockResolvedValue({ ok: false, error: 'GHL lectura de contacto 500: boom' });
+    leerContacto.mockResolvedValue({ ok: false, error: 'GHL lectura de contacto 500: boom' });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('stop-bot');
     expect(hidratar).not.toHaveBeenCalled();
@@ -173,7 +200,7 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
 
   it('registra en el log, con el id del contacto, cuando se calla por la etiqueta', async () => {
     const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
-    leerEtiquetas.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
     await procesar('c1', deps);
     expect(espia).toHaveBeenCalledWith(expect.anything(), 'contacto:', 'c1');
     espia.mockRestore();
@@ -182,7 +209,7 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
   it('no gasta la llamada a GHL cuando el contacto ya estaba inactivo', async () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, estado: 'humano' });
     await procesar('c1', deps);
-    expect(leerEtiquetas).not.toHaveBeenCalled();
+    expect(leerContacto).not.toHaveBeenCalled();
   });
 });
 
@@ -244,15 +271,17 @@ describe('guarda 3 — anti-duplicado', () => {
 });
 
 describe('tope de turnos', () => {
-  it('en el cuarto turno responde y deja el contacto agotado', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: 3 });
+  it('en el último turno permitido responde y deja el contacto agotado', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: config.TOPE_TURNOS - 1 });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('respondido');
-    expect(guardar).toHaveBeenCalledWith('c1', expect.objectContaining({ estado: 'agotado', turnos: 4 }), expect.anything());
+    expect(guardar).toHaveBeenCalledWith(
+      'c1', expect.objectContaining({ estado: 'agotado', turnos: config.TOPE_TURNOS }), expect.anything(),
+    );
   });
 
-  it('no responde un quinto mensaje', async () => {
-    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, estado: 'agotado', turnos: 4 });
+  it('no responde un mensaje más allá del tope', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, estado: 'agotado', turnos: config.TOPE_TURNOS });
     const r = await procesar('c1', deps);
     expect(r.desenlace).toBe('inactivo');
     expect(enviarMensaje).not.toHaveBeenCalled();

@@ -10,8 +10,8 @@ describe('config del agente', () => {
     expect(config.WORKFLOW_COTIZACION_NUEVA).toBe('abfe1f24-e993-4963-ae8e-658142e8aa47');
   });
 
-  it('topa las respuestas automáticas en 4', () => {
-    expect(config.TOPE_TURNOS).toBe(4);
+  it('topa las respuestas automáticas en 12', () => {
+    expect(config.TOPE_TURNOS).toBe(12);
   });
 
   it('expone la clave del campo personalizado de la persona de contacto', () => {
@@ -59,5 +59,36 @@ describe('config del agente', () => {
     expect(p).toContain('precio');
     expect(p).toContain('plazo');
     expect(p).toContain('nunca');
+  });
+
+  // No se puede probar de forma determinista que el modelo vaya a juzgar bien
+  // un nombre real contra uno inventado — eso lo decide el LLM turno a turno.
+  // Lo que sí se puede anclar es que la INSTRUCCIÓN está: que confirme lo que
+  // ya trae la ficha, que juzgue si el nombre es de una persona de verdad (con
+  // los dos ejemplos, uno válido y uno basura), y que un dato confirmado por
+  // el cliente cuenta como captado.
+  describe('la ficha del CRM', () => {
+    it('le pide confirmar un dato que ya trae la ficha, en vez de preguntarlo desde cero', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('ficha');
+      expect(p).toContain('confirmalo');
+    });
+
+    it('le pide juzgar si el nombre de la ficha es de verdad el de una persona, sin una lista fija de palabras', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('no una lista de palabras prohibidas');
+    });
+
+    it('da un ejemplo de nombre real (se confirma) y uno que no lo es (se pregunta abierto)', () => {
+      const p = config.PROMPT_SISTEMA;
+      expect(p).toContain('Alejandro Aguilar');
+      expect(p).toContain('Dios es grande');
+      expect(p).toContain('¿Con quién tengo el gusto?');
+    });
+
+    it('dice que un dato que el cliente confirma cuenta como captado', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('si el cliente confirma un dato de la ficha');
+    });
   });
 });

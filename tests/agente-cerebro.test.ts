@@ -13,6 +13,7 @@ const entrada = {
   transcripciones: [],
   bloques: [],
   datosPrevios: DATOS_VACIOS,
+  fichaCRM: { nombre: null, email: null, telefono: null },
   huboFallosDeMedios: false,
   esCorreo: false,
 };
@@ -221,5 +222,37 @@ describe('generar', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain('429');
+  });
+
+  // El modelo necesita distinguir "esto lo dijo el cliente" (datosPrevios) de
+  // "esto ya estaba en la ficha del CRM" (fichaCRM): son cosas distintas y el
+  // prompt le pide tratarlas distinto (confirmar una, preguntar la otra).
+  // Sin esta prueba, alguien podría fusionar los dos bloques en uno solo y la
+  // suite seguiría en verde.
+  it('manda la ficha del CRM al modelo, aparte de los datos ya capturados en la conversación', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar(
+      {
+        ...entrada,
+        datosPrevios: { ...DATOS_VACIOS, producto: 'uniformes' },
+        fichaCRM: { nombre: 'Alejandro Aguilar', email: null, telefono: '8888-8888' },
+      },
+      { ...deps, fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const texto = JSON.stringify(body.messages);
+    expect(texto).toContain('Alejandro Aguilar');
+    expect(texto).toContain('8888-8888');
+    // Los dos bloques van marcados con su origen, no mezclados en un solo texto.
+    expect(texto).toMatch(/ficha del contacto en el CRM/);
+    expect(texto).toMatch(/datos que ya tienes de esta persona/);
+  });
+
+  it('avisa explícitamente cuando la ficha del CRM no traía nada', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', datos: DATOS_VACIOS });
+    await generar(entrada, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const texto = JSON.stringify(body.messages);
+    expect(texto).toContain('la ficha del contacto en el CRM no traía nombre, correo ni teléfono');
   });
 });

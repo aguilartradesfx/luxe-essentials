@@ -4,7 +4,7 @@ import { hidratar, ultimoReal, huboRespuestaHumana } from '@/lib/agente/conversa
 import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
 import {
-  enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerEtiquetas,
+  enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerContacto,
 } from '@/lib/agente/acciones';
 import { leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Fila } from '@/lib/agente/estado';
 import { registrarIntencion } from '@/lib/cotizador/borrador';
@@ -71,15 +71,15 @@ export async function procesar(
   // salió y no hay forma de deshacerla. Es la misma asimetría que ya rige la
   // guarda del humano más abajo (`huboRespuestaHumana`): ante la duda sobre
   // si hay alguien más atendiendo, el agente se calla.
-  const etiquetas = await leerEtiquetas(contactId, { apiKey: ghlApiKey, fetchImpl });
-  if (!etiquetas.ok) {
+  const contacto = await leerContacto(contactId, { apiKey: ghlApiKey, fetchImpl });
+  if (!contacto.ok) {
     console.error(
       '[agente] No se pudieron leer las etiquetas del contacto; se calla por seguridad.',
-      'contacto:', contactId, etiquetas.error,
+      'contacto:', contactId, contacto.error,
     );
     return { desenlace: 'stop-bot', detalle: 'lectura de etiquetas fallida' };
   }
-  if (config.tieneEtiquetaStopBot(etiquetas.etiquetas)) {
+  if (config.tieneEtiquetaStopBot(contacto.etiquetas)) {
     console.error('[agente] Se calla: el contacto tiene la etiqueta Stop_bot.', 'contacto:', contactId);
     return { desenlace: 'stop-bot' };
   }
@@ -134,6 +134,7 @@ export async function procesar(
       transcripciones: medios.transcripciones,
       bloques: medios.bloques,
       datosPrevios: fila.datos,
+      fichaCRM: { nombre: contacto.nombre, email: contacto.email, telefono: contacto.telefono },
       huboFallosDeMedios: medios.fallos > 0,
       esCorreo: esCorreo(ultimo.tipo),
     },
