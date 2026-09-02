@@ -80,14 +80,25 @@ const DIAS_AVISO_VENCIMIENTO = 7;
 // (ganada/perdida) o convertida no necesita que nadie la llame por eso.
 const ESTADOS_ABIERTOS: Estado[] = ['creada', 'enviada', 'error'];
 
-type Vigencia = { vence: Date; diasRestantes: number; proximaAVencer: boolean };
+// Revisión final (hallazgo menor): `vencida` se calcula aparte de
+// `diasRestantes`, directo sobre los milisegundos, y no derivándola de
+// `diasRestantes < 0`. `Math.ceil` de una diferencia negativa pero de
+// menos de un día (vencida hace unas horas, no un día entero) da `-0` --
+// una rareza de JavaScript (`Math.ceil(-0.5) === -0`). `-0 < 0` es
+// `false`, así que quien confiaba en esa comparación para pintar "vencida"
+// dejaba pasar justo esos casos, y una cotización vencida ayer se mostraba
+// como si venciera HOY. `vencida` no tiene ese problema: compara los dos
+// timestamps directamente, sin pasar por un redondeo a días que pueda
+// perder el signo.
+type Vigencia = { vence: Date; diasRestantes: number; vencida: boolean; proximaAVencer: boolean };
 
 function calcularVigencia(fila: FilaListado, ahora: Date): Vigencia {
   const vence = new Date(fila.created_at);
   vence.setDate(vence.getDate() + DIAS_VIGENCIA);
   const diasRestantes = Math.ceil((vence.getTime() - ahora.getTime()) / (24 * 60 * 60 * 1000));
+  const vencida = vence.getTime() < ahora.getTime();
   const proximaAVencer = ESTADOS_ABIERTOS.includes(fila.estado) && diasRestantes <= DIAS_AVISO_VENCIMIENTO;
-  return { vence, diasRestantes, proximaAVencer };
+  return { vence, diasRestantes, vencida, proximaAVencer };
 }
 
 const ETIQUETAS_ESTADO: Record<Estado, string> = {
@@ -519,7 +530,7 @@ export function VistaListado({
             </thead>
             <tbody className="divide-y divide-[var(--carta-border)]">
               {filasVisibles.map((fila) => {
-                const { vence, diasRestantes, proximaAVencer } = calcularVigencia(fila, new Date());
+                const { vence, diasRestantes, vencida, proximaAVencer } = calcularVigencia(fila, new Date());
                 const nombre = textoDe(fila.cliente?.nombre) || 'Sin nombre';
                 const empresa = textoDe(fila.cliente?.empresa);
                 const monto = numeroDe(fila.totales?.total);
@@ -541,9 +552,9 @@ export function VistaListado({
                     <td className="px-3 py-3 align-top">
                       {proximaAVencer ? (
                         <span
-                          className={`font-semibold tabular-nums ${diasRestantes < 0 ? 'text-red-700' : 'text-amber-700'}`}
+                          className={`font-semibold tabular-nums ${vencida ? 'text-red-700' : 'text-amber-700'}`}
                         >
-                          {diasRestantes < 0
+                          {vencida
                             ? `Vencida hace ${Math.abs(diasRestantes)} día(s)`
                             : diasRestantes === 0
                               ? 'Vence hoy'

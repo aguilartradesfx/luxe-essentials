@@ -222,6 +222,33 @@ describe('VistaListado', () => {
     expect(within(filaGanada as HTMLElement).queryByText(/vence en/i)).not.toBeInTheDocument();
   });
 
+  // Revisión final (hallazgo menor): `Math.ceil` de una diferencia negativa
+  // pero de menos de un día (p. ej. vencida hace 1 hora) da `-0`, no `0` --
+  // una rareza de JavaScript. `-0 < 0` es `false`, así que la comparación
+  // que decide "vencida" (rojo, "Vencida hace N día(s)") la pasaba por
+  // alto, y una cotización que venció ayer se pintaba como si venciera
+  // HOY (ámbar, "Vence hoy") -- justo la mentira que un vendedor no puede
+  // permitirse creer sobre un precio ya caducado.
+  it('una cotización vencida hace menos de un día se muestra vencida, no "Vence hoy"', async () => {
+    const HACE_30_DIAS_Y_UNA_HORA = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000));
+    mockFetch({
+      filas: [
+        {
+          ...FILA_ABIERTA,
+          cliente: { nombre: 'Diego Solís', empresa: 'Hotel Diego', email: 'diego@hotel.com' },
+          created_at: HACE_30_DIAS_Y_UNA_HORA.toISOString(),
+        },
+      ],
+    });
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/diego solís/i)).toBeInTheDocument());
+    const fila = screen.getByText(/diego solís/i).closest('tr') as HTMLElement;
+
+    expect(within(fila).queryByText(/vence hoy/i)).not.toBeInTheDocument();
+    expect(within(fila).getByText(/vencida hace/i)).toBeInTheDocument();
+  });
+
   it('el filtro por estado cambia lo que se pide al servidor', async () => {
     const { llamadas } = mockFetch();
     const usuario = userEvent.setup();
