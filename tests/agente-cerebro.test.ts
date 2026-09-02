@@ -18,14 +18,28 @@ const entrada = {
   esCorreo: false,
 };
 
-function claude(payload: unknown, stopReason = 'end_turn') {
+// `esAutomatico` es obligatorio en salidaSchema (ver cerebro.ts): sin él, el
+// parseo falla ANTES de mirar cualquier otro campo. La mayoría de las
+// llamadas a este ayudante en este archivo sólo les interesa otra cosa
+// (el modelo, el máximo de tokens, si `respuesta` cabe en el mensaje...) y
+// no incluyen `esAutomatico` en su payload — así que sin este relleno,
+// `r.ok` daba `false` por la razón EQUIVOCADA en todas ellas, y una prueba
+// que esperaba `r.ok === false` por un motivo específico (una `respuesta`
+// más larga de lo permitido, `cantidad` ausente...) seguía en verde aunque
+// se rompiera la regla que decía proteger, porque ya fallaba antes por la
+// falta de `esAutomatico`. Verificado por mutación: quitar `.max(1500)` de
+// `respuesta` en salidaSchema, o quitar `cantidad` de ahí, dejaba la suite
+// en verde ANTES de este arreglo. Rellenar acá, en el único lugar donde se
+// arma el payload por defecto, corrige las doce llamadas de una vez.
+function claude(payload: Record<string, unknown>, stopReason = 'end_turn') {
+  const completo = 'esAutomatico' in payload ? payload : { ...payload, esAutomatico: false };
   return vi.fn().mockResolvedValue({
     ok: true,
     status: 200,
     text: async () =>
       JSON.stringify({
         stop_reason: stopReason,
-        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        content: [{ type: 'text', text: JSON.stringify(completo) }],
       }),
   });
 }
@@ -150,6 +164,12 @@ describe('generar', () => {
   // `cantidad` en salidaSchema, una respuesta que la omite pasaría igual y
   // `salida.datos.cantidad` llegaría `undefined` sin ningún error en ningún
   // log. Esta prueba es la que detecta que esa línea desapareció.
+  //
+  // `esAutomatico` SÍ va en este payload (a diferencia de la mayoría de las
+  // llamadas de este archivo, que pasan por el ayudante `claude()`, que lo
+  // rellena solo): esta prueba arma el JSON a mano, así que sin este campo
+  // el parseo fallaría por su ausencia y no por la de `cantidad` — exactamente
+  // el defecto que tenía antes esta misma prueba.
   it('falla limpio cuando la salida del modelo omite cantidad', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
@@ -162,6 +182,7 @@ describe('generar', () => {
               type: 'text',
               text: JSON.stringify({
                 respuesta: 'ok',
+                esAutomatico: false,
                 datos: { nombre: null, email: null, telefono: null, producto: null, ubicacion: null },
               }),
             },
