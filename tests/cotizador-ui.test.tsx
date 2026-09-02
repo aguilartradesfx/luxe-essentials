@@ -142,6 +142,11 @@ type OpcionesFetch = {
   // producto en la misma familia, para poder afirmar que el contador
   // agrupa de verdad y no solo cuenta "1" siempre.
   skus?: typeof SKUS;
+  // Revisión final (hallazgo menor, M2): simula que GoHighLevel falló al
+  // crear el Estimate (`ghl.error` en vez de `ghl.estimateId`), para probar
+  // que el detalle crudo queda escondido detrás de "ver detalle" — mismo
+  // patrón que `AvisoError` en VistaListado.tsx.
+  ghlFalla?: string;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -240,7 +245,7 @@ function mockFetch(opciones: OpcionesFetch = {}) {
           id: 'cot-1',
           numero: 'COT-2026-0001',
           cotizacion: cotizacionSimulada(cuerpo.lineas ?? [], cuerpo.tasaIva ?? 0.13, cuerpo.bordadoEspecial ?? false),
-          ghl: { estimateId: 'est-1' },
+          ghl: opciones.ghlFalla ? { error: opciones.ghlFalla } : { estimateId: 'est-1' },
           pdf,
           correo,
         }),
@@ -899,6 +904,38 @@ describe('Cotizador', () => {
     });
     expect(screen.queryByText(/env[ií]ala vos desde ah[ií]/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/abrila en gohighlevel/i)).not.toBeInTheDocument();
+  });
+
+  // Revisión final (hallazgo menor, M2): antes, si GoHighLevel fallaba, acá
+  // se pintaba `GoHighLevel: {resultado.ghlError}` en crudo -- la respuesta
+  // tal cual la mandó GoHighLevel, en inglés, a veces con JSON adentro --
+  // en la pantalla que el vendedor mira justo después de cada envío. Mismo
+  // criterio que `AvisoError` en VistaListado.tsx: un aviso humano
+  // primero, y el texto crudo detrás de un botón, no a la vista sin
+  // pedirlo (ni siquiera en un atributo que un hover revele).
+  it('si GoHighLevel falla, el detalle crudo queda escondido detrás de un aviso humano', async () => {
+    mockFetch({ ghlFalla: 'GHL workflow 422: {"status":422,"message":"timezone offset","traceId":"abc-123"}' });
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
+
+    // El aviso humano está a la vista de entrada.
+    const boton = await screen.findByRole('button', { name: /ver detalle/i });
+    expect(screen.getByText(/no se avis[oó] al crm/i)).toBeInTheDocument();
+    // El JSON crudo NO está a la vista todavía -- ni como texto ni en un
+    // atributo (p. ej. `title`) que un hover revele.
+    expect(screen.queryByText(/traceId/i)).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toMatch(/traceId/i);
+
+    await usuario.click(boton);
+    expect(screen.getByText(/traceId/i)).toBeInTheDocument();
   });
 
   it('no permite un segundo envío tras uno exitoso (protección contra doble clic)', async () => {
