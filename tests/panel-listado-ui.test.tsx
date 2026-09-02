@@ -513,6 +513,10 @@ describe('VistaListado', () => {
     expect(screen.getByText(/no le llegó el correo al cliente/i)).toBeInTheDocument();
     // El texto crudo del servidor NO está a la vista todavía.
     expect(screen.queryByText(/falta resend_api_key/i)).not.toBeInTheDocument();
+    // Tampoco escondido en un atributo (p. ej. `title`, que un hover
+    // revela sin hacer clic en "ver detalle"): `queryByText` sólo mira
+    // texto, no atributos -- por eso se revisa el HTML entero acá.
+    expect(document.body.innerHTML).not.toMatch(/falta resend_api_key/i);
 
     // Con teclado: Tab hasta el control (primero cae el filtro de estado,
     // que va antes en la página) y Enter lo despliega -- no depende del
@@ -551,6 +555,9 @@ describe('VistaListado', () => {
     expect(within(fila).queryByText(/no le llegó el correo al cliente/i)).not.toBeInTheDocument();
     // El texto crudo no está a la vista todavía.
     expect(within(fila).queryByText(/boom/i)).not.toBeInTheDocument();
+    // Ni en un atributo del botón (mismo hallazgo que el `title={detalle}`
+    // de más arriba): se revisa el HTML de la fila entera, no sólo su texto.
+    expect(fila.innerHTML).not.toMatch(/boom/i);
 
     await usuario.click(within(fila).getByRole('button', { name: /ver detalle/i }));
     expect(within(fila).getByText(/boom/i)).toBeInTheDocument();
@@ -580,6 +587,12 @@ describe('VistaListado', () => {
     expect(screen.queryByText(/traceId/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/timezone offset/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/"status":422/i)).not.toBeInTheDocument();
+    // Tampoco en ningún atributo (`title` y similares): `queryByText` no
+    // los mira, así que hace falta revisar el HTML servido de punta a
+    // punta para que "ningún lado de la pantalla" sea cierto de verdad.
+    expect(document.body.innerHTML).not.toMatch(/traceId/i);
+    expect(document.body.innerHTML).not.toMatch(/timezone offset/i);
+    expect(document.body.innerHTML).not.toMatch(/"status":422/i);
 
     // Pero sí hay, sin pedir nada, un aviso en español de que algo falló.
     expect(screen.getByText(/no le llegó el correo al cliente/i)).toBeInTheDocument();

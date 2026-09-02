@@ -170,7 +170,14 @@ function AvisoError({
           onClick={onToggle}
           aria-expanded={abierto}
           aria-controls={id}
-          title={detalle}
+          // Revisión final (hallazgo menor): este botón llevaba
+          // `title={detalle}` -- el rediseño sacó el volcado crudo del
+          // cuerpo de la fila, pero lo dejó en un atributo. Un vendedor que
+          // pasara el mouse por encima veía el JSON igual, sin hacer clic
+          // en "ver detalle", y ninguna prueba lo detectaba porque
+          // `queryByText` no mira atributos. El detalle ya se pinta como
+          // texto, abajo, cuando `abierto` es true -- no hace falta
+          // repetirlo en un tooltip que se ve sin pedirlo.
           className="font-normal underline decoration-dotted underline-offset-2 hover:text-navy"
         >
           {abierto ? 'ocultar detalle' : 'ver detalle'}
