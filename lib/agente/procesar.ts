@@ -5,6 +5,7 @@ import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
 import {
   enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerContacto,
+  type FichaContacto,
 } from '@/lib/agente/acciones';
 import {
   leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Fila, type Datos,
@@ -42,9 +43,31 @@ export type DepsProcesar = {
 //
 // `notificado_at` sigue siendo la guarda de una sola vez por contacto: una
 // vez avisado, no se vuelve a avisar aunque después se cumpla otro caso.
-function debeAvisar(fila: Fila, datos: Datos, agotado: boolean, esCorreoRespuesta: boolean): boolean {
+//
+// El caso 2 (`leadCualificado`) NO puede mirar `datos.nombre`/`email`/
+// `telefono` a secas: desde que el cerebro recibe la ficha del CRM
+// (`fichaCRM` en cerebro.ts) y el prompt le pide CONFIRMAR lo que esa ficha
+// ya trae, `datos` puede llegar con esos tres campos llenos sin que el
+// cliente haya escrito una sola palabra de vuelta — el prompt pide la
+// confirmación, pero ni la exige ni la prohíbe copiar de una, así que si el
+// modelo copia sin esperar confirmación, un contacto de la base importada
+// (3.340 fichas ya completas) dispara el aviso en su primer "hola". Por eso
+// se compara contra `ficha` (lo que el CRM YA tenía antes de este turno) y
+// sólo cuenta como cualificado si la conversación aportó algo que la ficha
+// no tenía — determinista, en código, sin depender de qué decida copiar el
+// modelo: si el cliente sólo confirma datos que la ficha ya traía completos,
+// esto no dispara el caso 2, pero sí lo sigue cubriendo el caso 3 (agotado)
+// si la conversación se apaga sin que el cliente aporte nada nuevo.
+function huboDatoNuevoDelCliente(datos: Datos, ficha: FichaContacto): boolean {
+  return datos.nombre !== ficha.nombre || datos.email !== ficha.email || datos.telefono !== ficha.telefono;
+}
+
+function debeAvisar(
+  fila: Fila, datos: Datos, agotado: boolean, esCorreoRespuesta: boolean, ficha: FichaContacto,
+): boolean {
   if (fila.notificado_at) return false;
-  const leadCualificado = Boolean(datos.nombre) && Boolean(datos.email || datos.telefono);
+  const leadCualificado = Boolean(datos.nombre) && Boolean(datos.email || datos.telefono)
+    && huboDatoNuevoDelCliente(datos, ficha);
   return esCorreoRespuesta || leadCualificado || agotado;
 }
 
@@ -223,7 +246,7 @@ export async function procesar(
       ? 'agotado'
       : 'activo';
 
-  const avisar = debeAvisar(fila, datos, estado === 'agotado', esCorreoRespuesta);
+  const avisar = debeAvisar(fila, datos, estado === 'agotado', esCorreoRespuesta, contacto);
 
   // El aviso al equipo se dispara ANTES de estampar `notificado_at`, y sólo se
   // estampa si salió bien. Al revés —estampar y luego disparar— un 500 pasajero

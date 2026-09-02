@@ -473,6 +473,73 @@ describe('aviso al equipo (workflow config.WORKFLOW_AVISO_INTERNO, tres casos)',
   });
 });
 
+// Hallazgo 4 de la revisión final: el criterio del caso 2 no puede mirar
+// `datos` a secas, porque desde que el modelo recibe la ficha del CRM
+// (`leerContacto`) puede copiarla a `datos` como si el cliente la hubiera
+// dictado — el prompt le pide confirmarla, pero no lo exige. Con 3.340
+// contactos importados con la ficha ya completa, eso disparaba el aviso en
+// el primer "hola". El criterio ahora compara contra la ficha: sólo cuenta
+// si la conversación aportó algo que la ficha no tenía.
+describe('caso 2 no depende de que el modelo copie la ficha (hallazgo 4)', () => {
+  it('NO dispara cuando los "datos" del turno son exactamente lo que ya traía la ficha del CRM', async () => {
+    leerContacto.mockResolvedValue({
+      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: 'ale@x.com', telefono: null,
+    });
+    generar.mockResolvedValue({
+      ok: true,
+      salida: {
+        respuesta: '¡Hola!',
+        datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' },
+      },
+    });
+    const r = await procesar('c1', deps);
+    expect(r.desenlace).toBe('respondido');
+    expect(dispararWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('sí dispara cuando el cliente aporta un dato que la ficha NO traía, aunque el resto coincida con la ficha', async () => {
+    leerContacto.mockResolvedValue({
+      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: null, telefono: null,
+    });
+    generar.mockResolvedValue({
+      ok: true,
+      salida: {
+        respuesta: 'Gracias',
+        datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-8888' },
+      },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
+  });
+
+  // Un contacto que no está en la base importada (ficha vacía) sigue
+  // funcionando exactamente como antes: cualquier dato que capte el turno es
+  // por definición nuevo frente a una ficha vacía.
+  it('sigue disparando para un contacto sin ficha previa (comportamiento sin cambios)', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' } },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
+  });
+
+  // Aun sin caso 2, el caso 3 sigue siendo la red: si el contacto de la base
+  // importada se agota de turnos sin aportar nada nuevo, igual avisa.
+  it('el contacto de la base importada que no aporta nada nuevo igual avisa al agotarse (caso 3)', async () => {
+    leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: config.TOPE_TURNOS - 1 });
+    leerContacto.mockResolvedValue({
+      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: 'ale@x.com', telefono: null,
+    });
+    generar.mockResolvedValue({
+      ok: true,
+      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' } },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
+  });
+});
+
 // `registrarIntencion` no está mockeada en este archivo: estas pruebas
 // ejercitan la conexión real entre `procesar()` y `lib/cotizador/borrador.ts`,
 // no sólo la lógica interna de `registrarIntencion` (ya cubierta en
