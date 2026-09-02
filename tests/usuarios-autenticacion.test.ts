@@ -22,24 +22,50 @@ import { autenticarUsuario, MAX_INTENTOS, BLOQUEO_MINUTOS } from '@/lib/cotizado
 // Lo que sí queda anclado sobre el código de producción es el contrato —qué
 // función se llama y con qué argumentos, y que no se emite ninguna escritura
 // de contador por fuera—; ver el describe 'el contador es atómico', más abajo.
+//
+// Revisión final (hallazgo importante): `eq() { return this; }` ignoraba
+// columna y valor por completo. Un revisor cambió `.eq('correo', ...)` por
+// `.eq('nombre', ...)` en `autenticarUsuario` y las 967 pruebas del proyecto
+// siguieron en verde — ninguna prueba de este archivo comprobaba contra qué
+// columna se estaba consultando. Ahora `eq` anota `{columna, valor}` en
+// `filtros`/`filtrosEscritura` (para afirmar explícitamente, más abajo) Y
+// `maybeSingle` sólo devuelve la fila si de verdad coincide con lo filtrado
+// — así, un `.eq()` por la columna equivocada no sólo queda registrado, sino
+// que además hace que la lectura "no encuentre" a nadie, tal como pasaría
+// contra PostgREST de verdad, y arrastra a rojo cualquier prueba que
+// esperara `ok: true`.
 function db(
   fila: Record<string, unknown> | null,
   opciones: { errorDeEscritura?: string } = {},
 ) {
   const escrituras: Record<string, unknown>[] = [];
   const llamadasRpc: { nombre: string; argumentos: Record<string, unknown> }[] = [];
+  const filtros: { columna: string; valor: unknown }[] = [];
+  const filtrosEscritura: { columna: string; valor: unknown }[] = [];
   const cliente = {
     from() {
       return {
         select() { return this; },
-        eq() { return this; },
-        maybeSingle: async () => ({ data: fila, error: null }),
+        eq(columna: string, valor: unknown) {
+          filtros.push({ columna, valor });
+          return this;
+        },
+        maybeSingle: async () => {
+          if (!fila) return { data: null, error: null };
+          const coincide = filtros.every(
+            (f) => (fila as Record<string, unknown>)[f.columna] === f.valor,
+          );
+          return { data: coincide ? fila : null, error: null };
+        },
         update(cambios: Record<string, unknown>) {
           escrituras.push(cambios);
           return {
-            eq: async () => ({
-              error: opciones.errorDeEscritura ? { message: opciones.errorDeEscritura } : null,
-            }),
+            eq: async (columna: string, valor: unknown) => {
+              filtrosEscritura.push({ columna, valor });
+              return {
+                error: opciones.errorDeEscritura ? { message: opciones.errorDeEscritura } : null,
+              };
+            },
           };
         },
       };
@@ -64,7 +90,7 @@ function db(
       return { data: hasta !== null && hasta.getTime() > ahora.getTime(), error: null };
     },
   };
-  return { cliente: cliente as any, escrituras, llamadasRpc, fila };
+  return { cliente: cliente as any, escrituras, llamadasRpc, fila, filtros, filtrosEscritura };
 }
 
 async function filaDe(clave: string, extra: Record<string, unknown> = {}) {
@@ -82,6 +108,27 @@ describe('autenticarUsuario', () => {
     const { cliente } = db(await filaDe('Turrialba-2026'));
     const r = await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
     expect(r).toEqual({ ok: true, id: 'u1', nombre: 'Guillermo Rojas', rol: 'vendedor' });
+  });
+
+  // Revisión final (hallazgo importante): antes `eq() { return this; }`
+  // ignoraba columna y valor, así que cambiar `.eq('correo', ...)` por
+  // `.eq('nombre', ...)` en `autenticarUsuario` no ponía nada en rojo. Esta
+  // prueba afirma directamente contra qué columna se consulta, y
+  // `maybeSingle` (ver `db`, arriba) además deja de encontrar la fila si la
+  // columna filtrada no es la real — las dos formas de detectar el mismo
+  // cambio.
+  it('busca al usuario por la columna correo, no por otra', async () => {
+    const { cliente, filtros } = db(await filaDe('Turrialba-2026'));
+    await autenticarUsuario('  GUILLERMO@LUXE.CR ', 'Turrialba-2026', cliente);
+    expect(filtros).toEqual([{ columna: 'correo', valor: 'guillermo@luxe.cr' }]);
+  });
+
+  // Mismo hallazgo, para la escritura de `escribir()`: anota el último
+  // acceso por `id`, nunca por `correo` ni por `nombre`.
+  it('anota el último acceso por la columna id, no por otra', async () => {
+    const { cliente, filtrosEscritura } = db(await filaDe('Turrialba-2026'));
+    await autenticarUsuario('guillermo@luxe.cr', 'Turrialba-2026', cliente);
+    expect(filtrosEscritura).toEqual([{ columna: 'id', valor: 'u1' }]);
   });
 
   it('devuelve el rol junto al nombre', async () => {
