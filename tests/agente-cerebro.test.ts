@@ -34,6 +34,7 @@ describe('generar', () => {
   it('devuelve la respuesta y los datos extraídos', async () => {
     const fetchImpl = claude({
       respuesta: 'Con gusto. ¿Me compartes tu nombre?',
+      esAutomatico: false,
       datos: { ...DATOS_VACIOS, producto: 'uniformes' },
     });
     const r = await generar(entrada, { ...deps, fetchImpl });
@@ -41,6 +42,7 @@ describe('generar', () => {
     if (!r.ok) return;
     expect(r.salida.respuesta).toContain('nombre');
     expect(r.salida.datos.producto).toBe('uniformes');
+    expect(r.salida.esAutomatico).toBe(false);
   });
 
   it('usa Opus 5 con effort low y max_tokens acotado', async () => {
@@ -110,6 +112,38 @@ describe('generar', () => {
     const esquemaDatos = body.output_config.format.schema.properties.datos;
     expect(esquemaDatos.properties).toHaveProperty('cantidad');
     expect(esquemaDatos.required).toContain('cantidad');
+  });
+
+  // `esAutomatico` es el campo del que depende que `procesar.ts` no le
+  // conteste a la respuesta automática de otro bot. Sin obligarlo aquí (y en
+  // salidaSchema, ver la prueba siguiente), la API podría omitirlo y
+  // `generado.salida.esAutomatico` llegaría `undefined` —falsy, así que ese
+  // turno SÍ se respondería— sin que ninguna prueba lo note.
+  it('el esquema que se manda a la API incluye esAutomatico como campo obligatorio', async () => {
+    const fetchImpl = claude({ respuesta: 'ok', esAutomatico: false, datos: DATOS_VACIOS });
+    await generar(entrada, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const esquema = body.output_config.format.schema;
+    expect(esquema.properties).toHaveProperty('esAutomatico');
+    expect(esquema.properties.esAutomatico).toEqual({ type: 'boolean' });
+    expect(esquema.required).toContain('esAutomatico');
+  });
+
+  // z.object descarta en silencio las claves de sobra: sin esta línea en
+  // salidaSchema, una respuesta que omite esAutomatico pasaría igual y
+  // `salida.esAutomatico` llegaría `undefined` sin ningún error en el log.
+  it('falla limpio cuando la salida del modelo omite esAutomatico', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: JSON.stringify({ respuesta: 'ok', datos: DATOS_VACIOS }) }],
+        }),
+    });
+    const r = await generar(entrada, { ...deps, fetchImpl });
+    expect(r.ok).toBe(false);
   });
 
   // z.object descarta en silencio las claves de sobra: sin la línea de

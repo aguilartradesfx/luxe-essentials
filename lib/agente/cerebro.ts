@@ -10,6 +10,15 @@ const ESQUEMA = {
   type: 'object',
   properties: {
     respuesta: { type: 'string' },
+    // El juicio de si lo que llegó fue una respuesta automática del sistema
+    // del OTRO lado (un saludo de bienvenida que salta solo, un aviso de
+    // fuera de horario, "en breve le atenderemos") lo hace el modelo, no una
+    // lista de palabras: los mensajes automáticos son demasiado variados para
+    // eso. Ver la instrucción completa, con ejemplos de los dos lados, en
+    // PROMPT_SISTEMA. `procesar.ts` es quien actúa sobre este campo: si viene
+    // en true, no manda "respuesta", no cuenta el turno y no toca la ficha
+    // del contacto.
+    esAutomatico: { type: 'boolean' },
     datos: {
       type: 'object',
       properties: {
@@ -34,7 +43,7 @@ const ESQUEMA = {
       additionalProperties: false,
     },
   },
-  required: ['respuesta', 'datos'],
+  required: ['respuesta', 'esAutomatico', 'datos'],
   additionalProperties: false,
 } as const;
 
@@ -42,6 +51,7 @@ const ESQUEMA = {
 // no confiamos en ella para algo que se le envía a un cliente real.
 const salidaSchema = z.object({
   respuesta: z.string().trim().min(1).max(1500),
+  esAutomatico: z.boolean(),
   datos: z.object({
     nombre: z.string().nullable(),
     email: z.string().nullable(),

@@ -270,6 +270,74 @@ describe('guarda 3 — anti-duplicado', () => {
   });
 });
 
+// La prueba de 'true' y la de 'false' son deliberadamente idénticas salvo por
+// ese único campo en la salida del modelo: si difirieran en algo más (el
+// mensaje entrante, la ficha, lo que sea), podrían pasar por una razón
+// distinta a la que dicen probar.
+describe('mensaje automático del otro lado', () => {
+  const salidaAutomatica = (esAutomatico: boolean) => ({
+    ok: true as const,
+    salida: {
+      respuesta: 'Hola, ¿tu nombre?',
+      esAutomatico,
+      datos: { ...DATOS_VACIOS, nombre: 'Restaurante Café Mediterráneo' },
+    },
+  });
+
+  it('con esAutomatico en true: no manda el mensaje, no cuenta el turno, no escribe el contacto', async () => {
+    generar.mockResolvedValue(salidaAutomatica(true));
+    const r = await procesar('c1', deps);
+
+    expect(r.desenlace).toBe('mensaje-automatico');
+    expect(enviarMensaje).not.toHaveBeenCalled();
+    expect(actualizarContacto).not.toHaveBeenCalled();
+    expect(agregarNota).not.toHaveBeenCalled();
+    expect(dispararWorkflow).not.toHaveBeenCalled();
+    expect(guardar).not.toHaveBeenCalledWith(
+      'c1', expect.objectContaining({ turnos: expect.anything() }), expect.anything(),
+    );
+  });
+
+  it('con esAutomatico en false: sí manda el mensaje, cuenta el turno y escribe el contacto', async () => {
+    generar.mockResolvedValue(salidaAutomatica(false));
+    const r = await procesar('c1', deps);
+
+    expect(r.desenlace).toBe('respondido');
+    expect(enviarMensaje).toHaveBeenCalled();
+    expect(actualizarContacto).toHaveBeenCalled();
+    expect(guardar).toHaveBeenCalledWith('c1', expect.objectContaining({ turnos: 1 }), expect.anything());
+  });
+
+  // El mensaje entrante igual queda marcado como procesado — eso lo hace
+  // `tomarMensaje`, ANTES de llamar a Claude — para que un reintento del
+  // webhook no lo vuelva a evaluar ni le vuelva a pagar la llamada al modelo.
+  it('marca el mensaje entrante como procesado aunque no se responda', async () => {
+    generar.mockResolvedValue(salidaAutomatica(true));
+    await procesar('c1', deps);
+    expect(tomarMensaje).toHaveBeenCalledWith('c1', 'in-1', expect.anything());
+  });
+
+  // El arriendo de 90 s se toma antes de llamar a Claude; si no se suelta acá,
+  // un mensaje real de la persona que llegue segundos después del saludo
+  // automático quedaría bloqueado hasta que expire.
+  it('libera el arriendo del contacto cuando calla por mensaje automático', async () => {
+    generar.mockResolvedValue(salidaAutomatica(true));
+    await procesar('c1', deps);
+    expect(guardar).toHaveBeenCalledWith('c1', { procesando_hasta: null }, expect.anything());
+  });
+
+  it('registra en el log el contacto y un fragmento del mensaje entrante', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    hidratar.mockResolvedValue(conversacionCon([entrante({ texto: 'Bienvenidos al Restaurante Café Mediterráneo' })]));
+    generar.mockResolvedValue(salidaAutomatica(true));
+    await procesar('c1', deps);
+    expect(espia).toHaveBeenCalledWith(
+      expect.anything(), 'contacto:', 'c1', expect.stringContaining('Bienvenidos al Restaurante Café Mediterráneo'),
+    );
+    espia.mockRestore();
+  });
+});
+
 describe('tope de turnos', () => {
   it('en el último turno permitido responde y deja el contacto agotado', async () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: config.TOPE_TURNOS - 1 });

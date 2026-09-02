@@ -16,7 +16,7 @@ import { registrarIntencion } from '@/lib/cotizador/borrador';
 // SIGUIENTE el que sale por 'inactivo'.
 export type Desenlace =
   | 'respondido' | 'sin-entrante' | 'humano-presente' | 'duplicado'
-  | 'inactivo' | 'canal-no-soportado' | 'stop-bot' | 'error';
+  | 'inactivo' | 'canal-no-soportado' | 'stop-bot' | 'mensaje-automatico' | 'error';
 
 export type DepsProcesar = {
   db: Db;
@@ -155,6 +155,28 @@ export async function procesar(
   if (!generado.ok) {
     await liberarArriendo(contactId, db);
     return { desenlace: 'error', detalle: generado.error };
+  }
+
+  // El otro lado también puede tener un bot: un saludo de bienvenida que
+  // salta solo, un aviso de fuera de horario. Nadie leyó nuestro mensaje
+  // todavía, así que contestar sería hablarle a ese bot. El criterio es del
+  // modelo (ver MENSAJES AUTOMÁTICOS en PROMPT_SISTEMA), deliberadamente
+  // conservador: ante la duda marca false y este bloque no se ejecuta. No se
+  // manda "respuesta", no se cuenta el turno y no se toca la ficha del
+  // contacto — el nombre de un saludo automático es el del negocio, no el de
+  // quien vaya a escribir después, y guardarlo contaminaría la ficha. El
+  // mensaje SÍ queda marcado como procesado: `tomarMensaje` ya escribió
+  // `ultimo_mensaje_id` antes de esta llamada, así que un reintento del
+  // webhook no lo vuelve a evaluar. Se libera el arriendo para que, si la
+  // persona real escribe segundos después, ese mensaje nuevo no espere a que
+  // expire el candado de 90 s de éste.
+  if (generado.salida.esAutomatico) {
+    console.error(
+      '[agente] Mensaje entrante identificado como respuesta automática; no se responde.',
+      'contacto:', contactId, (ultimo.texto || '').slice(0, 200),
+    );
+    await liberarArriendo(contactId, db);
+    return { desenlace: 'mensaje-automatico' };
   }
 
   const envio = await enviarMensaje(

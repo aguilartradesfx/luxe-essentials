@@ -91,4 +91,31 @@ describe('config del agente', () => {
       expect(p).toContain('si el cliente confirma un dato de la ficha');
     });
   });
+
+  // No se puede probar de forma determinista que el modelo vaya a juzgar bien
+  // un saludo automático real contra un mensaje humano corto — eso lo decide
+  // el LLM turno a turno. Lo que sí se puede anclar es que la INSTRUCCIÓN
+  // está: qué cuenta como automático, que el criterio es conservador (ante la
+  // duda, es humano), y los ejemplos de los dos lados.
+  describe('mensajes automáticos', () => {
+    it('explica qué cuenta como un mensaje automático del otro lado', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('esautomatico');
+      expect(p).toContain('saludo de bienvenida');
+      expect(p).toContain('fuera de horario');
+    });
+
+    it('es explícitamente conservador: ante la duda, trata el mensaje como humano', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('ante cualquier duda');
+      expect(p).toContain('peor equivocarse hacia el silencio');
+    });
+
+    it('da un ejemplo de mensaje automático y uno humano de los dos lados', () => {
+      const p = config.PROMPT_SISTEMA;
+      expect(p).toContain('En seguida le atenderemos');
+      expect(p).toContain('esAutomatico: true');
+      expect(p).toContain('esAutomatico: false');
+    });
+  });
 });
