@@ -391,7 +391,19 @@ export function VistaCrear({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `entradas` ya está memoizado sobre `lineas`.
   }, [entradas, tasaIva, bordadoEspecial]);
 
+  // Revisión final (hallazgo importante): antes esta función limpiaba
+  // `creado` sin condición, así que un clic en cualquier "Agregar" del
+  // catálogo (a un clic de distancia desde que existe el desplegable por
+  // familia) reactivaba "Cotizar y enviar" con el mismo cliente todavía
+  // cargado — el vendedor terminaba mandando un segundo PDF, con un número
+  // de cotización nuevo, al mismo hotel, sin darse cuenta de que ya lo
+  // había mandado. Ahora, si la cotización ya se envió, agregar un
+  // producto no hace nada: la única forma de volver a habilitar el envío
+  // es pedir una cotización nueva de forma explícita (botón "Nueva
+  // cotización", que sí limpia todo) — igual que ya vale para `quitar` y
+  // `cambiarCantidad`, que nunca tocaron `creado`.
   function agregar(skuId: string) {
+    if (creado) return;
     setResultado(null);
     setCreado(false);
     setLineas((prev) => {
@@ -413,7 +425,10 @@ export function VistaCrear({
 
   // Reinicia el formulario para armar una cotización nueva. Es la única
   // forma de volver a habilitar el envío después de uno exitoso — un
-  // segundo clic sobre el mismo botón ya no alcanza, a propósito.
+  // segundo clic sobre el mismo botón ya no alcanza, a propósito, y
+  // (revisión final) tampoco alcanza agregar otro producto: `agregar`,
+  // arriba, ahora respeta el mismo criterio en vez de reabrir el envío por
+  // su cuenta.
   function nuevaCotizacion() {
     setLineas([]);
     setCliente(CLIENTE_VACIO);

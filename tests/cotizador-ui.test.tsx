@@ -937,6 +937,48 @@ describe('Cotizador', () => {
     expect(screen.getByRole('button', { name: /nueva cotización/i })).toBeInTheDocument();
   });
 
+  // Revisión final (hallazgo importante): antes, agregar un producto del
+  // catálogo tras un envío exitoso reactivaba "Cotizar y enviar" con el
+  // mismo cliente todavía cargado -- el vendedor podía mandar un segundo
+  // PDF al mismo hotel de un clic, sin que nada se lo advirtiera. El
+  // catálogo desplegable por familia puso los 70 productos a un clic de
+  // distancia y multiplicó las chances de que pase.
+  it('agregar otro producto tras un envío exitoso no reabre "Cotizar y enviar"', async () => {
+    const fetchEspiado = mockFetch();
+    const usuario = userEvent.setup();
+    render(<Cotizador />);
+    await entrar(usuario);
+    await agregar(usuario, 'set de 600 hilos king');
+    await llenarCliente(usuario, { nombre: 'Ana Pérez', email: 'ana@empresa.com' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /cotizar y enviar/i })).not.toBeDisabled();
+    });
+    await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/enviada a/i)).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /cotización guardada/i })).toBeDisabled();
+
+    // Un clic sobre CUALQUIER "Agregar" del catálogo -- mismo botón que
+    // multiplicó el desplegable por familia.
+    await agregar(usuario, 'filipina');
+
+    // El botón sigue leyendo "Cotización guardada" y deshabilitado: no
+    // volvió a ser "Cotizar y enviar". El único camino de vuelta sigue
+    // siendo "Nueva cotización".
+    expect(screen.getByRole('button', { name: /cotización guardada/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^cotizar y enviar$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /nueva cotización/i })).toBeInTheDocument();
+
+    // Y ningún segundo envío salió disparado hacia el servidor.
+    const llamadasAlEnvio = fetchEspiado.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion'),
+    );
+    expect(llamadasAlEnvio).toHaveLength(1);
+  });
+
   it('un fallo de red en la vista previa se muestra en español, no el mensaje crudo del navegador', async () => {
     mockFetch({ fallarRed: 'previsualizar' });
     const usuario = userEvent.setup();
