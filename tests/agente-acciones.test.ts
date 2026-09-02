@@ -299,6 +299,25 @@ describe('leerContacto', () => {
     if (r.ok) return;
     expect(r.error).toContain('ECONNRESET');
   });
+
+  // `hidratar` (conversacion.ts) ya reintentaba un 5xx antes de rendirse;
+  // `leerContacto` no, así que un 429/500 pasajero de GHL dejaba al cliente
+  // sin respuesta sin que nada lo intentara de nuevo. Mismo criterio acá.
+  it('reintenta una vez ante un 5xx y sale adelante', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'boom' })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ contact: { tags: [] } }) });
+    const r = await leerContacto('c1', { ...deps, fetchImpl });
+    expect(r.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('no reintenta un 401: reintentar un problema de permisos sólo gasta tiempo', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'no autorizado' });
+    await leerContacto('c1', { ...deps, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('resumenParaNota', () => {

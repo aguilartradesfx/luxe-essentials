@@ -16,6 +16,28 @@ function cabeceras(apiKey: string, version: string) {
 
 const ASUNTO_CORREO = 'Recibimos tu mensaje — Luxe Essentials';
 
+// Mismo criterio de reintento que usa `hidratar` en conversacion.ts: un
+// intento, y sólo uno más, ante un fallo de red o un 5xx. Un 4xx no se
+// reintenta — un problema de permisos o de parámetros no mejora insistiendo,
+// y aquí encima el cliente estaría esperando mientras tanto. Se mantiene una
+// copia local en vez de importar la de conversacion.ts porque esa función
+// arma sus propias cabeceras (versión de conversaciones, GET siempre); acá
+// hace falta variar versión de API, método y cuerpo según el llamador
+// (`leerContacto` es GET, `dispararWorkflow` es POST con body), así que
+// `intentar` recibe el fetch entero ya armado y esta función sólo decide
+// cuándo repetirlo.
+async function conReintento(intentar: () => Promise<Response>): Promise<Response> {
+  try {
+    const res = await intentar();
+    if (res.status < 500) return res;
+  } catch {
+    // Cae al reintento de abajo. Si ese también falla, lo recoge el
+    // try/catch de quien llama.
+  }
+  await new Promise((r) => setTimeout(r, 400));
+  return intentar();
+}
+
 export async function enviarMensaje(
   p: { contactId: string; canal: CanalEnvio; texto: string },
   deps: DepsEscritura,
@@ -79,14 +101,19 @@ export type FichaContacto = {
 // cuesta ninguna llamada adicional. Nunca lanza: devuelve el error para que
 // quien llama decida qué hacer con la lectura fallida (ver procesar.ts para
 // la decisión que toma).
+//
+// Reintenta una vez ante un 5xx o un fallo de red (ver `conReintento` arriba):
+// antes no reintentaba nada, así que un 429/500 pasajero de GHL dejaba al
+// cliente sin respuesta sin que nada lo intentara de nuevo — `hidratar`, que
+// corre justo al lado en el mismo turno, sí reintenta desde el principio.
 export async function leerContacto(
   contactId: string, deps: DepsEscritura,
 ): Promise<{ ok: true } & FichaContacto | { ok: false; error: string }> {
   const { apiKey, fetchImpl = fetch } = deps;
   try {
-    const res = await fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
+    const res = await conReintento(() => fetchImpl(`${config.BASE_GHL}/contacts/${contactId}`, {
       headers: cabeceras(apiKey, config.VERSION_CONTACTOS),
-    });
+    }));
     const texto = await res.text();
     if (!res.ok) return { ok: false, error: `GHL lectura de contacto ${res.status}: ${texto.slice(0, 200)}` };
 

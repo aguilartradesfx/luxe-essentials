@@ -66,42 +66,35 @@ export async function procesar(
   const fila = await leerOCrear(contactId, db);
   if (fila.estado !== 'activo') return { desenlace: 'inactivo', detalle: fila.estado };
 
-  // Guarda 0, la más temprana de todas: si un asesor puso la etiqueta
-  // Stop_bot a mano, el agente no gasta nada más en este turno. Va antes de
-  // hidratar la conversación, preparar medios o llamar al modelo — pedirle a
-  // Claude qué contestar para después tirar la respuesta sería pagar por
-  // nada. Es un interruptor vivo: se revisa en cada mensaje entrante (no se
-  // persiste ningún latch como en la guarda del humano), así que en cuanto la
-  // etiqueta se quita el agente vuelve a responder solo.
-  //
-  // Si la lectura de GHL falla, el agente se calla igual (fail-closed) en vez
-  // de responder. Se eligió así porque el costo de las dos opciones no es
-  // simétrico: un cliente que espera un poco más se recupera solo —no se
-  // persiste nada en este punto, así que su próximo mensaje (o un reintento
-  // de webhook de GHL) vuelve a intentar el turno desde cero—, mientras que
-  // una respuesta que se le habla encima a un asesor que puso la etiqueta ya
-  // salió y no hay forma de deshacerla. Es la misma asimetría que ya rige la
-  // guarda del humano más abajo (`huboRespuestaHumana`): ante la duda sobre
-  // si hay alguien más atendiendo, el agente se calla.
-  const contacto = await leerContacto(contactId, { apiKey: ghlApiKey, fetchImpl });
-  if (!contacto.ok) {
-    console.error(
-      '[agente] No se pudieron leer las etiquetas del contacto; se calla por seguridad.',
-      'contacto:', contactId, contacto.error,
-    );
-    return { desenlace: 'stop-bot', detalle: 'lectura de etiquetas fallida' };
-  }
-  if (config.tieneEtiquetaStopBot(contacto.etiquetas)) {
-    console.error('[agente] Se calla: el contacto tiene la etiqueta Stop_bot.', 'contacto:', contactId);
-    return { desenlace: 'stop-bot' };
-  }
-
   const hidratado = await hidratar(contactId, { apiKey: ghlApiKey, locationId, fetchImpl });
   if (!hidratado.ok) return { desenlace: 'error', detalle: hidratado.error };
   const { conversacion } = hidratado;
 
-  // Guarda 2, antes que nada: si el asesor ya entró, el agente no vuelve a
-  // hablar aunque el cliente siga escribiendo.
+  // ORDEN DE LAS DOS GUARDAS SIGUIENTES — a propósito, no accidental.
+  //
+  // La guarda del humano (abajo) escribe un LATCH PERMANENTE: en cuanto se
+  // detecta, `estado` pasa a 'humano' y el contacto no vuelve a pasar por
+  // aquí nunca más. La guarda de la etiqueta Stop_bot (más abajo todavía) es
+  // un INTERRUPTOR REVERSIBLE: no persiste nada, se revisa de cero en cada
+  // mensaje, y en cuanto el asesor la quita el agente vuelve a hablar solo.
+  //
+  // Antes la de Stop_bot corría PRIMERO, antes incluso de hidratar. Eso
+  // rompía lo permanente: un asesor que etiqueta Stop_bot y LUEGO responde
+  // deja al contacto con un saliente humano real en la conversación, pero la
+  // guarda de la etiqueta cortaba el turno antes de que `hidratar` trajera
+  // esa conversación y antes de que `huboRespuestaHumana` pudiera verla — el
+  // latch nunca se escribía. Semanas después alguien quita la etiqueta, y
+  // `huboRespuestaHumana` ya no ve nada (sólo mira salientes posteriores al
+  // último entrante), así que el agente vuelve a hablarle encima al asesor.
+  //
+  // Por eso ahora lo permanente se revisa PRIMERO: si hay un saliente humano
+  // en la conversación, el latch se escribe pase lo que pase con la
+  // etiqueta, y el turno termina ahí. La etiqueta sólo importa cuando el
+  // latch NO se disparó. El costo de este orden es que ahora `hidratar` (una
+  // lectura, no la llamada a Claude) corre siempre, incluso para un contacto
+  // etiquetado — pero lo caro de verdad, `generar`, sigue evitándose: la
+  // etiqueta corta el turno antes de llegar ahí. Que nadie vuelva a invertir
+  // este orden sin volver a leer este comentario.
   if (huboRespuestaHumana(conversacion, fila.enviados)) {
     const errorLatch = await guardar(contactId, { estado: 'humano' }, db);
     // Este latch es lo único que hace permanente la guarda. Si no se persiste,
@@ -117,6 +110,37 @@ export async function procesar(
       );
     }
     return { desenlace: 'humano-presente' };
+  }
+
+  // Guarda de la etiqueta Stop_bot: interruptor reversible (ver el comentario
+  // grande de arriba sobre el orden). Va antes de preparar medios o llamar al
+  // modelo — pedirle a Claude qué contestar para después tirar la respuesta
+  // sería pagar por nada.
+  //
+  // Si la lectura de GHL falla (con reintento — ver `leerContacto` en
+  // acciones.ts), el agente se calla igual (fail-closed) en vez de responder.
+  // Se eligió así porque el costo de las dos opciones no es simétrico: un
+  // cliente que espera un poco más se recupera solo —no se persiste nada en
+  // este punto, así que su próximo mensaje (o un reintento de webhook de GHL)
+  // vuelve a intentar el turno desde cero—, mientras que una respuesta que se
+  // le habla encima a un asesor que puso la etiqueta ya salió y no hay forma
+  // de deshacerla. Misma asimetría que la guarda del humano de arriba.
+  //
+  // El desenlace de esta lectura fallida es 'error', NO 'stop-bot': son dos
+  // cosas muy distintas en los logs — un asesor que silenció el contacto a
+  // propósito, contra GoHighLevel caído — y antes de este arreglo se
+  // reportaban igual, así que no había forma de distinguir una de la otra.
+  const contacto = await leerContacto(contactId, { apiKey: ghlApiKey, fetchImpl });
+  if (!contacto.ok) {
+    console.error(
+      '[agente] No se pudo leer la ficha del contacto; se calla por seguridad.',
+      'contacto:', contactId, contacto.error,
+    );
+    return { desenlace: 'error', detalle: `lectura de contacto: ${contacto.error}` };
+  }
+  if (config.tieneEtiquetaStopBot(contacto.etiquetas)) {
+    console.error('[agente] Se calla: el contacto tiene la etiqueta Stop_bot.', 'contacto:', contactId);
+    return { desenlace: 'stop-bot' };
   }
 
   // Guarda 1: si lo último no es un entrante real, no hay nada que contestar.

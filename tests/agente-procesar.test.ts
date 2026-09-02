@@ -141,7 +141,7 @@ describe('ficha del CRM', () => {
   });
 });
 
-describe('guarda 0 — etiqueta Stop_bot', () => {
+describe('guarda — etiqueta Stop_bot (interruptor reversible)', () => {
   it('no responde cuando el contacto tiene la etiqueta', async () => {
     leerContacto.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
     const r = await procesar('c1', deps);
@@ -149,12 +149,14 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
     expect(enviarMensaje).not.toHaveBeenCalled();
   });
 
-  // Se comprueba antes de hidratar: pedirle a Claude qué contestar para
-  // después tirar la respuesta sería pagar por nada.
-  it('ni siquiera hidrata la conversación cuando la etiqueta está puesta', async () => {
+  // Se comprueba antes de llamar al modelo: pedirle a Claude qué contestar
+  // para después tirar la respuesta sería pagar por nada. `hidratar` SÍ
+  // corre igual (ver la guarda del humano, más abajo, y su porqué), pero
+  // `generar` —lo caro de verdad— no.
+  it('hidrata la conversación (para poder revisar si hay humano) pero no llama al modelo', async () => {
     leerContacto.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
     await procesar('c1', deps);
-    expect(hidratar).not.toHaveBeenCalled();
+    expect(hidratar).toHaveBeenCalled();
     expect(generar).not.toHaveBeenCalled();
   });
 
@@ -189,13 +191,25 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
 
   // Decisión explícita: si la lectura de GHL falla, el agente se calla
   // (fail-closed) en vez de arriesgarse a hablarle encima a un asesor. Ver el
-  // comentario en procesar.ts para el porqué.
-  it('se calla por seguridad si no pudo leer las etiquetas del contacto', async () => {
+  // comentario en procesar.ts para el porqué. El desenlace es 'error', no
+  // 'stop-bot': antes de este arreglo eran indistinguibles en el log, y son
+  // dos cosas muy distintas (un asesor que silenció al contacto a propósito,
+  // contra GoHighLevel caído).
+  it('se calla por seguridad si no pudo leer la ficha del contacto, con desenlace propio', async () => {
     leerContacto.mockResolvedValue({ ok: false, error: 'GHL lectura de contacto 500: boom' });
     const r = await procesar('c1', deps);
-    expect(r.desenlace).toBe('stop-bot');
-    expect(hidratar).not.toHaveBeenCalled();
+    expect(r.desenlace).toBe('error');
+    expect(r.detalle).toContain('lectura de contacto');
     expect(enviarMensaje).not.toHaveBeenCalled();
+  });
+
+  // Punto 3 de la revisión: el `console.error` de esta rama no tenía prueba.
+  it('registra en el log, con el id del contacto, cuando no pudo leer la ficha', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    leerContacto.mockResolvedValue({ ok: false, error: 'GHL lectura de contacto 500: boom' });
+    await procesar('c1', deps);
+    expect(espia).toHaveBeenCalledWith(expect.anything(), 'contacto:', 'c1', 'GHL lectura de contacto 500: boom');
+    espia.mockRestore();
   });
 
   it('registra en el log, con el id del contacto, cuando se calla por la etiqueta', async () => {
@@ -208,6 +222,29 @@ describe('guarda 0 — etiqueta Stop_bot', () => {
 
   it('no gasta la llamada a GHL cuando el contacto ya estaba inactivo', async () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, estado: 'humano' });
+    await procesar('c1', deps);
+    expect(leerContacto).not.toHaveBeenCalled();
+  });
+});
+
+// Hallazgo 1 de la revisión final: antes, la guarda de Stop_bot corría ANTES
+// de hidratar, así que un asesor que etiqueta Stop_bot y LUEGO responde
+// dejaba el latch de humano sin escribir — `huboRespuestaHumana` nunca
+// llegaba a mirar esa conversación. Semanas después, alguien quita la
+// etiqueta y el agente vuelve a hablarle encima al asesor.
+describe('orden de las guardas: el latch de humano es permanente, la etiqueta no', () => {
+  it('escribe el latch de humano aunque el contacto tenga puesta la etiqueta Stop_bot', async () => {
+    leerContacto.mockResolvedValue({ ok: true, etiquetas: ['Stop_bot'] });
+    hidratar.mockResolvedValue(conversacionCon([entrante(), entrante({ id: 'del-asesor', direccion: 'outbound' })]));
+    const r = await procesar('c1', deps);
+    expect(r.desenlace).toBe('humano-presente');
+    expect(guardar).toHaveBeenCalledWith('c1', expect.objectContaining({ estado: 'humano' }), expect.anything());
+  });
+
+  // La etiqueta ni siquiera se llega a leer: el turno ya terminó por el
+  // latch de humano antes de que `leerContacto` se necesite para nada.
+  it('ni siquiera lee la etiqueta cuando ya detectó un saliente humano', async () => {
+    hidratar.mockResolvedValue(conversacionCon([entrante(), entrante({ id: 'del-asesor', direccion: 'outbound' })]));
     await procesar('c1', deps);
     expect(leerContacto).not.toHaveBeenCalled();
   });
