@@ -216,6 +216,26 @@ describe('dispararWorkflow', () => {
     const err = await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
     expect(err).toContain('500');
   });
+
+  // Un contacto que sale de este turno 'agotado' o 'email_respondido' no
+  // vuelve a pasar por procesar.ts: no hay ningún turno futuro que reintente
+  // este aviso. Un reintento inmediato ante un 5xx pasajero es la única red
+  // que le queda a esos dos casos (ver el comentario grande en acciones.ts).
+  it('reintenta una vez ante un 5xx y sale adelante', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'boom' })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '{}' });
+    const err = await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
+    expect(err).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('no reintenta un 4xx: reintentar un problema de permisos o parámetros sólo gasta tiempo', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 422, text: async () => 'boom' });
+    await dispararWorkflow('c1', 'workflow-cualquiera', { ...deps, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('horaEventoGHL', () => {

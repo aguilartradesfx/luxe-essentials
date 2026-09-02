@@ -233,7 +233,11 @@ export async function procesar(
   // procesan `estado === 'activo'`), no hay ningún turno futuro de este
   // contacto que reintente el aviso: un lead cualificado, o que ya respondió,
   // del que nadie en Luxe se entera — que es justo lo que este agente existe
-  // para evitar.
+  // para evitar. Por eso `dispararWorkflow` (acciones.ts) reintenta una vez
+  // ante un 5xx/fallo de red antes de darse por vencido: para estos dos
+  // estados terminales es la única red que existe contra un fallo pasajero.
+  // Ver el comentario de esa función para el porqué de elegir un reintento y
+  // no otro mecanismo, y qué pasa si el reintento también falla.
   // El estado se persiste PRIMERO, en cuanto el mensaje salió, porque es lo
   // único de lo que dependen las guardas del turno siguiente: perder `enviados`
   // deja al agente confundiendo su propio saliente con el de un asesor. Las

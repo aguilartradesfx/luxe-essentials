@@ -226,19 +226,40 @@ export function horaEventoGHL(ahora: Date = new Date()): string {
 // workflow y SE SALTA cualquier trigger configurado en la interfaz de
 // GoHighLevel. Por eso nadie debe configurar ahí, además, un trigger para el
 // mismo evento — el resultado serían dos disparos del mismo aviso.
+//
+// Reintenta una vez ante un 5xx o un fallo de red (ver `conReintento`
+// arriba). Importa más aquí que en casi cualquier otra escritura de este
+// archivo: `procesar.ts` sólo estampa `notificado_at` cuando este disparo
+// sale bien, así que un fallo aquí SÍ deja rastro para reintentar (ver el
+// comentario de `debeAvisar`/`avisar` en procesar.ts) — pero para los casos
+// 'agotado' y 'email_respondido' ese rastro no sirve de nada, porque el
+// contacto sale de este turno en un estado terminal y ningún turno futuro
+// vuelve a llamar a `debeAvisar`. Ahí un 500 pasajero de GHL pierde el aviso
+// para siempre SIN el reintento. Con un solo reintento inmediato no
+// desaparece el riesgo (dos 5xx seguidos siguen perdiendo el aviso, y eso
+// sigue sin dejar más rastro que el `console.error` del llamador), pero sí
+// lo que costó el lead real que documenta el comentario de
+// `WORKFLOW_AVISO_INTERNO` en config.ts: un 500 AISLADO, que es la forma más
+// común de fallo pasajero de una API. Se elige este mecanismo (reintento
+// inmediato) y no "no estampar el estado terminal" ni una cola de reintentos
+// aparte porque los otros dos piden guardar más estado del que este agente
+// persiste hoy (un contacto 'agotado' que nunca se reintenta desde otro
+// lado, o una tabla de reintentos nueva) para un beneficio marginal sobre
+// esto: la inmensa mayoría de los 5xx de GHL vistos en producción hasta
+// ahora han sido puntuales, no rachas.
 export async function dispararWorkflow(
   contactId: string, workflowId: string, deps: DepsEscritura,
 ): Promise<string | undefined> {
   const { apiKey, fetchImpl = fetch } = deps;
   try {
-    const res = await fetchImpl(
+    const res = await conReintento(() => fetchImpl(
       `${config.BASE_GHL}/contacts/${contactId}/workflow/${workflowId}`,
       {
         method: 'POST',
         headers: cabeceras(apiKey, config.VERSION_CONTACTOS),
         body: JSON.stringify({ eventStartTime: horaEventoGHL() }),
       },
-    );
+    ));
     if (!res.ok) return `GHL workflow ${res.status}: ${(await res.text()).slice(0, 200)}`;
     return undefined;
   } catch (err) {
