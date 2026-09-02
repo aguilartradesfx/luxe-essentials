@@ -89,6 +89,34 @@ describe('actualizarContacto', () => {
     expect('firstName' in body).toBe(false);
   });
 
+  // Antes de este arreglo, `persona_contacto` era el ÚNICO campo de esta
+  // función que se pisaba sin mirar si ya tenía algo — todos los demás
+  // (firstName, email, phone, companyName, source) sólo se rellenan si
+  // están vacíos. El riesgo es real: en una muestra de 100 contactos de la
+  // base importada, 92 traen un nombre de NEGOCIO en firstName, y ahora que
+  // el modelo recibe la ficha del CRM puede devolver ese mismo nombre
+  // comercial como si fuera el de la persona — justo de lo que este campo se
+  // creó para protegerse.
+  it('no pisa persona_contacto si el contacto ya tenía un valor ahí', async () => {
+    const fetchImpl = contactoYPut({
+      firstName: 'Hotel Papagayo',
+      customFields: [{ key: 'contact.persona_contacto', value: 'María Rodríguez' }],
+    });
+    await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana Pérez' }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect('customFields' in body).toBe(false);
+  });
+
+  // Si `customFields` no trae nada para esta clave (o no viene del todo), se
+  // trata como vacío — igual que hoy. El arreglo sólo puede mejorar la
+  // situación (dejar de pisar cuando SÍ hay algo), nunca empeorarla.
+  it('sí escribe persona_contacto cuando el contacto no tiene ningún valor ahí', async () => {
+    const fetchImpl = contactoYPut({ firstName: 'Hotel Papagayo', customFields: [] });
+    await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana Pérez' }, { ...deps, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(body.customFields).toEqual([{ key: 'contact.persona_contacto', field_value: 'Ana Pérez' }]);
+  });
+
   it('usa la versión de contactos y sólo manda lo que tiene valor', async () => {
     const fetchImpl = contactoYPut({});
     await actualizarContacto('c1', { ...DATOS_VACIOS, nombre: 'Ana Pérez', email: 'ana@x.com' }, { ...deps, fetchImpl });

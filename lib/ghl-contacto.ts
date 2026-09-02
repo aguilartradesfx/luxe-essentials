@@ -8,18 +8,22 @@ import { config } from '@/lib/agente/config';
 // borraba tags, nombre y origen (hallazgo C2 de la revisión final).
 //
 // Reglas, todas verificadas contra la API real (ver docs/ghl-estimate-payload.md,
-// sección "Ronda de correcciones 2"):
+// sección "Ronda de correcciones 2"), salvo la última, marcada aparte:
 // - LEE el contacto antes de escribir: el PUT sobrescribe, y un asesor pudo
 //   haber corregido un dato a mano.
 // - Sólo rellena campos vacíos (firstName, email, phone, companyName,
-//   source): nunca pisa un valor que el contacto ya tenía.
+//   source, y también el personalizado persona_contacto): nunca pisa un
+//   valor que el contacto ya tenía.
 // - Los tags del PUT reemplazan el array completo, así que siempre se
 //   conservan los previos y se suman los nuevos.
 // - `city` NUNCA se escribe: en la base importada ese campo lleva la ruta de
 //   visita comercial, no la ciudad del cliente.
 // - El nombre de la PERSONA (no el del negocio) va también a un campo
 //   personalizado, porque en la base importada `firstName` lleva el nombre
-//   comercial.
+//   comercial. La detección de "¿ya tenía un valor?" para este campo en
+//   particular NO está verificada contra la API real (ver el comentario
+//   junto a `vacioPersonaContacto` más abajo): a diferencia de los demás,
+//   este campo es personalizado y su lectura no tiene un shape confirmado.
 const BASE = 'https://services.leadconnectorhq.com';
 const VERSION_CONTACTOS = '2021-07-28';
 
@@ -80,10 +84,44 @@ export async function escribirContactoSinPisar(
     return v === undefined || v === null || v === '';
   };
 
+  // `persona_contacto` es un campo personalizado, no uno nativo como
+  // firstName/email/phone, así que no vive suelto en `actual[campo]`: GHL lo
+  // devuelve dentro de `actual.customFields`, un array de entradas. No hay
+  // forma verificada contra la API real de qué shape exacto trae esa lectura
+  // (a diferencia del resto de este archivo, que sí está confirmado en
+  // docs/ghl-estimate-payload.md) — el que ESCRIBE lo identifica por `key`
+  // (ver `cuerpo.customFields` más abajo), así que acá se busca por `key` o
+  // por `id` para cubrir las dos formas plausibles. Si ninguna entrada
+  // matchea, o `customFields` no viene en la lectura, se trata como vacío —
+  // es decir, se escribe igual. Eso reproduce el comportamiento de HOY
+  // (siempre escribe) para el caso en que esta detección no encuentre nada;
+  // el arreglo sólo puede mejorar la situación (deja de pisar cuando SÍ
+  // detecta un valor existente), nunca empeorarla.
+  const vacioPersonaContacto = () => {
+    const campos = Array.isArray(actual.customFields)
+      ? (actual.customFields as Record<string, unknown>[])
+      : [];
+    const existente = campos.find(
+      (c) => c.key === config.CAMPO_PERSONA || c.id === config.CAMPO_PERSONA,
+    );
+    if (!existente) return true;
+    const valor = existente.value ?? existente.field_value;
+    return valor === undefined || valor === null || valor === '';
+  };
+
   const cuerpo: Record<string, unknown> = {};
   if (campos.nombre) {
     if (vacio('firstName')) Object.assign(cuerpo, partirNombre(campos.nombre));
-    cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: campos.nombre }];
+    // Mismo "sólo rellena vacíos" que el resto de los campos de esta función
+    // — antes éste era el único que se pisaba sin mirar. El riesgo es real,
+    // no teórico: en una muestra de 100 contactos de la base importada, 92
+    // traen un nombre de NEGOCIO en firstName ("supermercado poval",
+    // "restaurante ardere"...), y ahora que el modelo recibe la ficha del
+    // CRM puede devolver ese mismo nombre comercial como si fuera el de la
+    // persona — justo de lo que este campo se creó para protegerse.
+    if (vacioPersonaContacto()) {
+      cuerpo.customFields = [{ key: config.CAMPO_PERSONA, field_value: campos.nombre }];
+    }
   }
   if (campos.email && vacio('email')) cuerpo.email = campos.email;
   if (campos.telefono && vacio('phone')) cuerpo.phone = campos.telefono;
