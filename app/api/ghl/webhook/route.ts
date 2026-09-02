@@ -67,13 +67,13 @@ export async function POST(request: Request) {
         anthropicKey: process.env.LUXE_ANTHROPIC_API_KEY ?? '',
         openaiKey: process.env.LUXE_OPENAI_API_KEY ?? '',
       });
-      // Todos los desenlaces se registran, no sólo el error. Los otros seis
+      // Todos los desenlaces se registran, no sólo el error. Los otros siete
       // ('sin-entrante', 'humano-presente', 'canal-no-soportado', 'duplicado',
-      // desde que existe la etiqueta Stop_bot, 'stop-bot', y desde que el
-      // modelo distingue respuestas automáticas del otro lado,
-      // 'mensaje-automatico') son decisiones deliberadas de no responder, y
-      // sin dejarlas por escrito la pregunta "¿por qué no le contestó a este
-      // cliente?" no tiene respuesta.
+      // 'stop-bot', 'mensaje-automatico' e 'inactivo' —éste el único
+      // permanente: un contacto que ya está en 'humano', 'agotado' o
+      // 'email_respondido' no vuelve a intentarlo nunca—) son decisiones
+      // deliberadas de no responder, y sin dejarlas por escrito la pregunta
+      // "¿por qué no le contestó a este cliente?" no tiene respuesta.
       if (resultado.desenlace === 'error') {
         console.error('[agente] Turno abandonado.', 'contacto:', contactId, resultado.detalle);
       } else {
