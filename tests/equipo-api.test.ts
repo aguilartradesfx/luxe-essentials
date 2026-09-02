@@ -919,6 +919,90 @@ describe('reenviar', () => {
   });
 });
 
+// Diferido (revisión final): las dos pruebas de `correoEnviado: false` de
+// arriba pasan por la ruta HTTP entera (cookie firmada, CSRF, `Request`/
+// `Response`) — cubren el contrato tal como lo ve el navegador, pero nunca
+// llaman a `invitarPersona`/`reenviarInvitacion` directo. `invitarPersona`
+// tenía esa cobertura extra vía la ruta; `reenviarInvitacion` la tenía
+// igual, pero ninguna de las dos estaba anclada contra el código de
+// `lib/cotizador/equipo.ts` en sí, sin la ruta de por medio. Importa: el
+// diseño declara como riesgo que "un correo que no llega deja a alguien
+// afuera sin que nadie se entere", y `reenviarInvitacion` es justamente el
+// camino de RECUPERACIÓN de ese riesgo -- con un dominio de envío nuevo que
+// todavía no tiene reputación, y por eso más propenso a que Resend lo
+// rechace. Estas dos pruebas llaman a las funciones directo, con el mismo
+// doble de `Db` que ya arma `supabaseAdmin()` más arriba, para que un
+// cambio que rompa el contrato en la librería misma —sin tocar ninguna
+// ruta— también se vea acá.
+describe('invitarPersona / reenviarInvitacion: correoEnviado, contra lib/cotizador/equipo.ts directo (sin la ruta de por medio)', () => {
+  function dbDirecto(): any {
+    return {
+      from: () => ({
+        select: () => construirSelect(),
+        insert: (cambios: Record<string, unknown>) => construirInsert(cambios),
+        update: (cambios: Record<string, unknown>) => construirUpdate(cambios),
+      }),
+      rpc: (nombre: string, argumentos: Record<string, unknown>) => ejecutarRpc(nombre, argumentos),
+    };
+  }
+
+  it('invitarPersona: devuelve correoEnviado:false si el correo falla, y la fila igual queda creada', async () => {
+    const { invitarPersona } = await import('@/lib/cotizador/equipo');
+    resendFalla = true;
+    const r = await invitarPersona(dbDirecto(), {} as any, {
+      correo: 'directo-invitar@luxe.cr',
+      nombre: 'Directo Invitar',
+      rol: 'vendedor',
+    });
+    expect(r).toMatchObject({ ok: true, correoEnviado: false });
+    expect(filas.find((f) => f.correo === 'directo-invitar@luxe.cr')).toBeTruthy();
+  });
+
+  it('reenviarInvitacion: devuelve correoEnviado:false si el correo falla, y la huella igual queda actualizada', async () => {
+    filas.push(
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'directo-reenviar@luxe.cr',
+        nombre: 'Directo Reenviar',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_hash: 'huella-vieja-directo',
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    );
+    const { reenviarInvitacion } = await import('@/lib/cotizador/equipo');
+    resendFalla = true;
+    const r = await reenviarInvitacion(dbDirecto(), {} as any, UUID_INVITADA);
+    expect(r).toMatchObject({ ok: true, correoEnviado: false });
+    expect(filas.find((f) => f.id === UUID_INVITADA)?.invitacion_hash).not.toBe('huella-vieja-directo');
+  });
+
+  // El mismo camino, pero cuando `enviarInvitacion` rompe su contrato de
+  // "nunca lanza": `enviarInvitacionSinLanzar` (equipo.ts) tiene que
+  // atraparlo para las dos funciones por igual, no sólo para `invitar`.
+  it('reenviarInvitacion: si enviarInvitacion LANZA, igual devuelve correoEnviado:false en vez de propagar la excepción', async () => {
+    filas.push(
+      filaBase({
+        id: UUID_INVITADA,
+        correo: 'directo-reenviar-lanza@luxe.cr',
+        nombre: 'Directo Reenviar Lanza',
+        rol: 'vendedor',
+        clave_hash: null,
+        clave_sal: null,
+        invitacion_hash: 'huella-vieja-directo-lanza',
+        invitacion_expira: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    );
+    const { reenviarInvitacion } = await import('@/lib/cotizador/equipo');
+    resendLanza = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = await reenviarInvitacion(dbDirecto(), {} as any, UUID_INVITADA);
+    expect(r).toMatchObject({ ok: true, correoEnviado: false });
+    consoleError.mockRestore();
+  });
+});
+
 describe('estado (activar/desactivar, cambiar rol)', () => {
   it('desactiva a un vendedor sin problema (200)', async () => {
     filas.push(filaBase({ id: UUID_U2, correo: 'v@luxe.cr', nombre: 'Un Vendedor', rol: 'vendedor' }));
