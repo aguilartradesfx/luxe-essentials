@@ -1,9 +1,22 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Cotizacion, LineaCalculada, LineaEntrada } from '@/lib/cotizador/tipos';
+import type { Cotizacion, DescuentoPersonalizado, GrupoDescuento, LineaCalculada, LineaEntrada } from '@/lib/cotizador/tipos';
+import { DESCUENTO_PERSONALIZADO_MAX, GRUPOS } from '@/lib/cotizador/tipos';
 import type { PrefillCotizacion, SkuUI } from './Panel';
-import { formatearColones, formatearTasa } from './formato';
+import { ETIQUETAS_GRUPO, formatearColones, formatearTasa } from './formato';
+
+// Mismo motivo que la duplicación de `Rol` en VistaEquipo.tsx: no vive en
+// ningún archivo client-safe compartido (sale de lib/cotizador/usuarios.ts,
+// que arranca con `import 'server-only'`). Se repite acá el mismo par de
+// valores. `Panel` es quien de verdad sabe el rol (viene de la cookie, vía
+// `/entrar` o la sonda de sesión) -- esta vista sólo lo usa para decidir qué
+// AVISO mostrar cuando se pide un descuento personalizado (ver el bloque
+// "Descuento personalizado", más abajo): es cosmético, igual que en todos
+// los demás lugares del panel que miran este dato -- el servidor vuelve a
+// releer la fila real en `/api/cotizacion` (`autorizarSuperadmin`) antes de
+// decidir si la cotización sale directo o queda esperando.
+type Rol = 'vendedor' | 'superadmin';
 
 // Tasa general de IVA en Costa Rica. Duplicada a propósito: es un dato
 // público (no comercial, a diferencia de `precioLista` o de `ESCALAS`), y
@@ -72,13 +85,25 @@ type LineaUI = { skuId: string; cantidadTexto: string };
 // había salido. Ahora la respuesta del servidor trae `pdf`/`correo`
 // (app/api/cotizacion/route.ts) y el panel de resultado los lee para decir
 // la verdad: a quién le llegó, o por qué no le llegó.
+//
+// Fase 5 (descuento con aprobación): un envío con descuento personalizado
+// puede terminar en dos formas MUY distintas -- salió de verdad (mismo caso
+// de siempre, con `pdf`/`correo`/`ghl`) o quedó "esperando aprobación" (el
+// servidor cortó ANTES de tocar GoHighLevel, el PDF o el correo -- ver
+// app/api/cotizacion/route.ts). `pendienteAprobacion` distingue las dos: si
+// es `true`, `pdf`/`correo`/`ghlEstimateId`/`ghlError` no vienen (el
+// servidor nunca los calculó), y el panel de resultado, más abajo, tiene
+// que decir "no se le mandó nada al cliente todavía" en vez de leer campos
+// que no existen.
 type Resultado =
   | {
       ok: true;
       id: string;
       numero?: string;
-      pdf: { ruta: string } | null;
-      correo: { resendId: string } | { error: string };
+      pendienteAprobacion?: boolean;
+      avisoAprobacionEnviado?: boolean;
+      pdf?: { ruta: string } | null;
+      correo?: { resendId: string } | { error: string };
       ghlEstimateId?: string;
       ghlError?: string;
     }
@@ -115,6 +140,28 @@ function validarCantidad(texto: string): ValidacionCantidad {
   // final vuelva con un 400 que el vendedor no esperaba.
   if (cantidad > 10000) return { ok: false, mensaje: 'No puede superar 10.000 unidades.' };
   return { ok: true, cantidad };
+}
+
+type ValidacionPct = { ok: true; pct: number } | { ok: false; mensaje: string };
+
+// Mismo criterio que `validarCantidad`: cualquier cosa que no sea "un
+// número, escrito tal cual, dentro del rango" se rechaza de forma visible
+// en vez de dejar que el campo mienta o que el envío final vuelva con un
+// 400 evitable. Mismo rango [0, 100) que valida el servidor
+// (`DESCUENTO_PERSONALIZADO_MAX` en lib/cotizador/tipos.ts, y
+// `pctDescuentoPersonalizado` en lib/validation.ts) -- 0 no se prohíbe
+// ("puede ser menor que el de escala", diseño), y a 100% el producto queda
+// gratis.
+function validarPct(texto: string): ValidacionPct {
+  const t = texto.trim();
+  if (t === '') return { ok: false, mensaje: 'Falta el porcentaje.' };
+  const n = Number(t);
+  if (!Number.isFinite(n)) return { ok: false, mensaje: 'Debe ser un número.' };
+  if (n < 0) return { ok: false, mensaje: 'No puede ser negativo.' };
+  if (n >= DESCUENTO_PERSONALIZADO_MAX) {
+    return { ok: false, mensaje: `Debe ser menor que ${DESCUENTO_PERSONALIZADO_MAX}% -- a esa altura regala el producto.` };
+  }
+  return { ok: true, pct: n };
 }
 
 // Sin tildes ni mayúsculas, para que "sabana" encuentre "sábana".
@@ -282,6 +329,15 @@ type Props = {
   // Se llama una sola vez, al montar, si `plantilla` no era nula — para que
   // `Panel` la limpie y un futuro remonte de esta pestaña no la reaplique.
   onPlantillaConsumida?: () => void;
+  // Fase 5 (descuento con aprobación): sólo decide qué AVISO mostrar cuando
+  // se pide un descuento personalizado -- "va a quedar esperando" o "sale
+  // directo, sos superadmin" (ver el bloque "Descuento personalizado", más
+  // abajo). Cosmético, igual que `rol` en Panel.tsx: el servidor vuelve a
+  // releer la fila real antes de decidir de verdad. `null` mientras `Panel`
+  // todavía no lo sabe -- se trata igual que 'vendedor' (fallar hacia el
+  // lado que promete menos, no hacia el que promete un envío directo que
+  // el servidor después no concede).
+  rol?: Rol | null;
 };
 
 // Todo lo que antes vivía en `Cotizador.tsx` después de la pantalla de
@@ -294,6 +350,7 @@ export function VistaCrear({
   onSesionInvalida,
   plantilla,
   onPlantillaConsumida,
+  rol,
 }: Props) {
   // La cola de borradores del agente (Tarea 10): se pide una sola vez, al
   // montar esta vista — que es exactamente cuando antes se pedía, justo
@@ -320,6 +377,17 @@ export function VistaCrear({
   const [lineas, setLineas] = useState<LineaUI[]>([]);
   const [tasaIva, setTasaIva] = useState(IVA_GENERAL);
   const [bordadoEspecial, setBordadoEspecial] = useState(false);
+  // Fase 5 (descuento con aprobación): 'ninguno' es el caso de siempre (el
+  // descuento de escala, automático). 'general' y 'familias' son las dos
+  // formas de `DescuentoPersonalizado` (lib/cotizador/tipos.ts) -- nunca las
+  // dos juntas, por eso es un único modo y no dos casillas independientes.
+  const [modoDescuento, setModoDescuento] = useState<'ninguno' | 'general' | 'familias'>('ninguno');
+  const [descuentoGeneralTexto, setDescuentoGeneralTexto] = useState('');
+  // Un texto por grupo, sólo para los que el vendedor tocó -- un grupo sin
+  // texto (o con texto vacío) simplemente no entra en el descuento final,
+  // mismo criterio que "una familia sin línea en la cotización no es un
+  // error" del lado del servidor (lib/cotizador/calcular.ts).
+  const [descuentoFamiliasTexto, setDescuentoFamiliasTexto] = useState<Partial<Record<GrupoDescuento, string>>>({});
   // Nombres de variable sin cambiar desde la ronda "final-fix-C" (cuando el
   // botón no enviaba nada, solo creaba un Estimate en borrador), pero el
   // texto que ve el vendedor sí cambió en la Tarea 5, ronda de correcciones
@@ -462,6 +530,49 @@ export function VistaCrear({
   // seguro.
   const hayLineaDescontinuada = useMemo(() => lineas.some((l) => !porId.has(l.skuId)), [lineas, porId]);
 
+  // Fase 5 (descuento con aprobación): valida el campo "general" sólo
+  // cuando ese es el modo activo -- en 'ninguno' o 'familias' no hay nada
+  // que decir de un campo que ni se está mostrando.
+  const descuentoGeneralValidacion = modoDescuento === 'general' ? validarPct(descuentoGeneralTexto) : null;
+  // Sólo los grupos con texto (el vendedor los tocó) cuentan para saber si
+  // el modo "por familia" está completo -- un campo que nunca se llenó no
+  // es un error, es un grupo que no participa del descuento.
+  const descuentoFamiliasConTexto = useMemo(
+    () => GRUPOS.filter((g) => (descuentoFamiliasTexto[g] ?? '').trim() !== ''),
+    [descuentoFamiliasTexto],
+  );
+  const descuentoFamiliasInvalido =
+    modoDescuento === 'familias' &&
+    (descuentoFamiliasConTexto.length === 0 ||
+      descuentoFamiliasConTexto.some((g) => !validarPct(descuentoFamiliasTexto[g] ?? '').ok));
+  // Bloquea el envío (y la previsualización, más abajo) mientras el modo
+  // elegido no tenga un descuento utilizable -- mismo criterio que
+  // `hayLineaInvalida` con las cantidades: un campo a medio llenar no debe
+  // desaparecer en silencio del pedido.
+  const descuentoInvalido =
+    (modoDescuento === 'general' && !descuentoGeneralValidacion?.ok) || descuentoFamiliasInvalido;
+
+  // La forma final que espera el servidor (`DescuentoPersonalizado`,
+  // lib/cotizador/tipos.ts) -- `undefined` en 'ninguno' o mientras el modo
+  // elegido no tenga nada válido todavía, para que ni la previsualización ni
+  // el envío final manden un campo a medio completar.
+  const descuentoPersonalizado: DescuentoPersonalizado | undefined = useMemo(() => {
+    if (modoDescuento === 'general') {
+      return descuentoGeneralValidacion?.ok ? { general: descuentoGeneralValidacion.pct } : undefined;
+    }
+    if (modoDescuento === 'familias') {
+      if (descuentoFamiliasInvalido) return undefined;
+      const familias: Partial<Record<GrupoDescuento, number>> = {};
+      for (const g of descuentoFamiliasConTexto) {
+        const v = validarPct(descuentoFamiliasTexto[g] ?? '');
+        if (v.ok) familias[g] = v.pct;
+      }
+      return Object.keys(familias).length > 0 ? { familias } : undefined;
+    }
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `descuentoGeneralValidacion.ok`/`.pct` ya dependen de `descuentoGeneralTexto`; `descuentoFamiliasConTexto` ya depende de `descuentoFamiliasTexto`. Repetirlos acá sólo duplicaría la lista sin cambiar cuándo se recalcula.
+  }, [modoDescuento, descuentoGeneralValidacion, descuentoFamiliasInvalido, descuentoFamiliasConTexto, descuentoFamiliasTexto]);
+
   // Aplica una plantilla nueva de "Duplicar" (Tarea 10, ronda de
   // correcciones 1) o de "Modificar" (migración 0016). Reacciona a CADA
   // cambio de `plantilla` -- no solo al montar -- porque esta vista ya no
@@ -497,6 +608,13 @@ export function VistaCrear({
         ? { id: plantilla.reemplazaId, contactId: plantilla.contactId ?? null, numero: plantilla.reemplazaNumero ?? '' }
         : null,
     );
+    // Fase 5: "Duplicar"/"Modificar" nunca traen un descuento personalizado
+    // (`/api/cotizacion/duplicar` sólo devuelve `skuId`/`cantidad`, ver ese
+    // archivo) -- si el vendedor tenía uno a medio pedir en esta vista antes
+    // de duplicar OTRA fila, no debe arrastrarse a la cotización nueva.
+    setModoDescuento('ninguno');
+    setDescuentoGeneralTexto('');
+    setDescuentoFamiliasTexto({});
     onPlantillaConsumida?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- solo debe reaccionar a `plantilla`; `onPlantillaConsumida` no es estable entre renders de Panel.
   }, [plantilla]);
@@ -556,7 +674,12 @@ export function VistaCrear({
       fetch('/api/cotizacion/previsualizar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineas: entradas, tasaIva, bordadoEspecial }),
+        // Fase 5: `descuentoPersonalizado` sólo va cuando el modo elegido
+        // ya tiene algo válido (`undefined` desaparece al pasar por
+        // `JSON.stringify`) -- así la previsualización sigue mostrando el
+        // descuento de escala de siempre mientras el vendedor todavía está
+        // escribiendo el porcentaje que quiere pedir.
+        body: JSON.stringify({ lineas: entradas, tasaIva, bordadoEspecial, descuentoPersonalizado }),
         signal: controlador.signal,
       })
         .then(async (res) => {
@@ -582,8 +705,8 @@ export function VistaCrear({
       clearTimeout(temporizador);
       controlador.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `entradas` ya está memoizado sobre `lineas`.
-  }, [entradas, tasaIva, bordadoEspecial]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `entradas` ya está memoizado sobre `lineas`; `descuentoPersonalizado` ya está memoizado sobre los textos de descuento.
+  }, [entradas, tasaIva, bordadoEspecial, descuentoPersonalizado]);
 
   // Lo que pidió el dueño de Luxe: después de agregar, lo natural es escribir
   // la cantidad de una — sin este efecto, el campo se monta (inline o en la
@@ -655,6 +778,10 @@ export function VistaCrear({
     setDetalleGhlAbierto(false);
     setCotizacion(COTIZACION_VACIA);
     setPreviaError('');
+    // Fase 5: una cotización nueva de verdad, sin ningún descuento personalizado a medio pedir.
+    setModoDescuento('ninguno');
+    setDescuentoGeneralTexto('');
+    setDescuentoFamiliasTexto({});
     // Sin esto, una cotización nueva y sin relación con ningún borrador
     // arrastraría el `borradorId`/`contactId` del borrador anterior y
     // cerraría (o pisaría el contacto de) una fila que no le corresponde.
@@ -700,6 +827,7 @@ export function VistaCrear({
     lineas.length > 0 &&
     !hayLineaInvalida &&
     !hayLineaDescontinuada &&
+    !descuentoInvalido &&
     correoValido &&
     nombreValido;
 
@@ -755,6 +883,11 @@ export function VistaCrear({
           // el caso más nuevo.
           reemplazaId: reemplazaActivo?.id,
           contactId: reemplazaActivo?.contactId ?? borradorActivo?.contactId ?? undefined,
+          // Fase 5: `undefined` cuando el vendedor no pidió nada fuera de
+          // escala -- desaparece al pasar por `JSON.stringify`, así que la
+          // inmensa mayoría de las cotizaciones sigue mandando exactamente
+          // el mismo cuerpo de siempre.
+          descuentoPersonalizado,
         }),
       });
       const datos = await res.json();
@@ -770,17 +903,33 @@ export function VistaCrear({
         setResultado({ ok: false, error: datos.error ?? `Error ${res.status}` });
         return;
       }
-      setResultado({
-        ok: true,
-        id: datos.id,
-        numero: datos.numero,
-        // Defensivos: si el servidor alguna vez respondiera sin estos dos
-        // campos, la pantalla no debe reventar — solo perder el detalle.
-        pdf: datos.pdf ?? null,
-        correo: datos.correo ?? { error: 'El servidor no informó el resultado del envío.' },
-        ghlEstimateId: datos.ghl?.estimateId,
-        ghlError: datos.ghl?.error,
-      });
+      // Fase 5: `estado === 'esperando_aprobacion'` es el único caso en que
+      // el servidor CORTÓ antes de tocar GoHighLevel, el PDF o el correo
+      // (ver app/api/cotizacion/route.ts) -- `datos.pdf`/`datos.correo`/
+      // `datos.ghl` ni existen en esa respuesta. Confundir las dos ramas
+      // pintaría "el correo no salió" (un error) en vez de "todavía no se
+      // intentó" (lo esperado).
+      if (datos.estado === 'esperando_aprobacion') {
+        setResultado({
+          ok: true,
+          id: datos.id,
+          numero: datos.numero,
+          pendienteAprobacion: true,
+          avisoAprobacionEnviado: Boolean(datos.aprobacion?.avisoEnviado),
+        });
+      } else {
+        setResultado({
+          ok: true,
+          id: datos.id,
+          numero: datos.numero,
+          // Defensivos: si el servidor alguna vez respondiera sin estos dos
+          // campos, la pantalla no debe reventar — solo perder el detalle.
+          pdf: datos.pdf ?? null,
+          correo: datos.correo ?? { error: 'El servidor no informó el resultado del envío.' },
+          ghlEstimateId: datos.ghl?.estimateId,
+          ghlError: datos.ghl?.error,
+        });
+      }
       // El borrador ya quedó cerrado en el servidor (estado 'convertida'):
       // se saca también de la lista local para que la cola no siga
       // mostrándolo como pendiente hasta la próxima recarga.
@@ -1080,6 +1229,152 @@ export function VistaCrear({
           )}
         </div>
 
+        {/* Fase 5 (descuento con aprobación): pedir un descuento fuera de
+            las seis escalas automáticas, general o por familia. El efecto
+            ya se ve arriba, en "Total cotizado" -- la previsualización
+            (`/api/cotizacion/previsualizar`) recalcula con el mismo motor
+            que el envío final, así que no hace falta un cálculo aparte acá.
+            Lo más fácil de malentender (diseño): ESTE descuento REEMPLAZA
+            al de escala en las líneas que alcanza, no se le suma -- el
+            aviso de abajo lo dice de forma explícita, no como una nota al
+            pie. */}
+        <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Descuento personalizado</h2>
+          {/* `role="radiogroup"`, no `<fieldset>`: un `<fieldset>` tiene rol
+              ARIA implícito "group" -- igual que los `<details>` del
+              catálogo por familia, más arriba en este mismo archivo, cuya
+              ausencia mientras se busca (tests/cotizador-ui.test.tsx,
+              "Catálogo desplegable por familia") es justo lo que ese grupo
+              de pruebas ancla contando `role="group"`. Un `<fieldset>` acá
+              sumaría uno de más, siempre presente, y rompería esa cuenta
+              sin que este bloque tenga nada que ver con el catálogo. */}
+          <div className="mt-2 space-y-1.5 text-sm text-navy" role="radiogroup" aria-label="Tipo de descuento personalizado">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="modo-descuento"
+                checked={modoDescuento === 'ninguno'}
+                onChange={() => setModoDescuento('ninguno')}
+              />
+              Descuento automático (el de siempre, por volumen)
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="modo-descuento"
+                checked={modoDescuento === 'general'}
+                onChange={() => setModoDescuento('general')}
+              />
+              Pedir un % general, fuera de escala
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="modo-descuento"
+                checked={modoDescuento === 'familias'}
+                onChange={() => setModoDescuento('familias')}
+              />
+              Pedir un % distinto por familia de producto
+            </label>
+          </div>
+
+          {modoDescuento !== 'ninguno' && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Este descuento <strong>reemplaza</strong> al de escala en los productos que alcanza — no
+              se suma. Podés pedir un porcentaje menor al automático si hace falta; el número de
+              arriba, en "Total cotizado", ya muestra el efecto real.
+            </p>
+          )}
+
+          {modoDescuento === 'general' && (
+            <div className="mt-3">
+              <label htmlFor="descuento-general" className="block text-xs text-teal">
+                Porcentaje general
+                <input
+                  id="descuento-general"
+                  type="number"
+                  min={0}
+                  max={DESCUENTO_PERSONALIZADO_MAX}
+                  step="0.01"
+                  aria-invalid={!descuentoGeneralValidacion?.ok}
+                  value={descuentoGeneralTexto}
+                  onChange={(e) => setDescuentoGeneralTexto(e.target.value)}
+                  placeholder="Ej. 20"
+                  className={`mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm text-navy ${
+                    descuentoGeneralValidacion?.ok === false ? 'border-red-400' : 'border-[var(--carta-border)]'
+                  }`}
+                />
+              </label>
+              {descuentoGeneralValidacion?.ok === false && (
+                <p role="alert" className="mt-1 text-xs text-red-700">
+                  {descuentoGeneralValidacion.mensaje}
+                </p>
+              )}
+            </div>
+          )}
+
+          {modoDescuento === 'familias' && (
+            <div className="mt-3 space-y-2">
+              {GRUPOS.map((grupo) => {
+                const texto = descuentoFamiliasTexto[grupo] ?? '';
+                const validacion = texto.trim() === '' ? null : validarPct(texto);
+                const idCampo = `descuento-familia-${grupo}`;
+                return (
+                  <div key={grupo}>
+                    <label htmlFor={idCampo} className="flex items-center justify-between gap-3 text-xs text-teal">
+                      {ETIQUETAS_GRUPO[grupo]}
+                      <input
+                        id={idCampo}
+                        type="number"
+                        min={0}
+                        max={DESCUENTO_PERSONALIZADO_MAX}
+                        step="0.01"
+                        aria-invalid={validacion?.ok === false}
+                        value={texto}
+                        onChange={(e) =>
+                          setDescuentoFamiliasTexto((prev) => ({ ...prev, [grupo]: e.target.value }))
+                        }
+                        placeholder="Sin pedir"
+                        className={`w-24 rounded-lg border bg-white px-2 py-1.5 text-sm text-navy ${
+                          validacion?.ok === false ? 'border-red-400' : 'border-[var(--carta-border)]'
+                        }`}
+                      />
+                    </label>
+                    {validacion?.ok === false && (
+                      <p role="alert" className="mt-0.5 text-xs text-red-700">
+                        {validacion.mensaje}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              {modoDescuento === 'familias' && descuentoFamiliasConTexto.length === 0 && (
+                <p role="alert" className="text-xs text-red-700">
+                  Escribí el porcentaje de al menos una familia, o volvé a "Descuento automático".
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Lo segundo más fácil de malentender (diseño): esta cotización
+              NO sale al cliente todavía -- salvo que quien la arma ya sea
+              superadmin. `rol` es cosmético (ver el comentario del prop):
+              el servidor vuelve a decidir de verdad con la fila real. */}
+          {modoDescuento !== 'ninguno' &&
+            (rol === 'superadmin' ? (
+              <p className="mt-3 rounded-lg bg-[color:var(--carta-border)]/30 px-3 py-2 text-xs text-navy">
+                Como sos superadmin, esta cotización sale directo al enviarla — igual queda
+                registrado que vos aprobaste tu propio descuento.
+              </p>
+            ) : (
+              <p className="mt-3 rounded-lg bg-[color:var(--carta-border)]/30 px-3 py-2 text-xs text-navy">
+                Esta cotización va a quedar <strong>esperando la aprobación de un superadmin</strong> antes
+                de salir al cliente. Un superadmin la va a poder aprobar, cambiar el porcentaje, o
+                rechazarla — vos vas a recibir un aviso cuando se resuelva.
+              </p>
+            ))}
+        </div>
+
         <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
           <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Datos del cliente</h2>
           {/* "Modificar" (migración 0016): el único aviso visible de que esta
@@ -1160,7 +1455,20 @@ export function VistaCrear({
                 terminado. El detalle de qué salió (o no) vive en el mensaje de abajo,
                 no en el botón — un fallo del correo no debe convertir "guardada" en
                 mentira. */}
-            {creando ? 'Enviando…' : creado ? 'Cotización guardada' : 'Cotizar y enviar'}
+            {/* Fase 5: mientras se pide un descuento personalizado y quien
+                arma la cotización no es superadmin, el botón anticipa que
+                esto no sale directo -- "Pedir aprobación" en vez de
+                "Cotizar y enviar", para no prometer un envío inmediato que
+                no va a pasar. */}
+            {creando
+              ? 'Enviando…'
+              : creado
+                ? resultado?.ok && resultado.pendienteAprobacion
+                  ? 'Solicitud enviada'
+                  : 'Cotización guardada'
+                : modoDescuento !== 'ninguno' && rol !== 'superadmin'
+                  ? 'Pedir aprobación'
+                  : 'Cotizar y enviar'}
           </button>
 
           {creado && (
@@ -1183,14 +1491,29 @@ export function VistaCrear({
                   otra a mano desde GoHighLevel. Ahora el mensaje principal lee el
                   resultado real del correo (`resultado.correo`) y el del PDF
                   (`resultado.pdf`), en vez de asumir que "guardada" alcanza. */}
-              {'resendId' in resultado.correo ? (
+              {/* Fase 5: la rama "esperando aprobación" nunca tuvo `correo`
+                  ni `pdf` -- el servidor cortó antes de generarlos (ver el
+                  comentario grande en `crear()`, más arriba). Va primero
+                  para no caer en el `resultado.correo &&` de abajo, que acá
+                  sería `undefined`. */}
+              {resultado.pendienteAprobacion ? (
+                <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-amber-800">
+                  Cotización {resultado.numero ? `${resultado.numero} ` : ''}
+                  guardada, <strong>esperando la aprobación de un superadmin</strong>. Todavía no se le
+                  mandó nada a <strong>{cliente.email.trim()}</strong>.{' '}
+                  {resultado.avisoAprobacionEnviado
+                    ? 'Ya se avisó a los superadmin activos por correo.'
+                    : 'No se pudo avisar a los superadmin por correo, pero la solicitud queda visible en el panel de todas formas.'}
+                </p>
+              ) : resultado.correo && 'resendId' in resultado.correo ? (
                 <p>
                   Cotización {resultado.numero ? `${resultado.numero} ` : ''}
                   enviada a <strong>{cliente.email.trim()}</strong>, con el PDF adjunto.
                 </p>
               ) : resultado.pdf ? (
                 <p className="rounded-lg bg-red-50 px-2 py-1.5 text-red-800">
-                  La cotización se guardó, pero el correo no salió: {resultado.correo.error}.
+                  La cotización se guardó, pero el correo no salió:{' '}
+                  {resultado.correo && 'error' in resultado.correo ? resultado.correo.error : 'motivo desconocido'}.
                   El PDF quedó guardado — se puede reenviar a mano.
                 </p>
               ) : (
