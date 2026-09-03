@@ -101,4 +101,31 @@ describe('POST /api/cotizacion/previsualizar', () => {
     const cuerpo = await res.json();
     expect(cuerpo.id).toBeUndefined();
   });
+
+  // Fase 5 (descuento con aprobación): `descuentoPersonalizado` REEMPLAZA el
+  // descuento de escala en las líneas que alcanza (16 sets ya trae 10% de
+  // escala) -- si esta ruta dejara de reenviarlo a `calcular`, el 12%
+  // pedido nunca se vería reflejado y esta prueba fallaría comparando contra
+  // el 10% de escala, no el 12% pedido.
+  it('refleja el descuento personalizado en la vista previa, reemplazando el de escala', async () => {
+    const res = await POST(
+      peticionAutenticada({ ...valido, descuentoPersonalizado: { general: 12 } }),
+    );
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.ok).toBe(true);
+    const [linea] = cuerpo.cotizacion.lineas;
+    expect(linea.descuentoPct).toBe(12);
+    expect(linea.personalizado).toBe(true);
+  });
+
+  it('un descuento personalizado con la forma inválida (las dos claves a la vez) da 400', async () => {
+    const res = await POST(
+      peticionAutenticada({
+        ...valido,
+        descuentoPersonalizado: { general: 10, familias: { toallas: 5 } },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
 });

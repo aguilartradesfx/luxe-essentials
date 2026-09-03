@@ -39,11 +39,21 @@ export async function POST(request: Request) {
 
   // `calcular` lanza si un SKU no existe o la cantidad es absurda. Igual que
   // en el envío final, eso es un error del cliente: se traduce a 400.
+  //
+  // Fase 5 (descuento con aprobación), corrección: `descuentoPersonalizado`
+  // faltaba acá -- el esquema ya lo validaba (`previsualizarSchema`) pero
+  // nunca llegaba a `calcular`, así que la vista previa mostraba el
+  // descuento de escala de siempre aunque el vendedor hubiera pedido uno
+  // personalizado. `VistaCrear` (app/cotizador/VistaCrear.tsx) depende de
+  // este campo para mostrar el efecto ANTES de enviar -- sin él, el
+  // vendedor no tiene forma de ver qué va a pasar hasta después de mandar
+  // la cotización de verdad.
   let cotizacion;
   try {
     cotizacion = calcular(datos.lineas, CATALOGO, {
       tasaIva: datos.tasaIva,
       bordadoEspecial: datos.bordadoEspecial,
+      descuentoPersonalizado: datos.descuentoPersonalizado,
     });
   } catch (err) {
     return NextResponse.json(
