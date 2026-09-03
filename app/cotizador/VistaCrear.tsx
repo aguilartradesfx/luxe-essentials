@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import type { Cotizacion, LineaEntrada } from '@/lib/cotizador/tipos';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Cotizacion, LineaCalculada, LineaEntrada } from '@/lib/cotizador/tipos';
 import type { PrefillCotizacion, SkuUI } from './Panel';
 import { formatearColones, formatearTasa } from './formato';
 
@@ -128,10 +128,12 @@ function formatearFecha(iso: string): string {
 // resultados de la búsqueda como el catálogo desplegable por familia (ver
 // más abajo) — un solo marcado para las dos vías de elegir un SKU, así que
 // un cambio de estilo o de comportamiento no puede quedar aplicado a una
-// sí y a la otra no.
+// sí y a la otra no. Ya no es el `<li>` completo (lo envuelve `ItemCatalogo`,
+// más abajo): así el mismo bloque nombre+botón puede compartir `<li>` con los
+// controles de cantidad, cuando el producto ya está en la cotización.
 function FilaSku({ sku, onAgregar }: { sku: SkuUI; onAgregar: (skuId: string) => void }) {
   return (
-    <li className="flex items-center justify-between gap-3 py-2">
+    <div className="flex items-center justify-between gap-3 py-2">
       <div>
         <p className="text-sm text-navy">{sku.nombre}</p>
         <p className="text-xs text-teal">{sku.familia}</p>
@@ -143,6 +145,109 @@ function FilaSku({ sku, onAgregar }: { sku: SkuUI; onAgregar: (skuId: string) =>
       >
         Agregar
       </button>
+    </div>
+  );
+}
+
+// Cantidad + quitar + el desglose que ya calculó el servidor, para una línea.
+// Es el corazón del cambio de esta pantalla: antes vivía SOLO dentro de
+// "Líneas de la cotización", más abajo de todo el catálogo — agregar un
+// producto y tener que bajar a ponerle cantidad era exactamente la queja.
+// Ahora el mismo bloque se monta, sin duplicarse, en el lugar donde el
+// producto está visible: bajo su fila en la búsqueda o en el catálogo por
+// familia (`ItemCatalogo`) si esa fila sigue en pantalla, o en la lista de
+// respaldo más abajo si dejó de estarlo (búsqueda cambiada, familia nunca
+// desplegada, o el producto salió del catálogo). Nunca las dos a la vez —
+// `lineasDeRespaldo`, en `VistaCrear`, decide cuál.
+function ControlesLinea({
+  linea,
+  calculada,
+  onCambiarCantidad,
+  onQuitar,
+  registrarInputCantidad,
+}: {
+  linea: LineaUI;
+  calculada: LineaCalculada | undefined;
+  onCambiarCantidad: (skuId: string, texto: string) => void;
+  onQuitar: (skuId: string) => void;
+  registrarInputCantidad: (skuId: string, el: HTMLInputElement | null) => void;
+}) {
+  const validacion = validarCantidad(linea.cantidadTexto);
+  // Un id estable por SKU: como esta línea nunca se pinta en dos sitios a la
+  // vez, no hace falta variarlo según de dónde se monte.
+  const idCantidad = `cantidad-${linea.skuId}`;
+  return (
+    <div className="mt-1 rounded-lg bg-[color:var(--carta-border)]/20 px-2 py-2">
+      <div className="flex flex-wrap items-center gap-4 text-sm">
+        <label htmlFor={idCantidad} className="flex items-center gap-2 text-xs text-teal">
+          Cantidad
+          <input
+            id={idCantidad}
+            ref={(el) => registrarInputCantidad(linea.skuId, el)}
+            type="number"
+            min={1}
+            aria-label="Cantidad"
+            aria-invalid={!validacion.ok}
+            value={linea.cantidadTexto}
+            onChange={(e) => onCambiarCantidad(linea.skuId, e.target.value)}
+            className={`w-20 rounded-lg border bg-white px-2 py-1.5 text-sm text-navy ${
+              validacion.ok ? 'border-[var(--carta-border)]' : 'border-red-400'
+            }`}
+          />
+        </label>
+        <span className="text-teal">
+          Unitario: <span className="text-navy">{calculada ? formatearColones(calculada.precioUnitario) : '…'}</span>
+        </span>
+        <span className="text-teal">
+          Subtotal: <span className="text-navy">{calculada ? formatearColones(calculada.subtotal) : '…'}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => onQuitar(linea.skuId)}
+          className="ml-auto text-xs text-teal underline hover:text-navy"
+        >
+          Quitar
+        </button>
+      </div>
+      {!validacion.ok && <p className="mt-1 text-xs text-red-700">{validacion.mensaje}</p>}
+      {validacion.ok && calculada && <p className="mt-1 text-xs text-teal/80">{calculada.motivo}</p>}
+    </div>
+  );
+}
+
+// Una fila del catálogo (búsqueda o familia), con sus controles de cantidad
+// desplegados justo debajo cuando el producto ya está en la cotización.
+// `linea` viene `undefined` mientras no se agregó nada — en ese caso es
+// exactamente `FilaSku` sola, como antes.
+function ItemCatalogo({
+  sku,
+  linea,
+  calculada,
+  onAgregar,
+  onCambiarCantidad,
+  onQuitar,
+  registrarInputCantidad,
+}: {
+  sku: SkuUI;
+  linea: LineaUI | undefined;
+  calculada: LineaCalculada | undefined;
+  onAgregar: (skuId: string) => void;
+  onCambiarCantidad: (skuId: string, texto: string) => void;
+  onQuitar: (skuId: string) => void;
+  registrarInputCantidad: (skuId: string, el: HTMLInputElement | null) => void;
+}) {
+  return (
+    <li className="py-1">
+      <FilaSku sku={sku} onAgregar={onAgregar} />
+      {linea && (
+        <ControlesLinea
+          linea={linea}
+          calculada={calculada}
+          onCambiarCantidad={onCambiarCantidad}
+          onQuitar={onQuitar}
+          registrarInputCantidad={registrarInputCantidad}
+        />
+      )}
     </li>
   );
 }
@@ -235,7 +340,25 @@ export function VistaCrear({
   const [previsualizando, setPrevisualizando] = useState(false);
   const [previaError, setPreviaError] = useState('');
 
+  // Qué línea acaba de agregarse (por skuId): dispara el efecto de foco de
+  // más abajo, que la lleva al campo de cantidad recién montado. `null` en
+  // reposo — no hay ninguna espera pendiente.
+  const [focoPendiente, setFocoPendiente] = useState<string | null>(null);
+  // Un input de cantidad por skuId, sea que esté montado inline (búsqueda o
+  // catálogo) o en la lista de respaldo — nunca los dos al mismo tiempo, así
+  // que un solo registro alcanza para saber a cuál enfocar.
+  const inputsCantidadRef = useRef(new Map<string, HTMLInputElement>());
+  function registrarInputCantidad(skuId: string, el: HTMLInputElement | null) {
+    if (el) inputsCantidadRef.current.set(skuId, el);
+    else inputsCantidadRef.current.delete(skuId);
+  }
+
   const porId = useMemo(() => new Map(skus.map((s) => [s.id, s])), [skus]);
+  const lineaPorSkuId = useMemo(() => new Map(lineas.map((l) => [l.skuId, l])), [lineas]);
+  const calculadaPorSkuId = useMemo(
+    () => new Map(cotizacion.lineas.map((l) => [l.skuId, l])),
+    [cotizacion.lineas],
+  );
 
   const resultadosBusqueda = useMemo(() => {
     const q = normalizar(busqueda.trim());
@@ -262,6 +385,37 @@ export function VistaCrear({
     }
     return Array.from(porFamilia.entries()).map(([familia, items]) => ({ familia, items }));
   }, [skus]);
+
+  // Las familias que tienen al menos una línea agregada se despliegan solas
+  // (ver el `<details open>` más abajo) — sin esto, la fila con sus
+  // controles de cantidad quedaría montada pero invisible dentro de un
+  // desplegable cerrado, y el foco (más abajo) no tendría a dónde ir.
+  const familiasConLineas = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of lineas) {
+      const sku = porId.get(l.skuId);
+      if (sku) set.add(sku.familia);
+    }
+    return set;
+  }, [lineas, porId]);
+
+  // Toda familia con una línea queda forzada a abierta (arriba), así que en
+  // modo catálogo (buscador vacío) cualquier línea válida ya está visible
+  // ahí mismo. La lista de respaldo, más abajo en "Líneas de la cotización",
+  // solo necesita cargar con lo que el catálogo no puede mostrar en su
+  // lugar: un producto descontinuado (no está en ningún lado del catálogo) o,
+  // en modo búsqueda, una línea cuyo producto ya no coincide con lo que hay
+  // escrito ahora. Así el control de cantidad de una línea nunca aparece
+  // duplicado en dos sitios, pero tampoco desaparece: si el catálogo no lo
+  // puede mostrar, lo muestra acá.
+  const lineasDeRespaldo = useMemo(() => {
+    return lineas.filter((l) => {
+      const sku = porId.get(l.skuId);
+      if (!sku) return true;
+      if (busqueda.trim() !== '') return !resultadosBusqueda.some((s) => s.id === l.skuId);
+      return false;
+    });
+  }, [lineas, porId, busqueda, resultadosBusqueda]);
 
   // Solo las líneas con una cantidad válida entran al cálculo y al envío.
   // `hayLineaInvalida` es lo que de verdad bloquea el botón: una línea con
@@ -399,6 +553,23 @@ export function VistaCrear({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `entradas` ya está memoizado sobre `lineas`.
   }, [entradas, tasaIva, bordadoEspecial]);
 
+  // Lo que pidió el dueño de Luxe: después de agregar, lo natural es escribir
+  // la cantidad de una — sin este efecto, el campo se monta (inline o en la
+  // lista de respaldo) pero el vendedor tiene que ir a buscarlo con el mouse.
+  // Corre después de que `agregar()` deja `focoPendiente` con el skuId: para
+  // ese momento el input ya está montado (su `ref` corrió durante el commit,
+  // antes de que los efectos se disparen), así que `inputsCantidadRef` ya lo
+  // tiene registrado.
+  useEffect(() => {
+    if (!focoPendiente) return;
+    const el = inputsCantidadRef.current.get(focoPendiente);
+    if (el) {
+      el.focus();
+      el.select();
+    }
+    setFocoPendiente(null);
+  }, [focoPendiente]);
+
   // Revisión final (hallazgo importante): antes esta función limpiaba
   // `creado` sin condición, así que un clic en cualquier "Agregar" del
   // catálogo (a un clic de distancia desde que existe el desplegable por
@@ -421,6 +592,10 @@ export function VistaCrear({
       const nueva = Number.isInteger(actual) && actual > 0 ? actual + 1 : 1;
       return prev.map((l) => (l.skuId === skuId ? { ...l, cantidadTexto: String(nueva) } : l));
     });
+    // El campo de cantidad se monta ahí mismo, bajo el producto que se
+    // acaba de tocar (ver `ItemCatalogo` y el efecto de foco, arriba): no
+    // hace falta bajar a buscarlo.
+    setFocoPendiente(skuId);
   }
 
   function cambiarCantidad(skuId: string, texto: string) {
@@ -672,13 +847,33 @@ export function VistaCrear({
               </p>
               <div className="mt-3 space-y-2">
                 {familiasCatalogo.map(({ familia, items }) => (
-                  <details key={familia} className="group rounded-lg border border-[var(--carta-border)]">
+                  <details
+                    key={familia}
+                    // Una familia con al menos una línea agregada se
+                    // mantiene desplegada: es justo ahí donde vive su control
+                    // de cantidad (ver `ItemCatalogo`, abajo), y montarlo
+                    // dentro de un desplegable cerrado lo dejaría invisible
+                    // e imposible de enfocar. Sin líneas, `undefined` deja el
+                    // desplegable sin controlar — el vendedor lo abre y
+                    // cierra con el mouse o el teclado, como siempre.
+                    open={familiasConLineas.has(familia) || undefined}
+                    className="group rounded-lg border border-[var(--carta-border)]"
+                  >
                     <summary className="cursor-pointer select-none rounded-lg px-3 py-2 text-sm font-medium text-navy hover:bg-[color:var(--carta-border)]/30">
                       {familia} <span className="font-normal text-teal">({items.length})</span>
                     </summary>
                     <ul className="divide-y divide-[var(--carta-border)] border-t border-[var(--carta-border)] px-3">
                       {items.map((sku) => (
-                        <FilaSku key={sku.id} sku={sku} onAgregar={agregar} />
+                        <ItemCatalogo
+                          key={sku.id}
+                          sku={sku}
+                          linea={lineaPorSkuId.get(sku.id)}
+                          calculada={calculadaPorSkuId.get(sku.id)}
+                          onAgregar={agregar}
+                          onCambiarCantidad={cambiarCantidad}
+                          onQuitar={quitar}
+                          registrarInputCantidad={registrarInputCantidad}
+                        />
                       ))}
                     </ul>
                   </details>
@@ -690,7 +885,16 @@ export function VistaCrear({
           ) : (
             <ul className="mt-3 divide-y divide-[var(--carta-border)]">
               {resultadosBusqueda.map((sku) => (
-                <FilaSku key={sku.id} sku={sku} onAgregar={agregar} />
+                <ItemCatalogo
+                  key={sku.id}
+                  sku={sku}
+                  linea={lineaPorSkuId.get(sku.id)}
+                  calculada={calculadaPorSkuId.get(sku.id)}
+                  onAgregar={agregar}
+                  onCambiarCantidad={cambiarCantidad}
+                  onQuitar={quitar}
+                  registrarInputCantidad={registrarInputCantidad}
+                />
               ))}
             </ul>
           )}
@@ -698,11 +902,20 @@ export function VistaCrear({
 
         <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
           <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Líneas de la cotización</h2>
+          {/* Ya no es la única forma de ver o editar una línea — desde que
+              se agrega, sus controles ya están arriba, en el catálogo o la
+              búsqueda (ver `ItemCatalogo`). Esta lista queda como respaldo
+              para lo que el catálogo no puede mostrar en su lugar: un
+              producto descontinuado, o una línea cuyo producto ya no
+              coincide con lo que hay escrito ahora en el buscador
+              (`lineasDeRespaldo`, arriba). */}
           {lineas.length === 0 ? (
             <p className="mt-3 text-sm text-teal">Todavía no agregaste ningún producto.</p>
+          ) : lineasDeRespaldo.length === 0 ? (
+            <p className="mt-3 text-sm text-teal">Todo lo agregado está visible en el catálogo, arriba.</p>
           ) : (
             <ul className="mt-3 divide-y divide-[var(--carta-border)]">
-              {lineas.map((linea) => {
+              {lineasDeRespaldo.map((linea) => {
                 const sku = porId.get(linea.skuId);
                 // Ronda de correcciones 1 (hallazgo importante): antes esta
                 // linea desaparecia en silencio (`return null`) cuando el
@@ -735,54 +948,16 @@ export function VistaCrear({
                     </li>
                   );
                 }
-                const validacion = validarCantidad(linea.cantidadTexto);
-                const calculada = validacion.ok
-                  ? cotizacion.lineas.find((l) => l.skuId === linea.skuId)
-                  : undefined;
                 return (
                   <li key={linea.skuId} className="py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm text-navy">{sku.nombre}</p>
-                      <button
-                        type="button"
-                        onClick={() => quitar(linea.skuId)}
-                        className="text-xs text-teal underline hover:text-navy"
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-4 text-sm">
-                      <label className="flex items-center gap-2 text-xs text-teal">
-                        Cantidad
-                        <input
-                          type="number"
-                          min={1}
-                          aria-label="Cantidad"
-                          aria-invalid={!validacion.ok}
-                          value={linea.cantidadTexto}
-                          onChange={(e) => cambiarCantidad(linea.skuId, e.target.value)}
-                          className={`w-20 rounded-lg border bg-white px-2 py-1.5 text-sm text-navy ${
-                            validacion.ok ? 'border-[var(--carta-border)]' : 'border-red-400'
-                          }`}
-                        />
-                      </label>
-                      <span className="text-teal">
-                        Unitario:{' '}
-                        <span className="text-navy">
-                          {calculada ? formatearColones(calculada.precioUnitario) : '…'}
-                        </span>
-                      </span>
-                      <span className="text-teal">
-                        Subtotal:{' '}
-                        <span className="text-navy">{calculada ? formatearColones(calculada.subtotal) : '…'}</span>
-                      </span>
-                    </div>
-                    {!validacion.ok && (
-                      <p className="mt-1 text-xs text-red-700">{validacion.mensaje}</p>
-                    )}
-                    {validacion.ok && calculada && (
-                      <p className="mt-1 text-xs text-teal/80">{calculada.motivo}</p>
-                    )}
+                    <p className="text-sm text-navy">{sku.nombre}</p>
+                    <ControlesLinea
+                      linea={linea}
+                      calculada={calculadaPorSkuId.get(linea.skuId)}
+                      onCambiarCantidad={cambiarCantidad}
+                      onQuitar={quitar}
+                      registrarInputCantidad={registrarInputCantidad}
+                    />
                   </li>
                 );
               })}

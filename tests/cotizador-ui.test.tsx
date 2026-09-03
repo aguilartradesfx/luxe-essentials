@@ -1051,6 +1051,78 @@ describe('Cotizador', () => {
     expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument();
   });
 
+  // Lo que pidió el dueño de Luxe, con sus propias palabras: "agrego un
+  // producto y tengo que ir a modificar variables, regresar, agregar otro
+  // producto y volver para modificar variables". El flujo real es por
+  // búsqueda (no por el catálogo por familia, que tiene su propio describe
+  // más abajo): buscar, agregar, escribir cantidad, buscar el siguiente —
+  // sin bajar la pantalla en ningún punto.
+  describe('La cantidad aparece ahí mismo al agregar (sin bajar a "Líneas")', () => {
+    it('agregar por búsqueda deja la cantidad enfocada en la misma fila, sin tocar "Líneas de la cotización"', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      await usuario.type(screen.getByLabelText(/buscar/i), 'set de 600 hilos king');
+      await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+
+      // El campo de cantidad está en la MISMA lista de resultados de la
+      // búsqueda (no hubo que bajar a "Líneas de la cotización" a buscarlo),
+      // con valor "1" y el foco puesto — listo para escribir la cantidad de
+      // una vez.
+      const cantidad = screen.getByLabelText(/cantidad/i);
+      expect(cantidad).toHaveValue(1);
+      expect(cantidad).toHaveFocus();
+
+      const seccionLineas = screen.getByText('Líneas de la cotización').closest('div')!;
+      expect(within(seccionLineas).getByText(/todo lo agregado está visible/i)).toBeInTheDocument();
+    });
+
+    it('cargar varios productos por búsqueda: cada uno queda con la cantidad enfocada al agregarlo, sin ir y venir', async () => {
+      // El escenario exacto de la queja: cargar cinco productos (acá, dos,
+      // que alcanza para probar el patrón) sin tener que subir y bajar
+      // entre cada uno.
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      await usuario.type(screen.getByLabelText(/buscar/i), 'set de 600 hilos king');
+      await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+      const primeraCantidad = screen.getByLabelText(/cantidad/i);
+      expect(primeraCantidad).toHaveFocus();
+      await usuario.clear(primeraCantidad);
+      await usuario.type(primeraCantidad, '5');
+
+      // Se busca el siguiente producto: el primero deja de coincidir con el
+      // texto y su control se corre a la lista de respaldo (sigue existiendo
+      // y sigue siendo editable, solo que ya no está bajo el buscador) — lo
+      // que importa es que el segundo, recién agregado, quede enfocado en la
+      // fila de resultados sin que el vendedor haya tenido que ir a buscar
+      // nada con el mouse.
+      await usuario.clear(screen.getByLabelText(/buscar/i));
+      await usuario.type(screen.getByLabelText(/buscar/i), 'filipina tradicional manga corta');
+      await usuario.click(screen.getByRole('button', { name: /agregar/i }));
+
+      // El primero cayó a la lista de respaldo (sigue en pantalla, sigue
+      // editable, ya no bajo el buscador): en este momento hay DOS campos de
+      // cantidad a la vez, uno por línea. Se acota al de la fila que
+      // realmente importa para esta prueba -- la que se acaba de agregar.
+      const filaSegunda = screen.getByText('filipina tradicional manga corta').closest('li')!;
+      const segundaCantidad = within(filaSegunda).getByLabelText(/cantidad/i);
+      expect(segundaCantidad).toHaveValue(1);
+      expect(segundaCantidad).toHaveFocus();
+
+      // Las dos líneas siguen contando para el total: no se perdió la
+      // primera por dejar de estar a la vista (una en la búsqueda, la otra
+      // en la lista de respaldo).
+      await waitFor(() => {
+        expect(screen.getAllByLabelText(/cantidad/i)).toHaveLength(2);
+      });
+    });
+  });
+
   // Quien no se sabe el nombre del producto de memoria antes no tenía forma
   // de encontrarlo salvo adivinar qué escribir. Ahora el catálogo completo
   // se puede desplegar sin escribir nada, agrupado por familia (la misma
@@ -1103,7 +1175,15 @@ describe('Cotizador', () => {
       expect(screen.getByText('(1)')).toBeInTheDocument();
     });
 
-    it('despliega una familia, agrega uno de sus productos sin haber escrito nada, y queda en las líneas', async () => {
+    it('despliega una familia, agrega uno de sus productos sin haber escrito nada, y su cantidad aparece ahí mismo, sin bajar a "Líneas"', async () => {
+      // Antes de este cambio, esta prueba comprobaba que el producto
+      // agregado terminaba en la sección "Líneas de la cotización", más
+      // abajo de todo el catálogo -- exactamente el viaje que el dueño de
+      // Luxe pidió eliminar (agregar y tener que bajar a poner la
+      // cantidad). Ahora comprueba lo contrario: la cantidad aparece EN EL
+      // MISMO desplegable, sin tocar el buscador ni bajar a ningún lado, y
+      // "Líneas de la cotización" se queda con el mensaje de "ya está
+      // arriba" en vez de repetir el control.
       mockFetch();
       const usuario = userEvent.setup();
       render(<Cotizador />);
@@ -1118,17 +1198,92 @@ describe('Cotizador', () => {
       // contenido de un `<details>` cerrado), hay que acotar la búsqueda del
       // botón al desplegable que sí se abrió — igual que un vendedor de
       // verdad, que solo puede tocar el que tiene abierto en pantalla.
-      const boton = within(resumen.closest('details')!).getByRole('button', { name: /agregar/i });
+      const detalle = resumen.closest('details')!;
+      const boton = within(detalle).getByRole('button', { name: /agregar/i });
       expect(boton).toBeVisible();
       await usuario.click(boton);
 
-      // "filipina tradicional manga corta" ahora aparece dos veces en
-      // pantalla: la fila del catálogo (que sigue en el DOM) y la línea
-      // recién agregada — se acota a la sección de líneas, la que de
-      // verdad importa para esta prueba.
+      // El control de cantidad se montó DENTRO del mismo desplegable, junto
+      // al producto — no hace falta ir a ningún otro lado a ponerle
+      // cantidad.
+      const cantidad = within(detalle).getByLabelText(/cantidad/i);
+      expect(cantidad).toBeVisible();
+      expect(cantidad).toHaveValue(1);
+      // Y además queda con el foco puesto, lista para escribir la cantidad
+      // real de una vez — es la otra mitad del pedido del dueño.
+      expect(cantidad).toHaveFocus();
+
+      // "Líneas de la cotización" ya no repite el control: todo lo
+      // agregado está visible arriba, en el catálogo.
       const seccionLineas = screen.getByText('Líneas de la cotización').closest('div')!;
       expect(within(seccionLineas).queryByText(/todavía no agregaste/i)).not.toBeInTheDocument();
-      expect(within(seccionLineas).getByText('filipina tradicional manga corta')).toBeInTheDocument();
+      expect(within(seccionLineas).getByText(/todo lo agregado está visible/i)).toBeInTheDocument();
+      expect(within(seccionLineas).queryByLabelText(/cantidad/i)).not.toBeInTheDocument();
+    });
+
+    it('agregar el mismo producto dos veces desde el catálogo suma la cantidad ahí mismo, sin duplicar la fila', async () => {
+      // La forma de "agregar dos veces" que ya soportaba `agregar()` --
+      // sumar 1 a la cantidad existente en vez de crear una segunda línea.
+      // Esta prueba no existía a nivel de UI: solo se infería del código de
+      // `agregar()`. Mata el mutante que dejara de incrementar (dos líneas
+      // "uniformes" en vez de una con cantidad 2) y el que rompiera el
+      // reenfoque al reagregar.
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      const resumen = screen
+        .getAllByText('Uniformes')
+        .find((el) => el.tagName === 'SUMMARY')!;
+      await usuario.click(resumen);
+      const detalle = resumen.closest('details')!;
+      const boton = within(detalle).getByRole('button', { name: /agregar/i });
+
+      await usuario.click(boton);
+      await waitFor(() => {
+        expect(within(detalle).getByLabelText(/cantidad/i)).toHaveValue(1);
+      });
+
+      await usuario.click(boton);
+      await waitFor(() => {
+        expect(within(detalle).getByLabelText(/cantidad/i)).toHaveValue(2);
+      });
+      // Una sola fila de líneas, no dos.
+      expect(within(detalle).getAllByLabelText(/cantidad/i)).toHaveLength(1);
+      expect(within(detalle).getByLabelText(/cantidad/i)).toHaveFocus();
+    });
+
+    it('una familia con una línea agregada se vuelve a desplegar sola tras buscar algo y borrar la búsqueda', async () => {
+      // Al escribir en el buscador, el catálogo por familia se desmonta
+      // entero (ver la prueba de abajo, "el catálogo por familia
+      // desaparece") — y al volver a montarse (buscador vacío otra vez),
+      // cada `<details>` es un nodo del DOM nuevo, sin memoria de que el
+      // vendedor lo había desplegado a mano. Sin forzar `open` para las
+      // familias que ya tienen una línea, el producto agregado quedaría
+      // escondido tras un desplegable cerrado -- invisible y sin foco
+      // posible -- justo lo que esta pantalla existe para evitar.
+      mockFetch();
+      const usuario = userEvent.setup();
+      render(<Cotizador />);
+      await entrar(usuario);
+
+      const resumen = screen
+        .getAllByText('Uniformes')
+        .find((el) => el.tagName === 'SUMMARY')!;
+      await usuario.click(resumen);
+      await usuario.click(within(resumen.closest('details')!).getByRole('button', { name: /agregar/i }));
+
+      await usuario.type(screen.getByLabelText(/buscar/i), 'inserto');
+      await usuario.clear(screen.getByLabelText(/buscar/i));
+
+      const resumenNuevo = screen
+        .getAllByText('Uniformes')
+        .find((el) => el.tagName === 'SUMMARY')!;
+      const detalleNuevo = resumenNuevo.closest('details')!;
+      // Sin haber vuelto a hacer clic en el resumen: la familia ya está
+      // abierta sola, con la cantidad a la vista.
+      expect(within(detalleNuevo).getByLabelText(/cantidad/i)).toBeVisible();
     });
 
     it('al escribir en el buscador, el catálogo por familia desaparece — y vuelve al borrar el texto', async () => {
