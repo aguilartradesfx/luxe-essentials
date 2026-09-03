@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import { PantallaClave } from './PantallaClave';
+import { VistaAprobaciones } from './VistaAprobaciones';
 import { VistaCrear } from './VistaCrear';
 import { VistaEquipo } from './VistaEquipo';
 import { VistaListado } from './VistaListado';
@@ -44,7 +45,7 @@ export type PrefillCotizacion = {
   contactId?: string;
 };
 
-type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo';
+type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones';
 
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
 // React: solo lo entrega la respuesta de `/api/cotizacion/entrar` (y, desde
@@ -463,14 +464,26 @@ export default function Panel() {
               desactualizado hasta 30 días (ver el comentario de `establecerSesion`,
               arriba). Ocultar el botón es sólo para no ofrecerle a un
               vendedor una pestaña que el servidor le va a rechazar con 403
-              de todas formas. */}
+              de todas formas.
+
+              Fase 5 (descuento con aprobación): "Aprobaciones" se suma con el
+              MISMO criterio, cosmético de la misma forma -- las tres rutas
+              de app/api/cotizacion/{pendientes,aprobar,rechazar}/route.ts
+              releen la fila de quien pide con `autorizarSuperadmin`, igual
+              que /api/equipo/*, y devuelven 403 a quien no es superadmin de
+              verdad ahora mismo. */}
           <nav className="mt-4 flex gap-4 border-b border-[var(--carta-border)]" aria-label="Secciones del panel">
             {(
               [
                 ['crear', 'Crear'],
                 ['cotizaciones', 'Cotizaciones'],
                 ['metricas', 'Métricas'],
-                ...(rol === 'superadmin' ? ([['equipo', 'Equipo']] as [Pestana, string][]) : []),
+                ...(rol === 'superadmin'
+                  ? ([
+                      ['equipo', 'Equipo'],
+                      ['aprobaciones', 'Aprobaciones'],
+                    ] as [Pestana, string][])
+                  : []),
               ] as [Pestana, string][]
             ).map(([valor, etiqueta]) => (
               <button
@@ -512,6 +525,7 @@ export default function Panel() {
                 onSesionInvalida={onSesionInvalida}
                 plantilla={plantilla}
                 onPlantillaConsumida={onPlantillaConsumida}
+                rol={rol}
               />
             </div>
             {pestana === 'cotizaciones' && (
@@ -536,6 +550,11 @@ export default function Panel() {
                 comentario junto a la pestaña. */}
             {pestana === 'equipo' && rol === 'superadmin' && (
               <VistaEquipo obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+            )}
+            {/* Fase 5: mismo doble chequeo que "Equipo", mismo motivo -- ver
+                el comentario junto a la pestaña. */}
+            {pestana === 'aprobaciones' && rol === 'superadmin' && (
+              <VistaAprobaciones obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
             )}
           </div>
         </main>
