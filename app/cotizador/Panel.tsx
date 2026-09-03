@@ -270,7 +270,7 @@ export default function Panel() {
           ok: false,
           error:
             'No pudimos abrir tu sesión en este navegador. Si estás viendo el panel dentro de ' +
-            'GoHighLevel, abrilo en una pestaña aparte.',
+            'Bralto, abrilo en una pestaña aparte.',
         };
       }
       guardarCsrf(datosVerificacion.csrf);

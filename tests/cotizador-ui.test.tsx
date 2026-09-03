@@ -886,7 +886,11 @@ describe('Cotizador', () => {
     expect(aviso.className).toMatch(/red/);
   });
 
-  it('GoHighLevel aparece como una línea secundaria, sin instrucciones de enviar a mano', async () => {
+  // El dueño paga la marca blanca de GoHighLevel: en pantalla el CRM se
+  // llama "Bralto", nunca "GoHighLevel" ni "GHL" -- ver docs/... y el
+  // pedido del dueño. Esta pantalla es la primera que un vendedor mira
+  // después de cada envío, así que es donde más importa.
+  it('Bralto aparece como una línea secundaria, sin instrucciones de enviar a mano, y nunca como "GoHighLevel"', async () => {
     mockFetch();
     const usuario = userEvent.setup();
     render(<Cotizador />);
@@ -902,18 +906,22 @@ describe('Cotizador', () => {
     await waitFor(() => {
       expect(screen.getByText(/est-1/)).toBeInTheDocument();
     });
+    expect(screen.getByText(/bralto: estimate est-1 creado/i)).toBeInTheDocument();
     expect(screen.queryByText(/env[ií]ala vos desde ah[ií]/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/abrila en gohighlevel/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/gohighlevel/i)).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toMatch(/gohighlevel|\bghl\b/i);
   });
 
-  // Revisión final (hallazgo menor, M2): antes, si GoHighLevel fallaba, acá
-  // se pintaba `GoHighLevel: {resultado.ghlError}` en crudo -- la respuesta
-  // tal cual la mandó GoHighLevel, en inglés, a veces con JSON adentro --
-  // en la pantalla que el vendedor mira justo después de cada envío. Mismo
-  // criterio que `AvisoError` en VistaListado.tsx: un aviso humano
-  // primero, y el texto crudo detrás de un botón, no a la vista sin
-  // pedirlo (ni siquiera en un atributo que un hover revele).
-  it('si GoHighLevel falla, el detalle crudo queda escondido detrás de un aviso humano', async () => {
+  // Ronda de correcciones (hallazgo del dueño): antes, si Bralto fallaba,
+  // acá se pintaba la respuesta cruda en inglés -- primero directo (M2),
+  // después detrás de un botón "ver detalle". El dueño lo vio y fue
+  // tajante: "mi cliente no entiende nada de eso, quitémoslo" -- eso es el
+  // interior del motor, no algo que lea un vendedor. El detalle crudo ya
+  // no se pinta en NINGÚN lado de esta pantalla -- ni visible de entrada,
+  // ni detrás de un control, ni en un atributo -- pero el aviso humano se
+  // queda: un fallo no puede desaparecer del todo.
+  it('si Bralto falla, el detalle crudo no aparece en ningún lado -- sólo el aviso humano', async () => {
     mockFetch({ ghlFalla: 'GHL workflow 422: {"status":422,"message":"timezone offset","traceId":"abc-123"}' });
     const usuario = userEvent.setup();
     render(<Cotizador />);
@@ -926,16 +934,17 @@ describe('Cotizador', () => {
     });
     await usuario.click(screen.getByRole('button', { name: /cotizar y enviar/i }));
 
-    // El aviso humano está a la vista de entrada.
-    const boton = await screen.findByRole('button', { name: /ver detalle/i });
-    expect(screen.getByText(/no se avis[oó] al crm/i)).toBeInTheDocument();
-    // El JSON crudo NO está a la vista todavía -- ni como texto ni en un
-    // atributo (p. ej. `title`) que un hover revele.
+    // El aviso humano está a la vista de entrada, sin mencionar el nombre
+    // real del proveedor.
+    expect(await screen.findByText(/no se avis[oó] al crm \(bralto\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/gohighlevel/i)).not.toBeInTheDocument();
+    // El JSON crudo no está a la vista -- ni como texto ni en un atributo
+    // (p. ej. `title`) que un hover revele.
     expect(screen.queryByText(/traceId/i)).not.toBeInTheDocument();
     expect(document.body.innerHTML).not.toMatch(/traceId/i);
-
-    await usuario.click(boton);
-    expect(screen.getByText(/traceId/i)).toBeInTheDocument();
+    // Y no hay ningún control -- "ver detalle" ni ningún otro -- capaz de
+    // revelarlo.
+    expect(screen.queryByRole('button', { name: /ver detalle/i })).not.toBeInTheDocument();
   });
 
   it('no permite un segundo envío tras uno exitoso (protección contra doble clic)', async () => {
@@ -1685,7 +1694,12 @@ describe('Sesión por cookie y token anti-CSRF (Tarea 9, ronda de correcciones 1
     await usuario.type(screen.getByLabelText(/^clave$/i), 'correcta');
     await usuario.click(screen.getByRole('button', { name: /entrar/i }));
 
-    expect(await screen.findByText(/no pudimos abrir tu sesión/i)).toBeInTheDocument();
+    const aviso = await screen.findByText(/no pudimos abrir tu sesión/i);
+    // El dueño paga la marca blanca de GoHighLevel: este mensaje menciona
+    // al proveedor del iframe por nombre, y ese nombre tiene que ser
+    // "Bralto" -- nunca "GoHighLevel" ni "GHL".
+    expect(aviso.textContent).toMatch(/bralto/i);
+    expect(aviso.textContent).not.toMatch(/gohighlevel/i);
     // No entró: ni el catálogo ni ningún botón de la pantalla principal.
     expect(screen.queryByLabelText(/buscar/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /nueva cotización/i })).not.toBeInTheDocument();

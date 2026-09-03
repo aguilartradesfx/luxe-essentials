@@ -115,15 +115,21 @@ describe('VistaListado — descuento con aprobación (fase 5)', () => {
   // hotel: nada que dependa de que ya salió (Reenviar, ya cubierto por
   // `pdf_ruta`), nada que suponga un precio en pie (Modificar), y nada de
   // cerrar un trato que nunca llegó a existir (Ganada/Perdida).
+  //
+  // Hallazgo del dueño (ronda de correcciones): "Ganada"/"Perdida" ya no
+  // son botones sueltos en la fila -- viven dentro de este mismo menú, ver
+  // VistaListado.tsx. La prueba se adapta para seguir buscándolas donde
+  // ahora viven (`menuitem`, no `button`) -- si se buscara por `button`
+  // seguiría en verde aunque el menú SÍ las mostrara, porque nunca hay un
+  // `button` con ese nombre ahí adentro (son `role="menuitem"`).
   it('una fila "esperando_aprobacion" no ofrece Ganada, Perdida, Reenviar ni Modificar', async () => {
     mockFetch({ filas: [FILA_ESPERANDO] });
     renderVista();
 
     const fila = (await screen.findByText('Ana Pérez')).closest('tr') as HTMLElement;
-    expect(within(fila).queryByRole('button', { name: /^ganada$/i })).not.toBeInTheDocument();
-    expect(within(fila).queryByRole('button', { name: /^perdida$/i })).not.toBeInTheDocument();
-
     const menu = await abrirMenu(userEvent.setup(), fila);
+    expect(within(menu).queryByRole('menuitem', { name: /marcar como ganada/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole('menuitem', { name: /marcar como perdida/i })).not.toBeInTheDocument();
     expect(within(menu).queryByRole('menuitem', { name: /reenviar/i })).not.toBeInTheDocument();
     expect(within(menu).queryByRole('menuitem', { name: /modificar/i })).not.toBeInTheDocument();
   });
@@ -148,9 +154,9 @@ describe('VistaListado — descuento con aprobación (fase 5)', () => {
     renderVista();
 
     const fila = (await screen.findByText('Beto Ruiz')).closest('tr') as HTMLElement;
-    expect(within(fila).queryByRole('button', { name: /^ganada$/i })).not.toBeInTheDocument();
-    expect(within(fila).queryByRole('button', { name: /^perdida$/i })).not.toBeInTheDocument();
     const menu = await abrirMenu(usuario, fila);
+    expect(within(menu).queryByRole('menuitem', { name: /marcar como ganada/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole('menuitem', { name: /marcar como perdida/i })).not.toBeInTheDocument();
     expect(within(menu).queryByRole('menuitem', { name: /cancelar solicitud/i })).not.toBeInTheDocument();
   });
 

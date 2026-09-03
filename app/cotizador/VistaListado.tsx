@@ -202,83 +202,40 @@ function estiloEstado(estado: Estado): string {
   }
 }
 
-// Ronda de correcciones 2 (hallazgo del dueño): antes, `ghl_error` se
+// Ronda de correcciones 3 (hallazgo del dueño): antes, `ghl_error` se
 // volcaba tal cual en la fila -- la respuesta cruda del servidor de
-// GoHighLevel, en inglés, con JSON adentro, ocupando varios renglones. Le
-// servía a quien depura y no le decía nada a un vendedor. La regla de la
-// fase 1 de este proyecto sigue de pie: un fallo no puede desaparecer del
-// todo (ver el comentario junto a `correo_error`, más abajo, en la fila) --
-// así que el texto crudo no se borra, se mueve detrás de un control que se
-// abre con el mouse o con el teclado (`<button aria-expanded>`, sin
-// dependencias nuevas). `resumen` es la frase en español que necesita el
-// vendedor; `detalle` es la respuesta tal cual la mandó el servidor, para
-// quien tenga que depurarla.
+// GoHighLevel, en inglés, con JSON adentro -- detrás de un botón "ver
+// detalle". El dueño lo vio y fue tajante: eso es el interior del motor y
+// quien lo lee es un vendedor, no alguien que depure nada. El detalle crudo
+// ya no se pinta en NINGÚN lado de la pantalla -- ni visible ni detrás de
+// un clic ni en un atributo -- pero la regla de la fase 1 de este proyecto
+// sigue de pie: un fallo no puede desaparecer del todo, así que el aviso en
+// español (`resumen`) se queda. El dato crudo sigue viajando en la
+// respuesta de `/listado` y quedando en la base -- ver `ghl_error`/
+// `correo_error` en `FilaListado`, más arriba -- para quien tenga que
+// depurarlo desde ahí, no desde esta pantalla.
 type TonoAviso = 'critico' | 'aviso';
 
-function AvisoError({
-  id,
-  resumen,
-  detalle,
-  tono,
-  abierto,
-  onToggle,
-}: {
-  id: string;
-  resumen: string;
-  detalle: string;
-  tono: TonoAviso;
-  abierto: boolean;
-  onToggle: () => void;
-}) {
+function AvisoError({ resumen, tono }: { resumen: string; tono: TonoAviso }) {
   // 'critico': el cliente se quedó sin la cotización (correo_error) -- el
   // mismo rojo que ya usa la píldora "Error". 'aviso': la cotización salió
   // bien, lo que falló es el aviso al CRM (ghl_error) -- el mismo ámbar que
   // ya usa el resto de la pantalla para "salió, pero con algo pendiente"
   // (ver el mensaje de /reenviar más abajo). Ningún color nuevo.
   const color = tono === 'critico' ? 'text-red-700' : 'text-amber-700';
-  return (
-    <div className="mt-1 max-w-[16rem]">
-      <p className={`text-xs font-medium ${color}`}>
-        {resumen}{' '}
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={abierto}
-          aria-controls={id}
-          // Revisión final (hallazgo menor): este botón llevaba
-          // `title={detalle}` -- el rediseño sacó el volcado crudo del
-          // cuerpo de la fila, pero lo dejó en un atributo. Un vendedor que
-          // pasara el mouse por encima veía el JSON igual, sin hacer clic
-          // en "ver detalle", y ninguna prueba lo detectaba porque
-          // `queryByText` no mira atributos. El detalle ya se pinta como
-          // texto, abajo, cuando `abierto` es true -- no hace falta
-          // repetirlo en un tooltip que se ve sin pedirlo.
-          className="font-normal underline decoration-dotted underline-offset-2 hover:text-navy"
-        >
-          {abierto ? 'ocultar detalle' : 'ver detalle'}
-        </button>
-      </p>
-      {abierto && (
-        <p id={id} className="mt-1 whitespace-pre-wrap break-words text-[11px] text-teal/70">
-          {detalle}
-        </p>
-      )}
-    </div>
-  );
+  return <p className={`mt-1 max-w-[16rem] text-xs font-medium ${color}`}>{resumen}</p>;
 }
 
-// Hallazgo del dueño: seis controles por fila (Ganada, Perdida, Ver PDF,
-// Reenviar, Duplicar, Ver en GoHighLevel) ocupaban más espacio que los
-// datos de la cotización. `ITEM_MENU` describe las cuatro que se recogen
-// detrás de un botón de tres puntos por fila: son apoyo situacional (revisar
-// un PDF ya mandado, reenviarlo, duplicar la cotización, saltar a la ficha
-// del contacto en el CRM) -- ninguna es algo que un vendedor haga con cada
-// fila que mira. "Ganada" y "Perdida" NO entran acá a propósito: son la
-// decisión que un vendedor toma con la mayor frecuencia al repasar su
-// listado -- es la razón de ser de esta pantalla -- y enterrarla a dos
-// clics (abrir el menú, después elegir) cambiaría un problema de saturación
-// por uno de fricción en lo que más se usa. Se quedan como botones sólidos,
-// igual que antes.
+// Hallazgo del dueño, primera ronda: seis controles por fila (Ganada,
+// Perdida, Ver PDF, Reenviar, Duplicar, Ver en Bralto) ocupaban más
+// espacio que los datos de la cotización, y confundían al cliente del
+// dueño. `ItemMenu` describe TODAS las acciones de una fila -- se recogen
+// detrás de un único botón de tres puntos (ver el comentario junto a su
+// uso, más abajo, para el porqué de cada una). El dueño vio primero una
+// versión que dejaba "Ganada"/"Perdida" como botones sueltos fuera del
+// menú (por ser la decisión más frecuente) y decidió lo contrario: las
+// quiere adentro, junto con las demás -- menos controles sueltos en la
+// fila, aunque sea la acción más común.
 type ItemMenu =
   | { tipo: 'boton'; etiqueta: string; disabled?: boolean; onClick: () => void }
   | { tipo: 'enlace'; etiqueta: string; href: string };
@@ -409,6 +366,17 @@ function MenuAcciones({
 
   return (
     <>
+      {/* Hallazgo del dueño: sin la columna "Acciones" ni "Ganada"/"Perdida"
+          como botones sueltos, este botón queda solo en la fila -- ya no
+          necesita parecer un botón (borde, fondo) para no competir con
+          nada. Sigue siendo el mismo control accesible de siempre
+          (`aria-haspopup`/`aria-expanded`/`aria-controls`, navegación con
+          flechas, Escape, clic afuera -- todo eso vive más abajo y no se
+          tocó) y `aria-label` le da un nombre accesible aunque no lleve
+          texto visible. Sólo cambia el aspecto: los tres puntos en
+          vertical, sin nada alrededor en reposo, y un cambio de color al
+          pasar el mouse o enfocar con teclado para que se note que se
+          puede clicar. */}
       <button
         ref={botonRef}
         type="button"
@@ -417,9 +385,9 @@ function MenuAcciones({
         aria-controls={id}
         aria-label={etiqueta}
         onClick={() => (abierto ? onCerrar() : onAbrir())}
-        className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-sm leading-none text-navy hover:bg-navy hover:text-beige"
+        className="rounded px-1.5 py-1 text-base leading-none text-teal transition-colors hover:text-navy focus-visible:text-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
       >
-        ⋯
+        ⋮
       </button>
       {abierto &&
         posicion &&
@@ -546,14 +514,6 @@ export function VistaListado({
   // no hace falta soportar acciones simultáneas en varias filas.
   const [procesandoId, setProcesandoId] = useState<string | null>(null);
   const [mensajesFila, setMensajesFila] = useState<Record<string, Mensaje>>({});
-
-  // Qué detalle técnico (ghl_error/correo_error) está desplegado ahora
-  // mismo, por fila -- ver `AvisoError`. Colapsado por defecto: el texto
-  // crudo del servidor no está a la vista mientras nadie pida verlo.
-  const [detallesAbiertos, setDetallesAbiertos] = useState<Record<string, boolean>>({});
-  function alternarDetalle(clave: string) {
-    setDetallesAbiertos((d) => ({ ...d, [clave]: !d[clave] }));
-  }
 
   // Qué fila tiene el menú de acciones (Ver PDF/Reenviar/Duplicar/Ver en
   // GoHighLevel) desplegado ahora mismo. Una fila a la vez, mismo criterio
@@ -909,7 +869,14 @@ export function VistaListado({
                 <th className="px-3 py-2">Vigencia</th>
                 <th className="px-3 py-2 text-right">Monto</th>
                 <th className="px-3 py-2">Estado</th>
-                <th className="px-3 py-2 min-w-[13rem]">Acciones</th>
+                {/* Hallazgo del dueño: la columna de acciones no lleva
+                    encabezado -- sólo el botón de tres puntos, al final de
+                    cada fila (ver `MenuAcciones` más abajo). Cada botón ya
+                    trae su propio nombre accesible (`aria-label`, con el
+                    nombre del cliente de esa fila), así que un lector de
+                    pantalla no depende de un encabezado de columna para
+                    identificarlo. */}
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--carta-border)]">
@@ -930,7 +897,16 @@ export function VistaListado({
                       <p className="whitespace-nowrap text-navy">{nombre}</p>
                       {empresa && <p className="whitespace-nowrap text-xs text-teal">{empresa}</p>}
                     </td>
-                    <td className="px-3 py-3 align-top text-navy">{fila.numero ?? '—'}</td>
+                    {/* Hallazgo del dueño: a esta columna le sobraba tan
+                        poco ancho que "COT-2026-0012" se partía en dos o
+                        tres renglones. `whitespace-nowrap` (mismo recurso
+                        que ya usa Cliente, arriba) obliga al layout de la
+                        tabla a reservarle el ancho que el número necesita
+                        para entrar en un solo renglón -- lo saca de la
+                        columna de Acciones, que ahora sólo tiene un ícono y
+                        ya no necesita los 13rem que pedía con "Ganada" y
+                        "Perdida" como botones sueltos. */}
+                    <td className="px-3 py-3 align-top text-navy whitespace-nowrap">{fila.numero ?? '—'}</td>
                     <td className="px-3 py-3 align-top text-teal">{fila.vendedor || '—'}</td>
                     <td className="px-3 py-3 align-top text-xs text-teal/70">{formatearFecha(fila.created_at)}</td>
                     <td className="px-3 py-3 align-top">
@@ -963,14 +939,7 @@ export function VistaListado({
                           llegó al cliente -- el fallo más grave de los dos:
                           la cotización no le llegó a nadie. */}
                       {fila.estado === 'error' && fila.correo_error && (
-                        <AvisoError
-                          id={`correo-error-${fila.id}`}
-                          resumen="No le llegó el correo al cliente."
-                          detalle={fila.correo_error}
-                          tono="critico"
-                          abierto={!!detallesAbiertos[`correo:${fila.id}`]}
-                          onToggle={() => alternarDetalle(`correo:${fila.id}`)}
-                        />
+                        <AvisoError resumen="No le llegó el correo al cliente." tono="critico" />
                       )}
                       {fila.motivo_cierre && (
                         <p className="mt-1 max-w-[16rem] text-xs text-teal">{fila.motivo_cierre}</p>
@@ -979,16 +948,7 @@ export function VistaListado({
                           es nada más el aviso al CRM. No es el mismo fallo
                           que `correo_error` y no debe verse igual (ver
                           `AvisoError`, arriba en el archivo). */}
-                      {fila.ghl_error && (
-                        <AvisoError
-                          id={`ghl-error-${fila.id}`}
-                          resumen="No se avisó al CRM (GoHighLevel)."
-                          detalle={fila.ghl_error}
-                          tono="aviso"
-                          abierto={!!detallesAbiertos[`ghl:${fila.id}`]}
-                          onToggle={() => alternarDetalle(`ghl:${fila.id}`)}
-                        />
-                      )}
+                      {fila.ghl_error && <AvisoError resumen="No se avisó al CRM (Bralto)." tono="aviso" />}
                       {/* "Modificar" (migración 0016): el rastro entre dos
                           filas, con el número de cotización -- lo que el
                           cliente cita por teléfono, no un id. En la fila
@@ -1035,47 +995,24 @@ export function VistaListado({
                         )}
                     </td>
                     <td className="px-3 py-3 align-top">
-                      {/* Jerarquía de acciones (hallazgo del dueño): seis
-                          controles por fila ocupaban más espacio que los
-                          datos de la cotización. "Ganada"/"Perdida" son la
-                          decisión que un vendedor toma con más frecuencia al
-                          repasar su listado -- la razón de ser de esta
-                          pantalla -- y quedan afuera del menú, como botones
-                          sólidos, para no cambiar saturación por fricción en
-                          lo más usado. El resto (revisar el PDF, reenviar,
-                          duplicar, saltar al CRM) es apoyo situacional: se
-                          recoge detrás del botón de tres puntos, ver
-                          `MenuAcciones` más arriba en el archivo.
+                      {/* Jerarquía de acciones -- decisión revisada del
+                          dueño (ver docs de la ronda anterior para el
+                          historial): "Ganada"/"Perdida" como botones sueltos
+                          en la fila confundían al cliente del dueño. Se
+                          suman al menú de tres puntos, junto con el resto de
+                          apoyo situacional (revisar el PDF, reenviar,
+                          duplicar, saltar al CRM) -- ver `MenuAcciones` más
+                          arriba en el archivo. Van primero en la lista: son
+                          la decisión que un vendedor toma con más frecuencia
+                          al repasar su listado, y el orden de un menú no
+                          cuesta nada.
 
                           Fase 5: ninguna de las dos aplica sobre
                           'esperando_aprobacion'/'rechazada' -- ver
                           ESTADOS_SIN_CIERRE, arriba en el archivo: nada de
                           eso salió al hotel todavía, así que no hay nada
                           que marcar ganado o perdido. */}
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {!ESTADOS_SIN_CIERRE.includes(fila.estado) && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={enProceso}
-                              onClick={() => void cerrar(fila.id, 'ganada')}
-                              className="rounded-lg bg-navy px-2.5 py-1 text-xs font-medium text-beige hover:bg-navy/90 disabled:opacity-40"
-                            >
-                              Ganada
-                            </button>
-                            <button
-                              type="button"
-                              disabled={enProceso}
-                              onClick={() => {
-                                setPidiendoMotivoId(fila.id);
-                                setMotivoTexto('');
-                              }}
-                              className="rounded-lg border border-[var(--carta-border)] px-2.5 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
-                            >
-                              Perdida
-                            </button>
-                          </>
-                        )}
+                      <div className="flex items-center">
                         <MenuAcciones
                           id={`menu-acciones-${fila.id}`}
                           etiqueta={`Más acciones para ${nombre}`}
@@ -1083,6 +1020,25 @@ export function VistaListado({
                           onAbrir={() => setMenuAbiertoId(fila.id)}
                           onCerrar={() => setMenuAbiertoId(null)}
                           items={[
+                            ...(!ESTADOS_SIN_CIERRE.includes(fila.estado)
+                              ? [
+                                  {
+                                    tipo: 'boton' as const,
+                                    etiqueta: 'Marcar como ganada',
+                                    disabled: enProceso,
+                                    onClick: () => void cerrar(fila.id, 'ganada'),
+                                  },
+                                  {
+                                    tipo: 'boton' as const,
+                                    etiqueta: 'Marcar como perdida',
+                                    disabled: enProceso,
+                                    onClick: () => {
+                                      setPidiendoMotivoId(fila.id);
+                                      setMotivoTexto('');
+                                    },
+                                  },
+                                ]
+                              : []),
                             ...(fila.pdf_ruta
                               ? [
                                   {
@@ -1136,7 +1092,7 @@ export function VistaListado({
                               ? [
                                   {
                                     tipo: 'enlace' as const,
-                                    etiqueta: 'Ver en GoHighLevel',
+                                    etiqueta: 'Ver en Bralto',
                                     href: `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${fila.contact_id}`,
                                   },
                                 ]

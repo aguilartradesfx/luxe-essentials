@@ -403,14 +403,6 @@ export function VistaCrear({
   // revisión de la Tarea 8.
   const [creado, setCreado] = useState(false);
   const [resultado, setResultado] = useState<Resultado | null>(null);
-  // Revisión final (hallazgo menor, M2): `ghlError` es la respuesta cruda
-  // que mandó GoHighLevel -- en inglés, a veces con JSON adentro (ver
-  // AvisoError en VistaListado.tsx, que esconde el mismo tipo de texto
-  // detrás de un clic). Acá se pintaba directo, sin esconder nada, en la
-  // pantalla que el vendedor mira justo después de cada envío -- la más
-  // probable para que lo vea. Colapsado por defecto, igual que en el
-  // listado: no está a la vista mientras nadie lo pida.
-  const [detalleGhlAbierto, setDetalleGhlAbierto] = useState(false);
 
   // La vista previa (Tarea 8): ya no hay `calcular` ni catálogo en el
   // navegador, así que el total y el desglose por línea vienen de
@@ -775,7 +767,6 @@ export function VistaCrear({
     setBordadoEspecial(false);
     setResultado(null);
     setCreado(false);
-    setDetalleGhlAbierto(false);
     setCotizacion(COTIZACION_VACIA);
     setPreviaError('');
     // Fase 5: una cotización nueva de verdad, sin ningún descuento personalizado a medio pedir.
@@ -835,7 +826,6 @@ export function VistaCrear({
     if (!puedeCrear) return;
     setCreando(true);
     setResultado(null);
-    setDetalleGhlAbierto(false);
     try {
       const csrf = obtenerCsrf();
       const res = await fetch('/api/cotizacion', {
@@ -1522,37 +1512,21 @@ export function VistaCrear({
                   quedó guardada y es recuperable.
                 </p>
               )}
-              {/* GoHighLevel queda como una línea secundaria, informativa — ya no es
+              {/* Bralto queda como una línea secundaria, informativa — ya no es
                   el envío real, así que no lleva instrucciones de mandar nada a mano. */}
               {resultado.ghlEstimateId ? (
-                <p className="mt-1 text-teal">GoHighLevel: Estimate {resultado.ghlEstimateId} creado.</p>
+                <p className="mt-1 text-teal">Bralto: Estimate {resultado.ghlEstimateId} creado.</p>
               ) : resultado.ghlError ? (
-                // Revisión final (hallazgo menor, M2): antes acá se pintaba
-                // `GoHighLevel: {resultado.ghlError}` en crudo -- la
-                // respuesta tal cual la mandó GoHighLevel, en inglés, a
-                // veces con JSON adentro. Mismo criterio que `AvisoError`
-                // en VistaListado.tsx: un aviso humano primero, y el texto
-                // crudo detrás de un botón, no a la vista sin pedirlo.
-                <p className="mt-1 text-xs font-medium text-amber-700">
-                  No se avisó al CRM (GoHighLevel).{' '}
-                  <button
-                    type="button"
-                    onClick={() => setDetalleGhlAbierto((v) => !v)}
-                    aria-expanded={detalleGhlAbierto}
-                    aria-controls="ghl-error-detalle"
-                    className="font-normal underline decoration-dotted underline-offset-2 hover:text-navy"
-                  >
-                    {detalleGhlAbierto ? 'ocultar detalle' : 'ver detalle'}
-                  </button>
-                  {detalleGhlAbierto && (
-                    <span
-                      id="ghl-error-detalle"
-                      className="mt-1 block whitespace-pre-wrap break-words text-[11px] font-normal text-teal/70"
-                    >
-                      {resultado.ghlError}
-                    </span>
-                  )}
-                </p>
+                // Ronda de correcciones (hallazgo del dueño): antes acá
+                // vivía un botón "ver detalle" que revelaba la respuesta
+                // cruda de Bralto -- en inglés, a veces con JSON adentro. El
+                // dueño lo vio y fue tajante: eso es el interior del motor,
+                // no algo que un vendedor tenga que leer. El aviso humano se
+                // queda (un fallo no puede desaparecer del todo); el texto
+                // crudo ya no se pinta en ningún lado de esta pantalla --
+                // sigue viajando en `resultado.ghlError` y quedando en la
+                // base para quien tenga que depurarlo desde ahí.
+                <p className="mt-1 text-xs font-medium text-amber-700">No se avisó al CRM (Bralto).</p>
               ) : null}
             </div>
           )}

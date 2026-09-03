@@ -178,8 +178,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Ver PDF / Reenviar / Duplicar / Ver en GoHighLevel viven detrás del botón
-// de tres puntos (menú de acciones) de cada fila -- ver `MenuAcciones` en
+// Marcar como ganada / Marcar como perdida / Ver PDF / Reenviar / Duplicar /
+// Ver en Bralto viven detrás del botón de tres puntos (menú de acciones) de
+// cada fila -- ver `MenuAcciones` en
 // VistaListado.tsx. `usuario` ya viene de `userEvent.setup()` en cada
 // prueba; este helper solo abre el menú de la fila dada, con el mismo
 // cliente. El menú se porta a `document.body` (para no quedar recortado
@@ -302,7 +303,13 @@ describe('VistaListado', () => {
     });
   });
 
-  it('"Ganada" llama a /cerrar con el estado correcto', async () => {
+  // Hallazgo del dueño (ronda de correcciones): "Ganada"/"Perdida" ya no
+  // son botones sueltos en la fila -- confundían al cliente del dueño. Se
+  // mudaron al menú de tres puntos, con las etiquetas "Marcar como
+  // ganada"/"Marcar como perdida" -- la prueba se adapta para abrir el
+  // menú primero y elegir el ítem ahí, conservando exactamente lo mismo
+  // que afirmaba antes (qué se manda a `/cerrar`, con qué cabecera).
+  it('"Marcar como ganada" llama a /cerrar con el estado correcto', async () => {
     const { llamadas } = mockFetch();
     const usuario = userEvent.setup();
     renderVista();
@@ -311,7 +318,8 @@ describe('VistaListado', () => {
       expect(screen.getByText(/ana pérez/i)).toBeInTheDocument();
     });
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /^ganada$/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /marcar como ganada/i }));
 
     await waitFor(() => {
       const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/cerrar'));
@@ -323,14 +331,15 @@ describe('VistaListado', () => {
 
   // Regla de seguridad 1: /cerrar y /reenviar escriben, así que exigen el
   // token anti-CSRF en la cabecera.
-  it('"Ganada" manda el token anti-CSRF en la cabecera', async () => {
+  it('"Marcar como ganada" manda el token anti-CSRF en la cabecera', async () => {
     const { llamadas } = mockFetch();
     const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /^ganada$/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /marcar como ganada/i }));
 
     await waitFor(() => {
       const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/cerrar'));
@@ -373,14 +382,15 @@ describe('VistaListado', () => {
     });
   });
 
-  it('"Perdida" pide el motivo antes de cerrar, y lo manda a /cerrar', async () => {
+  it('"Marcar como perdida" pide el motivo antes de cerrar, y lo manda a /cerrar', async () => {
     const { llamadas } = mockFetch();
     const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /^perdida$/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /marcar como perdida/i }));
 
     // Sin motivo todavía: no puede confirmarse.
     const confirmar = await within(fila).findByRole('button', { name: /confirmar/i });
@@ -631,40 +641,32 @@ describe('VistaListado', () => {
   // una píldora roja que decía "Error" y nada más, aunque `ghl_error` y
   // `motivo_cierre` ya viajaran al navegador en la misma respuesta.
   //
-  // Ronda de correcciones 2 (hallazgo del dueño): el texto crudo del
-  // servidor (`correo_error`/`ghl_error`) ya no se vuelca directo en la
-  // fila -- se lee un aviso humano primero, y el texto tal cual queda
-  // detrás de un botón "ver detalle" (ver `AvisoError` en VistaListado).
-  // Esta prueba se adapta al formato nuevo, no se borra: sigue afirmando
-  // que el motivo de fondo llega al navegador, ahora en dos pasos.
-  it('una fila en error muestra un aviso humano del correo, y el detalle crudo detrás de un control', async () => {
+  // Ronda de correcciones 3 (hallazgo del dueño): antes el texto crudo del
+  // servidor (`correo_error`/`ghl_error`) quedaba detrás de un botón "ver
+  // detalle" (ver ronda 2 en el historial de este archivo). El dueño lo
+  // vio y dijo que ni así -- "mi cliente no entiende nada de eso". El
+  // detalle crudo se va de la pantalla del todo, no sólo se esconde: ya no
+  // hay ningún control que lo revele. Esta prueba se adapta otra vez, no
+  // se borra: sigue afirmando que el aviso humano llega solo, y ahora
+  // suma que el texto crudo no aparece bajo ningún control posible.
+  it('una fila en error muestra un aviso humano del correo, sin ningún control que revele el texto crudo', async () => {
     mockFetch({
       filas: [{ ...FILA_ABIERTA, estado: 'error', correo_error: 'Falta RESEND_API_KEY: no se pudo enviar el correo.' }],
     });
-    const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
 
     // El aviso humano está a la vista de entrada.
     expect(screen.getByText(/no le llegó el correo al cliente/i)).toBeInTheDocument();
-    // El texto crudo del servidor NO está a la vista todavía.
+    // El texto crudo del servidor no está a la vista, en ningún lado.
     expect(screen.queryByText(/falta resend_api_key/i)).not.toBeInTheDocument();
-    // Tampoco escondido en un atributo (p. ej. `title`, que un hover
-    // revela sin hacer clic en "ver detalle"): `queryByText` sólo mira
-    // texto, no atributos -- por eso se revisa el HTML entero acá.
+    // Tampoco escondido en un atributo (p. ej. `title`): `queryByText` sólo
+    // mira texto, no atributos -- por eso se revisa el HTML entero acá.
     expect(document.body.innerHTML).not.toMatch(/falta resend_api_key/i);
-
-    // Con teclado: Tab hasta el control (primero cae el filtro de estado,
-    // que va antes en la página) y Enter lo despliega -- no depende del
-    // mouse.
-    const boton = screen.getByRole('button', { name: /ver detalle/i });
-    await usuario.tab();
-    await usuario.tab();
-    expect(boton).toHaveFocus();
-    await usuario.keyboard('{Enter}');
-
-    expect(screen.getByText(/falta resend_api_key/i)).toBeInTheDocument();
+    // Y no hay ningún control -- "ver detalle" u otro -- que lo revele: el
+    // dato ya no vive en esta pantalla, ni siquiera detrás de un clic.
+    expect(screen.queryByRole('button', { name: /ver detalle/i })).not.toBeInTheDocument();
   });
 
   it('una fila perdida muestra el motivo_cierre', async () => {
@@ -677,35 +679,37 @@ describe('VistaListado', () => {
     expect(screen.getByText(/escogió a otro proveedor/i)).toBeInTheDocument();
   });
 
-  it('una fila con ghl_error muestra un aviso humano, distinto del error del correo, con el detalle crudo detrás de un control', async () => {
+  it('una fila con ghl_error muestra un aviso humano, distinto del error del correo, sin ningún control que revele el texto crudo', async () => {
     mockFetch({
       filas: [{ ...FILA_ABIERTA, ghl_error: 'GHL estimate 500: boom' }],
     });
-    const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
 
-    // Aviso humano, distinto del de correo_error, a la vista de entrada.
-    expect(within(fila).getByText(/no se avisó al crm/i)).toBeInTheDocument();
+    // Aviso humano, distinto del de correo_error, a la vista de entrada --
+    // y sin "GoHighLevel" ni "GHL": el CRM se llama Bralto para quien mira
+    // la pantalla.
+    expect(within(fila).getByText(/no se avisó al crm \(bralto\)/i)).toBeInTheDocument();
     expect(within(fila).queryByText(/no le llegó el correo al cliente/i)).not.toBeInTheDocument();
-    // El texto crudo no está a la vista todavía.
+    // El texto crudo no está a la vista, en ningún lado.
     expect(within(fila).queryByText(/boom/i)).not.toBeInTheDocument();
-    // Ni en un atributo del botón (mismo hallazgo que el `title={detalle}`
-    // de más arriba): se revisa el HTML de la fila entera, no sólo su texto.
+    // Ni en un atributo (mismo hallazgo que el `title={detalle}` de antes):
+    // se revisa el HTML de la fila entera, no sólo su texto.
     expect(fila.innerHTML).not.toMatch(/boom/i);
-
-    await usuario.click(within(fila).getByRole('button', { name: /ver detalle/i }));
-    expect(within(fila).getByText(/boom/i)).toBeInTheDocument();
+    // Y no hay ningún control que lo revele -- el detalle crudo ya no vive
+    // en esta pantalla, ni siquiera detrás de un clic.
+    expect(within(fila).queryByRole('button', { name: /ver detalle/i })).not.toBeInTheDocument();
   });
 
   // Ancla lo esencial del pedido del dueño: la respuesta cruda del
-  // servidor no puede aparecer en pantalla sin que nadie la pida, y tiene
-  // que haber un aviso en español de que algo falló. Se prueba con las dos
+  // servidor no puede aparecer en pantalla bajo ningún camino -- ni visible
+  // de entrada, ni detrás de un control, ni en un atributo -- y tiene que
+  // haber un aviso en español de que algo falló. Se prueba con las dos
   // fallas por separado (correo/CRM) para que ninguna de las dos pueda
   // quedar en silencio.
-  it('el texto crudo del servidor nunca está a la vista sin pedirlo -- siempre hay un aviso humano primero', async () => {
+  it('el texto crudo del servidor nunca está a la vista, bajo ningún camino -- siempre hay un aviso humano primero', async () => {
     mockFetch({
       filas: [
         {
@@ -730,13 +734,21 @@ describe('VistaListado', () => {
     expect(document.body.innerHTML).not.toMatch(/traceId/i);
     expect(document.body.innerHTML).not.toMatch(/timezone offset/i);
     expect(document.body.innerHTML).not.toMatch(/"status":422/i);
+    // Ni hay ningún control -- "ver detalle" ni ningún otro -- capaz de
+    // revelarlo: el dueño pidió que se fuera de la pantalla del todo, no
+    // que se escondiera mejor.
+    expect(screen.queryByRole('button', { name: /ver detalle/i })).not.toBeInTheDocument();
 
     // Pero sí hay, sin pedir nada, un aviso en español de que algo falló.
     expect(screen.getByText(/no le llegó el correo al cliente/i)).toBeInTheDocument();
     expect(screen.getByText(/no se avisó al crm/i)).toBeInTheDocument();
   });
 
-  it('hay un enlace a la ficha del contacto en GoHighLevel cuando la fila tiene contact_id', async () => {
+  // El dueño paga la marca blanca de GoHighLevel: en pantalla el CRM se
+  // llama "Bralto" -- el enlace sigue apuntando al dominio real de
+  // GoHighLevel (eso no cambia, es el proveedor de verdad), pero la
+  // etiqueta que lee el vendedor no puede decir "GoHighLevel".
+  it('hay un enlace a la ficha del contacto en Bralto cuando la fila tiene contact_id', async () => {
     mockFetch();
     const usuario = userEvent.setup();
     renderVista();
@@ -744,7 +756,7 @@ describe('VistaListado', () => {
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const filaConContacto = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
     await abrirMenu(usuario, filaConContacto);
-    const enlace = screen.getByRole('menuitem', { name: /gohighlevel/i });
+    const enlace = screen.getByRole('menuitem', { name: /bralto/i });
     expect(enlace).toHaveAttribute(
       'href',
       `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${FILA_ABIERTA.contact_id}`,
@@ -754,7 +766,7 @@ describe('VistaListado', () => {
     // La fila sin `contact_id` (FILA_POR_VENCER) no lleva ese enlace.
     const filaSinContacto = screen.getByText(/beto ruiz/i).closest('tr') as HTMLElement;
     await abrirMenu(usuario, filaSinContacto);
-    expect(screen.queryByRole('menuitem', { name: /gohighlevel/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /bralto/i })).not.toBeInTheDocument();
   });
 
   it('sin cotizaciones, un texto neutro', async () => {
@@ -776,7 +788,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /^ganada$/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /marcar como ganada/i }));
 
     await waitFor(() => {
       expect(onSesionInvalida).toHaveBeenCalledTimes(1);
@@ -890,9 +903,88 @@ describe('VistaListado', () => {
     expect(screen.queryByText(/reenviado/i)).not.toBeInTheDocument();
   });
 
-  // El menú de tres puntos (Ver PDF/Reenviar/Duplicar/Ver en GoHighLevel) es
-  // el control nuevo de este pedido: los atributos de accesibilidad de un
-  // menú, y las tres formas en que "se espera" que se cierre.
+  // Ronda de correcciones (hallazgo del dueño): el CRM se llama "Bralto" en
+  // todo lo que ve un vendedor -- el dueño paga la marca blanca de
+  // GoHighLevel y no quiere que el nombre del proveedor real aparezca en
+  // ningún texto legible de la pantalla. El dominio del enlace "Ver en
+  // Bralto" no cuenta -- es una URL, no texto que alguien lea -- por eso
+  // esta prueba mira `textContent` (lo que de verdad se ve), no el HTML
+  // completo.
+  it('ningún texto visible de la pantalla dice "GoHighLevel" ni "GHL"', async () => {
+    mockFetch({
+      filas: [
+        { ...FILA_ABIERTA, ghl_error: 'GHL estimate 500: boom' },
+        { ...FILA_POR_VENCER, estado: 'error', correo_error: 'GHL workflow 422: falla' },
+      ],
+    });
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    // Abre el menú de la fila con contact_id + locationId para que "Ver en
+    // Bralto" también entre al DOM -- si no se abriera, esa etiqueta ni
+    // siquiera se pintaría, y la prueba no diría nada sobre ella.
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await abrirMenu(usuario, fila);
+    expect(screen.getByRole('menuitem', { name: /bralto/i })).toBeInTheDocument();
+
+    expect(document.body.textContent).not.toMatch(/gohighlevel/i);
+    expect(document.body.textContent).not.toMatch(/\bghl\b/i);
+  });
+
+  // Hallazgo del dueño: sin la columna "Acciones" ni "Ganada"/"Perdida"
+  // sueltos, el único control de la fila es el botón de tres puntos -- ya
+  // no necesita parecer un botón.
+  it('el botón de tres puntos no tiene aspecto de botón, pero indica que se puede clicar al pasar el mouse o enfocar, y tiene nombre accesible', async () => {
+    mockFetch();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    const boton = within(fila).getByRole('button', { name: /más acciones/i });
+
+    // Tres puntos en vertical, nada más como texto visible.
+    expect(boton.textContent).toBe('⋮');
+    // Nombre accesible aunque no tenga texto visible.
+    expect(boton).toHaveAccessibleName('Más acciones para Ana Pérez');
+    // Sin aspecto de botón en reposo: nada de borde ni fondo.
+    expect(boton.className).not.toMatch(/\bborder\b/);
+    expect(boton.className).not.toMatch(/\bbg-/);
+    // Pero sí cambia al pasar el mouse o enfocar con teclado -- si no,
+    // nada le avisaría a alguien que ese texto se puede clicar.
+    expect(boton.className).toMatch(/hover:/);
+    expect(boton.className).toMatch(/focus-visible:/);
+  });
+
+  // Hallazgo del dueño: "no hay encabezado ni columna con nombre" -- sólo
+  // los tres puntos, al final de cada fila.
+  it('la columna del botón de tres puntos no tiene un encabezado con nombre', async () => {
+    mockFetch();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    expect(screen.queryByText(/^acciones$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: /acciones/i })).not.toBeInTheDocument();
+  });
+
+  // Hallazgo del dueño: "COT-2026-0012" se partía en dos o tres renglones
+  // en la columna "Número". `whitespace-nowrap` (el mismo recurso que ya
+  // usa Cliente) es lo que en un navegador de verdad evita el corte --
+  // jsdom no hace layout, así que la única forma de anclar esto es
+  // afirmar que la clase está puesta.
+  it('el número de cotización no se corta en varios renglones', async () => {
+    mockFetch();
+    renderVista();
+
+    const celda = await screen.findByText('COT-2026-0010');
+    expect(celda.tagName).toBe('TD');
+    expect(celda.className).toMatch(/whitespace-nowrap/);
+  });
+
+  // El menú de tres puntos (Marcar como ganada/Marcar como perdida/Ver
+  // PDF/Reenviar/Duplicar/Ver en Bralto) es el único control por fila: los
+  // atributos de accesibilidad de un menú, y las tres formas en que "se
+  // espera" que se cierre.
   describe('menú de acciones', () => {
     it('el botón lleva aria-haspopup y aria-expanded, y el panel es un role="menu"', async () => {
       mockFetch();
@@ -916,26 +1008,35 @@ describe('VistaListado', () => {
       expect(boton).toHaveAttribute('aria-controls', menu.id);
     });
 
-    // "Modificar" (migración 0016) sumó una quinta acción de apoyo al menú
-    // -- el título ya no dice "las cuatro", pero la fila de prueba
-    // (`FILA_ABIERTA`, estado 'enviada') sigue siendo la misma: entra en
-    // ESTADOS_MODIFICABLES, así que "Modificar" aparece acá también.
-    it('el menú lista las cinco acciones de apoyo, y no "Ganada"/"Perdida"', async () => {
+    // Hallazgo del dueño (ronda de correcciones): la fila ya no tiene NINGÚN
+    // botón suelto -- "Ganada"/"Perdida" se mudaron adentro del menú, junto
+    // con el resto ("Modificar" sigue apareciendo porque `FILA_ABIERTA`
+    // está en 'enviada', dentro de ESTADOS_MODIFICABLES). Van primero en la
+    // lista -- son la decisión más frecuente.
+    it('el menú lista las siete acciones, con "Marcar como ganada"/"Marcar como perdida" primero, y la fila no tiene ningún botón suelto', async () => {
       mockFetch();
       const usuario = userEvent.setup();
       renderVista();
 
       await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
       const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-      // "Ganada"/"Perdida" siguen siendo botones sueltos de la fila, no
-      // entran al menú -- por eso siguen encontrándose con `within(fila)`
-      // sin abrir nada.
-      expect(within(fila).getByRole('button', { name: /^ganada$/i })).toBeInTheDocument();
-      expect(within(fila).getByRole('button', { name: /^perdida$/i })).toBeInTheDocument();
+      // Ni "Ganada"/"Perdida" ni ningún otro botón viven sueltos en la fila
+      // -- el único control ahí es el de tres puntos que abre el menú.
+      expect(within(fila).queryByRole('button', { name: /^ganada$/i })).not.toBeInTheDocument();
+      expect(within(fila).queryByRole('button', { name: /^perdida$/i })).not.toBeInTheDocument();
+      expect(within(fila).getAllByRole('button')).toHaveLength(1);
 
       await abrirMenu(usuario, fila);
       const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
-      expect(items).toEqual(['Ver PDF', 'Reenviar', 'Duplicar', 'Modificar', 'Ver en GoHighLevel']);
+      expect(items).toEqual([
+        'Marcar como ganada',
+        'Marcar como perdida',
+        'Ver PDF',
+        'Reenviar',
+        'Duplicar',
+        'Modificar',
+        'Ver en Bralto',
+      ]);
     });
 
     it('Escape cierra el menú y devuelve el foco al botón de tres puntos', async () => {
@@ -1010,23 +1111,24 @@ describe('VistaListado', () => {
       const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
       await abrirMenu(usuario, fila);
 
-      // Cinco ítems desde "Modificar" (migración 0016): Ver PDF, Reenviar,
-      // Duplicar, Modificar, Ver en GoHighLevel.
+      // Siete ítems, con "Ganada"/"Perdida" primero: Marcar como ganada,
+      // Marcar como perdida, Ver PDF, Reenviar, Duplicar, Modificar, Ver en
+      // Bralto.
       const items = screen.getAllByRole('menuitem');
-      expect(items[0]).toHaveFocus(); // "Ver PDF"
+      expect(items[0]).toHaveFocus(); // "Marcar como ganada"
 
       await usuario.keyboard('{ArrowDown}');
-      expect(items[1]).toHaveFocus(); // "Reenviar"
+      expect(items[1]).toHaveFocus(); // "Marcar como perdida"
 
-      await usuario.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
-      expect(items[4]).toHaveFocus(); // "Ver en GoHighLevel"
+      await usuario.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}');
+      expect(items[6]).toHaveFocus(); // "Ver en Bralto"
 
       // Cierra el ciclo: de la última vuelve a la primera.
       await usuario.keyboard('{ArrowDown}');
       expect(items[0]).toHaveFocus();
 
       await usuario.keyboard('{ArrowUp}');
-      expect(items[4]).toHaveFocus(); // vuelve a la última
+      expect(items[6]).toHaveFocus(); // vuelve a la última
     });
 
     it('abrir el menú de otra fila cierra el de la fila anterior', async () => {
