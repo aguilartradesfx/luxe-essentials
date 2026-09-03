@@ -1,17 +1,76 @@
 import 'server-only';
 import { ESCALAS, escalonDe, IVA_GENERAL } from '@/lib/cotizador/escalas';
-import type {
-  Cotizacion,
-  GrupoDescuento,
-  LineaCalculada,
-  LineaEntrada,
-  Sku,
+import {
+  DESCUENTO_PERSONALIZADO_MAX,
+  type Cotizacion,
+  type DescuentoPersonalizado,
+  type GrupoDescuento,
+  type LineaCalculada,
+  type LineaEntrada,
+  type Sku,
 } from '@/lib/cotizador/tipos';
 
 export type OpcionesCalculo = {
   tasaIva?: number;
   bordadoEspecial?: boolean;
+  // Fase 5 (descuento con aprobación): reemplaza el descuento de escala en
+  // las líneas que alcanza, no se le suma. Ver `DescuentoPersonalizado` en
+  // tipos.ts para la forma, y el diseño en
+  // docs/superpowers/specs/2026-09-02-descuento-aprobacion-design.md para
+  // el porqué de cada decisión.
+  descuentoPersonalizado?: DescuentoPersonalizado;
 };
+
+// Mismo criterio que la validación de `tasaIva` más abajo: `calcular` es una
+// función pura y no puede confiar en que quien la llama pasó por Zod. Un
+// número fuera de [0, 100) o un objeto que no respeta la unión discriminada
+// (las dos claves a la vez, o ninguna) es un dato corrupto, no una elección
+// legítima -- se rechaza en vez de adivinar cuál mitad vale.
+function validarPct(pct: number, contexto: string): void {
+  if (!Number.isFinite(pct) || pct < 0 || pct >= DESCUENTO_PERSONALIZADO_MAX) {
+    throw new Error(
+      `Descuento personalizado inválido${contexto}: ${pct}. Debe ser un número entre 0 ` +
+        `(incluido) y ${DESCUENTO_PERSONALIZADO_MAX} (excluido) -- a ${DESCUENTO_PERSONALIZADO_MAX}% ` +
+        'el producto queda gratis, y eso no es un descuento.',
+    );
+  }
+}
+
+// Valida la forma completa de `descuentoPersonalizado` y devuelve, por
+// grupo, el porcentaje que reemplaza a la escala -- o `undefined` si ese
+// grupo no tiene reemplazo y sigue con la escala automática, tal cual hoy.
+function resolverDescuentoPersonalizado(
+  dp: DescuentoPersonalizado | undefined,
+): (grupo: GrupoDescuento) => number | undefined {
+  if (!dp) return () => undefined;
+
+  const tieneGeneral = 'general' in dp;
+  const tieneFamilias = 'familias' in dp;
+  if (tieneGeneral === tieneFamilias) {
+    // true en los dos casos raros: ninguna de las dos claves, o las dos a
+    // la vez. El diseño las documenta como alternativas ("{ general: n } o
+    // { familias: {...} }", migración 0017) -- nunca combinadas.
+    throw new Error(
+      'Descuento personalizado inválido: debe traer exactamente una de "general" o "familias".',
+    );
+  }
+
+  if (tieneGeneral) {
+    const dpGeneral = dp as { general: number };
+    validarPct(dpGeneral.general, ' general');
+    return () => dpGeneral.general;
+  }
+
+  const dpFamilias = (dp as { familias: Partial<Record<GrupoDescuento, number>> }).familias;
+  for (const [grupo, pct] of Object.entries(dpFamilias)) {
+    if (pct !== undefined) validarPct(pct, ` de la familia "${grupo}"`);
+  }
+  // Una familia que no aparece en la cotización (ninguna línea de ese
+  // grupo) no es un error: es habitual pedir el descuento antes de armar
+  // el pedido. Esta función simplemente nunca se llama con ese grupo, así
+  // que no hace nada -- decisión documentada en lib/validation.ts.
+  return (grupo) => dpFamilias[grupo];
+}
 
 // Medio hacia arriba. `Math.round` ya lo hace para positivos, y aquí no hay
 // negativos: un precio de lista o una cantidad negativos se rechazan antes
@@ -34,6 +93,11 @@ export function calcular(
   if (!Number.isFinite(tasaIva) || tasaIva < 0 || tasaIva > 1) {
     throw new Error(`Tasa de IVA inválida: ${tasaIva}. Debe ser un número entre 0 y 1.`);
   }
+
+  // Se valida y resuelve ANTES del catálogo: si el descuento personalizado
+  // viene corrupto, la cotización entera se rechaza -- no tiene sentido
+  // calcular ninguna línea con datos a medio confiar.
+  const pctPersonalizadoDe = resolverDescuentoPersonalizado(opciones.descuentoPersonalizado);
 
   const porId = new Map(skus.map((s) => [s.id, s]));
 
@@ -80,10 +144,20 @@ export function calcular(
     const totalDelGrupo = porGrupo.get(sku.grupo)!;
     const escalon = escalonDe(totalDelGrupo, escala);
 
+    // El descuento personalizado REEMPLAZA al de escala en las líneas que
+    // alcanza, no se le suma (diseño, fase 5): sumar un "15% extra" sobre
+    // un pedido que ya trae su 10% automático significaría cosas distintas
+    // según la cantidad, y el precio final dejaría de ser predecible.
+    // `pctPersonalizado` es `undefined` cuando esta línea no está
+    // alcanzada -- ahí sigue con `escalon.pct`, exactamente como hoy.
+    const pctPersonalizado = pctPersonalizadoDe(sku.grupo);
+    const personalizado = pctPersonalizado !== undefined;
+    const pct = personalizado ? pctPersonalizado : escalon.pct;
+
     // El redondeo va sobre el unitario, no sobre el total de la línea: la
     // cotización imprime ambos, y si se redondeara el total, el unitario
     // impreso por la cantidad no daría el total impreso.
-    const precioUnitario = redondear(sku.precioLista * (1 - escalon.pct / 100));
+    const precioUnitario = redondear(sku.precioLista * (1 - pct / 100));
     const subtotalLinea = precioUnitario * cantidad;
 
     lineas.push({
@@ -96,14 +170,16 @@ export function calcular(
       contenido: sku.contenido ? [...sku.contenido] : undefined,
       cantidad,
       precioLista: sku.precioLista,
-      descuentoPct: escalon.pct,
+      descuentoPct: pct,
       precioUnitario,
       subtotal: subtotalLinea,
       grupo: sku.grupo,
-      motivo:
-        escalon.pct === 0
+      motivo: personalizado
+        ? `Descuento personalizado: ${pct}% (reemplaza el descuento de escala)`
+        : escalon.pct === 0
           ? `${totalDelGrupo} ${escala.unidad} en ${escala.etiqueta} → sin descuento`
           : `${totalDelGrupo} ${escala.unidad} en ${escala.etiqueta} → ${escalon.pct}%`,
+      personalizado,
     });
 
     subtotal += subtotalLinea;

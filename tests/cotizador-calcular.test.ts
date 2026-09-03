@@ -261,4 +261,166 @@ describe('calcular', () => {
     expect(c.lineas[0].cantidad).toBe(24);
     expect(c.lineas[0].descuentoPct).toBe(5);
   });
+
+  describe('descuento personalizado (fase 5)', () => {
+    // Ancla: agregar la opción no puede cambiar ni un colón del
+    // comportamiento por defecto. Mismo escenario multi-grupo que "acumula
+    // cantidades entre productos del mismo grupo", con los mismos números
+    // verificados a mano ahí. Si cablear el descuento personalizado tocara
+    // por error la ruta sin él (p. ej. un `??` mal puesto que sustituyera
+    // `undefined` por `{}` y esa rama tratara `{}` como "general: 0"),
+    // cualquiera de las dos comparaciones de abajo lo detecta.
+    it('sin descuento personalizado, el resultado es idéntico al de siempre', () => {
+      const entradas = [
+        { skuId: 'uni-a', cantidad: 30 },
+        { skuId: 'uni-b', cantidad: 10 },
+        { skuId: 'impar', cantidad: 8 },
+      ];
+      const sinOpcion = calcular(entradas, SKUS);
+      const conOpcionExplicitamenteVacia = calcular(entradas, SKUS, {
+        descuentoPersonalizado: undefined,
+      });
+      expect(conOpcionExplicitamenteVacia).toEqual(sinOpcion);
+      expect(sinOpcion.subtotal).toBe(561960);
+      expect(sinOpcion.ahorro).toBe(62440);
+      expect(sinOpcion.iva).toBe(73055);
+      expect(sinOpcion.total).toBe(635015);
+      for (const linea of sinOpcion.lineas) expect(linea.personalizado).toBe(false);
+    });
+
+    it('el descuento general reemplaza la escala automática, no se suma', () => {
+      // uni-a x48 alcanza el escalón de 10% por sí sola. Un general de 15%
+      // tiene que dar 15%, no 10+15=25 ni 10 (ignorado).
+      const c = calcular([{ skuId: 'uni-a', cantidad: 48 }], SKUS, {
+        descuentoPersonalizado: { general: 15 },
+      });
+      expect(c.lineas[0].descuentoPct).toBe(15);
+      expect(c.lineas[0].precioUnitario).toBe(8500); // 10000 * 0.85
+      expect(c.lineas[0].personalizado).toBe(true);
+      expect(c.subtotal).toBe(8500 * 48);
+    });
+
+    it('el descuento personalizado puede ser menor que el de escala', () => {
+      // La misma cantidad (48) que arriba, pero con un general menor al
+      // 10% que daría la escala. No se prohíbe (diseño).
+      const c = calcular([{ skuId: 'uni-a', cantidad: 48 }], SKUS, {
+        descuentoPersonalizado: { general: 2 },
+      });
+      expect(c.lineas[0].descuentoPct).toBe(2);
+      expect(c.lineas[0].precioUnitario).toBe(9800); // 10000 * 0.98
+    });
+
+    it('el descuento por familia solo reemplaza la escala del grupo que alcanza', () => {
+      const c = calcular(
+        [
+          { skuId: 'uni-a', cantidad: 48 }, // grupo uniformes, escala 10%
+          { skuId: 'toa-a', cantidad: 48 }, // grupo toallas, escala 10%
+        ],
+        SKUS,
+        { descuentoPersonalizado: { familias: { uniformes: 20 } } },
+      );
+      const uni = c.lineas.find((l) => l.skuId === 'uni-a')!;
+      const toa = c.lineas.find((l) => l.skuId === 'toa-a')!;
+      expect(uni.descuentoPct).toBe(20);
+      expect(uni.personalizado).toBe(true);
+      // toa-a no está en `familias`: sigue con su escala automática, tal
+      // cual hoy. Esta línea es la que de verdad prueba "reemplaza, no
+      // aplica a todo": un motor que ignorara `familias` y aplicara el
+      // primer valor a todas las líneas fallaría acá.
+      expect(toa.descuentoPct).toBe(10);
+      expect(toa.personalizado).toBe(false);
+    });
+
+    it('un descuento por familia que no aparece en la cotización no hace nada', () => {
+      // Decisión (validación, item 3): una familia sin líneas en el carrito
+      // no es un error -- es habitual pedir el descuento antes de armar el
+      // pedido. `calcular` la ignora en silencio; sigue con la escala.
+      const c = calcular([{ skuId: 'uni-a', cantidad: 10 }], SKUS, {
+        descuentoPersonalizado: { familias: { 'sets-cama': 25 } },
+      });
+      expect(c.lineas[0].descuentoPct).toBe(0);
+      expect(c.lineas[0].personalizado).toBe(false);
+    });
+
+    it('el motivo dice que el descuento es personalizado cuando reemplaza la escala', () => {
+      const c = calcular([{ skuId: 'uni-a', cantidad: 48 }], SKUS, {
+        descuentoPersonalizado: { general: 15 },
+      });
+      expect(c.lineas[0].motivo).toMatch(/personalizado/i);
+      expect(c.lineas[0].motivo).toMatch(/15%/);
+    });
+
+    it('el iva se calcula sobre el subtotal ya con el descuento personalizado aplicado', () => {
+      const c = calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+        descuentoPersonalizado: { general: 10 },
+      });
+      expect(c.subtotal).toBe(9000); // 10000 * 0.9
+      expect(c.iva).toBe(Math.round(9000 * IVA_GENERAL));
+      expect(c.total).toBe(c.subtotal + c.iva);
+    });
+
+    it('acepta un descuento personalizado de 0%', () => {
+      const c = calcular([{ skuId: 'uni-a', cantidad: 48 }], SKUS, {
+        descuentoPersonalizado: { general: 0 },
+      });
+      expect(c.lineas[0].descuentoPct).toBe(0);
+      expect(c.lineas[0].precioUnitario).toBe(10000);
+      expect(c.lineas[0].personalizado).toBe(true);
+    });
+
+    it('lanza si el descuento personalizado general es negativo, NaN o llega a 100%', () => {
+      expect(() =>
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+          descuentoPersonalizado: { general: -5 },
+        }),
+      ).toThrow(/descuento/i);
+      // Caso NaN aparte del de rango: si la implementación solo revisara
+      // `pct < 0 || pct >= 100`, NaN pasa las dos comparaciones (ambas dan
+      // `false`) y esta prueba mata ese mutante específico.
+      expect(() =>
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+          descuentoPersonalizado: { general: NaN },
+        }),
+      ).toThrow(/descuento/i);
+      expect(() =>
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+          descuentoPersonalizado: { general: 100 },
+        }),
+      ).toThrow(/descuento/i);
+      // 99.99 sí se acepta: mata el mutante que topara el máximo antes de
+      // 100 (p. ej. `>= 99`).
+      expect(() =>
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+          descuentoPersonalizado: { general: 99.99 },
+        }),
+      ).not.toThrow();
+    });
+
+    it('lanza si un descuento por familia no es un número válido', () => {
+      expect(() =>
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+          descuentoPersonalizado: { familias: { uniformes: 150 } },
+        }),
+      ).toThrow(/descuento/i);
+    });
+
+    it('lanza si el descuento personalizado no trae ni "general" ni "familias", o trae los dos', () => {
+      // El tipo de TypeScript excluye estos dos casos en tiempo de
+      // compilación (unión discriminada), pero `calcular` es una función
+      // pura que no puede confiar en que su llamador respetó el tipo --
+      // mismo criterio que la validación de `tasaIva` (comentario en la
+      // implementación). Se simulan con `as any` porque son formas que el
+      // tipo ya no permite construir.
+      expect(() =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, { descuentoPersonalizado: {} as any }),
+      ).toThrow(/general|familias/i);
+      expect(() =>
+        calcular([{ skuId: 'uni-a', cantidad: 1 }], SKUS, {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          descuentoPersonalizado: { general: 10, familias: { uniformes: 5 } } as any,
+        }),
+      ).toThrow(/general|familias/i);
+    });
+  });
 });
