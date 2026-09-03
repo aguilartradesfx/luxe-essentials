@@ -32,6 +32,35 @@ export const maxDuration = 60;
 // correo tienen que decir la misma fecha que el Estimate de GoHighLevel.
 const DIAS_VIGENCIA = 30;
 
+// "Modificar" (migración 0016): sobre qué estados de la cotización VIEJA se
+// puede pedir un reemplazo. Se decidió acotarlo a 'creada' y 'enviada' --
+// las dos formas de "hay un precio en pie que el cliente puede estar
+// mirando ahora mismo":
+//
+//   - 'error' queda AFUERA: ahí nunca le llegó nada válido al cliente, no
+//     hay ningún precio vigente que reemplazar. Para eso está "Duplicar",
+//     que arma una cotización nueva sin ningún vínculo con la que falló.
+//   - 'ganada' y 'perdida' quedan AFUERA: son negocios ya cerrados.
+//     Convertir esa fila en 'reemplazada' le borraría el dato a las
+//     métricas de ganado/perdido (lib/cotizador/metricas.ts, que las
+//     cuenta por `cerrada_at`) sin que el resultado del negocio haya
+//     cambiado de verdad. Si el vendedor quiere retomar el contacto con un
+//     precio nuevo, es un trato aparte -- otra vez "Duplicar", no
+//     "Modificar".
+//   - 'reemplazada' (por definición) queda AFUERA: una cotización ya
+//     reemplazada no se puede volver a modificar -- encadenar reemplazos
+//     sobre una fila que ya no es la vigente es, como mínimo, confuso, y
+//     el rastro real ya vive en la fila que SÍ la reemplazó.
+//   - 'borrador'/'convertida' quedan AFUERA: no son cotizaciones enviadas
+//     de verdad (mismo motivo por el que /cerrar tampoco las acepta).
+//
+// Se usa dos veces en esta ruta: para validar `reemplazaId` al entrar, y
+// como guarda atómica del `update` final que marca la vieja como
+// reemplazada (evita una carrera: que el estado de la vieja haya cambiado
+// -- alguien la cerró en otra pestaña -- en el rato entre esa validación y
+// el envío real, unos segundos más tarde).
+const ESTADOS_MODIFICABLES: readonly string[] = ['creada', 'enviada'];
+
 export async function POST(request: Request) {
   let crudo: unknown;
   try {
@@ -75,6 +104,39 @@ export async function POST(request: Request) {
     );
   }
 
+  // "Modificar": se relee la cotización vieja ACÁ, fresca -- en vez de
+  // confiar en lo que mandó el navegador (que ya trae `numero`/
+  // `contact_id`/`estado` desde el listado, pero es una foto que pudo
+  // quedar vieja desde que se cargó la pantalla). Esto evita que una fila
+  // 'ganada'/'perdida'/'reemplazada' (o borrada a mano) reciba un
+  // "reemplazo" que no debería existir, y es la fuente de verdad del
+  // `numero` y el `contact_id` que se guardan más abajo -- nunca lo que
+  // mande el cliente. Si algo de esto falla, se corta ACÁ: nada se inserta,
+  // no hay Estimate, no hay PDF ni correo. "No debe quedar nada a medias."
+  let filaReemplazada: { estado: string; numero: string; contact_id: string | null } | null = null;
+  if (datos.reemplazaId) {
+    const { data: filaVieja, error: errorVieja } = await supabaseAdmin()
+      .from('cotizaciones')
+      .select('estado, numero, contact_id')
+      .eq('id', datos.reemplazaId)
+      .maybeSingle();
+
+    if (errorVieja) {
+      console.error('[cotizador] No se pudo consultar la cotización a reemplazar.', errorVieja.message);
+      return NextResponse.json({ ok: false, error: 'No se pudo consultar.' }, { status: 500 });
+    }
+    if (!filaVieja) {
+      return NextResponse.json({ ok: false, error: 'La cotización a reemplazar no existe.' }, { status: 404 });
+    }
+    if (!ESTADOS_MODIFICABLES.includes(filaVieja.estado)) {
+      return NextResponse.json(
+        { ok: false, error: `No se puede modificar una cotización en estado "${filaVieja.estado}".` },
+        { status: 409 },
+      );
+    }
+    filaReemplazada = filaVieja;
+  }
+
   // Primero la base, después GoHighLevel (Tarea 7). Si el CRM falla, la
   // cotización sigue existiendo y es recuperable; al revés, el cliente tendría
   // una cotización que Luxe no registró.
@@ -110,6 +172,10 @@ export async function POST(request: Request) {
         // nunca lo fue.
         bordadoEspecial: cotizacion.bordadoEspecial,
       },
+      // "Modificar": sólo van si el envío viene de esa acción. `numero` sale
+      // de `filaReemplazada` (la relectura de arriba), nunca de lo que
+      // mandó el cliente -- ver el comentario grande junto a esa consulta.
+      ...(datos.reemplazaId ? { reemplaza_a: datos.reemplazaId, reemplaza_a_numero: filaReemplazada!.numero } : {}),
     })
     .select()
     .single();
@@ -148,8 +214,17 @@ export async function POST(request: Request) {
   // `resend_id`, candidata a que algún reintento futuro reenviara al hotel
   // una cotización que ya recibió. Moviendo GoHighLevel antes, un colgado
   // ahí ya no puede tumbar el registro de un correo que sí salió.
+  // "Modificar": si el vendedor no mandó un `contactId` propio, se reutiliza
+  // el de la cotización que se está reemplazando -- es el punto central del
+  // encargo ("reutilizando toda la info del contacto que ya estaba con esa
+  // cotización"), para que GoHighLevel nunca dé de alta un contacto nuevo
+  // para un hotel que ya existe ahí. `datos.contactId` sigue teniendo
+  // prioridad si de algún modo viniera (mismo criterio de siempre: lo que
+  // manda el vendedor no se pisa sin necesidad).
+  const contactIdEntrada = datos.contactId ?? filaReemplazada?.contact_id ?? undefined;
+
   const ghl = await crearEstimate(
-    { cotizacion, cliente: datos.cliente, contactId: datos.contactId },
+    { cotizacion, cliente: datos.cliente, contactId: contactIdEntrada },
     {
       apiKey: process.env.LUXE_GHL_API_KEY ?? '',
       locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
@@ -157,10 +232,10 @@ export async function POST(request: Request) {
   );
 
   // El contactId se guarda aunque GoHighLevel haya fallado después: si el
-  // contacto se llegó a resolver (recibido del vendedor, o recién creado por
-  // `crearEstimate`), es un dato gratis que ya tenemos en la mano y que de
-  // otro modo se pierde sin dejar rastro en la fila.
-  const contactId = ghl.contactId ?? datos.contactId ?? null;
+  // contacto se llegó a resolver (recibido del vendedor, del reemplazo, o
+  // recién creado por `crearEstimate`), es un dato gratis que ya tenemos en
+  // la mano y que de otro modo se pierde sin dejar rastro en la fila.
+  const contactId = ghl.contactId ?? contactIdEntrada ?? null;
 
   // Workflow "Cotización nueva" (config.WORKFLOW_COTIZACION_NUEVA): avisa por
   // dentro en cuanto la cotización queda registrada. Sólo tiene sentido con un
@@ -367,6 +442,40 @@ export async function POST(request: Request) {
       '[cotizador] El envío se procesó pero no se pudo actualizar la fila.',
       errorActualizacion.message,
     );
+  }
+
+  // "Modificar": la cotización vieja se marca 'reemplazada' recién ACÁ --
+  // después de confirmar que la nueva salió de verdad
+  // (`correoResultado.ok`) -- nunca antes. El punto más delicado del
+  // encargo: si se marcara la vieja antes (o sin condición) y el envío de
+  // la nueva fallara, el hotel se quedaría sin NINGUNA cotización vigente.
+  // Con esta guarda, si el correo falla (estado 'error' arriba), este
+  // bloque ni se ejecuta: la vieja queda exactamente como estaba, todavía
+  // vigente, y el vendedor puede reintentar (Reenviar, si el PDF sí se
+  // generó, o Modificar de nuevo). Best-effort igual que el cierre del
+  // borrador más arriba: la cotización nueva ya está a salvo pase lo que
+  // pase acá, así que un fallo se registra y no tumba la respuesta. El
+  // `.in('estado', ESTADOS_MODIFICABLES)` es la misma guarda atómica que ya
+  // valida `reemplazaId` al entrar, repetida acá contra una carrera: que el
+  // estado de la vieja haya cambiado en el rato (varios segundos, con PDF y
+  // correo de por medio) entre esa validación y este punto.
+  if (datos.reemplazaId && correoResultado.ok) {
+    const { error: errorReemplazo } = await supabaseAdmin()
+      .from('cotizaciones')
+      .update({
+        updated_at: new Date().toISOString(),
+        estado: 'reemplazada',
+        reemplazada_por: data.id,
+        reemplazada_por_numero: numero,
+      })
+      .eq('id', datos.reemplazaId)
+      .in('estado', ESTADOS_MODIFICABLES);
+    if (errorReemplazo) {
+      console.error(
+        '[cotizador] La cotización nueva salió, pero no se pudo marcar la vieja como reemplazada.',
+        errorReemplazo.message,
+      );
+    }
   }
 
   return NextResponse.json({

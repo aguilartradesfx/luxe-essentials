@@ -41,7 +41,23 @@ vi.mock('@/lib/cotizador/correo', () => ({
 
 const insertado: unknown[] = [];
 const actualizados: unknown[] = [];
+// Filtros (`.eq()`/`.in()`) que llegaron a CUALQUIER `update`, en orden.
+// Mismo propósito que `filtrosUpdate` en tests/api-panel.test.ts (ver el
+// comentario grande ahí sobre por qué hace falta: sin esto, borrar el
+// `.in('estado', ESTADOS_MODIFICABLES)` del `update` que marca la vieja
+// como reemplazada deja esta suite en verde igual, porque el mock resuelve
+// el mismo resultado la llame el código o no).
+const filtrosUpdate: ['eq' | 'in', string, string][] = [];
 let errorAlActualizar: { message: string } | null = null;
+// "Modificar" (migración 0016): lo que devuelve la relectura de la
+// cotización vieja (`select('estado, numero, contact_id').eq('id', ...).maybeSingle()`)
+// cuando el envío trae `reemplazaId`. Las pruebas que no mandan
+// `reemplazaId` nunca llegan a leer esto -- el código no hace esa consulta
+// si `datos.reemplazaId` no viene.
+let resultadoFilaVieja: { data: unknown; error: { message: string } | null } = {
+  data: { estado: 'enviada', numero: 'COT-2026-0001', contact_id: 'contacto-viejo' },
+  error: null,
+};
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
     from: () => ({
@@ -56,9 +72,32 @@ vi.mock('@/lib/supabase/server', () => ({
           }),
         };
       },
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => resultadoFilaVieja,
+        }),
+      }),
+      // `.eq()` y `.in()` devuelven el mismo nodo encadenable, "thenable" vía
+      // `.then()` -- así `await update(...).eq(...)` (lo que ya hacían
+      // /reenviar y el update final de esta ruta) sigue funcionando igual
+      // que antes, y `await update(...).eq(...).in(...)` (lo nuevo, para
+      // marcar la vieja como reemplazada, con la guarda atómica de estado)
+      // también resuelve, sin tener que duplicar el mock.
       update: (cambios: unknown) => {
         actualizados.push(cambios);
-        return { eq: async () => ({ error: errorAlActualizar }) };
+        const nodo = {
+          eq: (columna: string, valor: string) => {
+            filtrosUpdate.push(['eq', columna, String(valor)]);
+            return nodo;
+          },
+          in: (columna: string, valores: readonly string[]) => {
+            filtrosUpdate.push(['in', columna, valores.join(',')]);
+            return nodo;
+          },
+          then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
+            Promise.resolve({ error: errorAlActualizar }).then(resolve, reject),
+        };
+        return nodo;
       },
     }),
   }),
@@ -111,7 +150,9 @@ describe('POST /api/cotizacion', () => {
   beforeEach(() => {
     insertado.length = 0;
     actualizados.length = 0;
+    filtrosUpdate.length = 0;
     errorAlActualizar = null;
+    resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0001', contact_id: 'contacto-viejo' }, error: null };
     process.env.LUXE_SESION_SECRETO = 'secreta';
     vi.mocked(crearEstimate).mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' });
     // `mockClear` (no `mockReset`): borra el historial de llamadas de la
@@ -685,6 +726,167 @@ describe('POST /api/cotizacion', () => {
         estado: 'enviada',
         ghl_error: expect.stringContaining('GHL workflow 500: boom'),
       });
+    });
+  });
+
+  // "Modificar" (migración 0016): el envío final manda `reemplazaId` cuando
+  // viene de esa acción. Estas pruebas cubren las tres cosas que se suman a
+  // "Duplicar" (ver el comentario grande de ESTADOS_MODIFICABLES en
+  // route.ts): reutilizar el contacto, enlazar las dos filas, y marcar la
+  // vieja -- y, el punto más delicado, marcarla SÓLO cuando el envío de la
+  // nueva salió de verdad.
+  describe('"Modificar" (reemplazaId)', () => {
+    const REEMPLAZA_ID = 'aaaaaaaa-1111-4000-8000-000000000099';
+
+    it('rechaza (409) reemplazar una cotización en un estado no modificable, sin insertar nada', async () => {
+      resultadoFilaVieja = { data: { estado: 'ganada', numero: 'COT-2026-0002', contact_id: 'c1' }, error: null };
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(409);
+      const cuerpo = await res.json();
+      expect(cuerpo.error).toContain('ganada');
+      expect(insertado).toHaveLength(0);
+    });
+
+    it('rechaza (409) reemplazar una cotización ya reemplazada', async () => {
+      resultadoFilaVieja = { data: { estado: 'reemplazada', numero: 'COT-2026-0002', contact_id: 'c1' }, error: null };
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(409);
+      expect(insertado).toHaveLength(0);
+    });
+
+    it('rechaza (404) reemplazar una cotización que no existe, sin insertar nada', async () => {
+      resultadoFilaVieja = { data: null, error: null };
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(404);
+      expect(insertado).toHaveLength(0);
+    });
+
+    it('500 con mensaje genérico si falla la consulta de la cotización vieja, sin insertar nada', async () => {
+      resultadoFilaVieja = { data: null, error: { message: 'la base está caída' } };
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(500);
+      const cuerpo = await res.json();
+      expect(cuerpo.error).not.toContain('la base está caída');
+      expect(insertado).toHaveLength(0);
+    });
+
+    it('acepta reemplazar una cotización "creada" (no sólo "enviada")', async () => {
+      resultadoFilaVieja = { data: { estado: 'creada', numero: 'COT-2026-0002', contact_id: 'c1' }, error: null };
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(200);
+      expect(insertado).toHaveLength(1);
+    });
+
+    it('inserta la fila nueva con reemplaza_a y reemplaza_a_numero de la cotización vieja', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'c1' }, error: null };
+      await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(insertado[0]).toMatchObject({
+        reemplaza_a: REEMPLAZA_ID,
+        reemplaza_a_numero: 'COT-2026-0007',
+      });
+    });
+
+    it('una cotización que no viene de "Modificar" no lleva reemplaza_a ni reemplaza_a_numero', async () => {
+      await POST(peticionAutenticada(valido));
+      expect(insertado[0]).not.toHaveProperty('reemplaza_a');
+      expect(insertado[0]).not.toHaveProperty('reemplaza_a_numero');
+    });
+
+    it('reutiliza el contact_id de la cotización vieja cuando el vendedor no manda uno propio', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'contacto-viejo' }, error: null };
+      // Sin `contactId` en el cuerpo, y GoHighLevel tampoco devuelve uno
+      // (falló antes de resolverlo): la única fuente que queda es la fila
+      // vieja. Si el código ignorara `filaReemplazada.contact_id`, `contactId`
+      // llegaría a `crearEstimate` como `undefined` y el `contact_id` final
+      // quedaría `null`.
+      vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
+      await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      // `.at(-1)`, no `[0]`: `crearEstimate` (a diferencia de
+      // `enviarCotizacion`/`agregarNota`) no se limpia en el `beforeEach` de
+      // este archivo -- `mock.calls` acumula las llamadas de TODAS las
+      // pruebas anteriores, así que `[0]` sería la primera llamada de todo
+      // el archivo, no la de esta prueba.
+      const [params] = vi.mocked(crearEstimate).mock.calls.at(-1)!;
+      expect(params.contactId).toBe('contacto-viejo');
+      // `actualizados[0]` es el update final de la fila NUEVA (el que fija
+      // `contact_id`) -- `actualizados[1]`, si existe, es el que marca la
+      // VIEJA como reemplazada, y ese no lleva `contact_id`.
+      expect(actualizados[0]).toMatchObject({ contact_id: 'contacto-viejo' });
+    });
+
+    it('el contactId que manda el vendedor tiene prioridad sobre el de la cotización vieja', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'contacto-viejo' }, error: null };
+      vi.mocked(crearEstimate).mockResolvedValueOnce({ ok: false, error: 'GHL estimate 500: boom' });
+      await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID, contactId: 'contacto-del-vendedor' }));
+      // `.at(-1)`, no `[0]`: `crearEstimate` (a diferencia de
+      // `enviarCotizacion`/`agregarNota`) no se limpia en el `beforeEach` de
+      // este archivo -- `mock.calls` acumula las llamadas de TODAS las
+      // pruebas anteriores, así que `[0]` sería la primera llamada de todo
+      // el archivo, no la de esta prueba.
+      const [params] = vi.mocked(crearEstimate).mock.calls.at(-1)!;
+      expect(params.contactId).toBe('contacto-del-vendedor');
+    });
+
+    // El punto más delicado del encargo: si la nueva sale bien, la vieja se
+    // marca reemplazada; si NO sale (el correo falló), la vieja se queda
+    // exactamente como estaba -- el hotel nunca se queda sin ninguna
+    // cotización vigente.
+    it('cuando el correo de la nueva sale bien, marca la vieja como reemplazada con reemplazada_por y su numero', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'c1' }, error: null };
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(200);
+      const marcado = actualizados.find((a) => (a as Record<string, unknown>).estado === 'reemplazada');
+      expect(marcado).toMatchObject({
+        estado: 'reemplazada',
+        reemplazada_por: 'cot-1',
+        reemplazada_por_numero: 'COT-2026-0001',
+      });
+    });
+
+    it('si el correo de la nueva FALLA, no marca la vieja como reemplazada', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'c1' }, error: null };
+      vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'Resend 500: caído' });
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      // La nueva sí quedó registrada, sólo que en 'error' -- no se tumba la
+      // respuesta por esto (mismo criterio de siempre en esta ruta).
+      expect(cuerpo.ok).toBe(true);
+      const marcado = actualizados.find((a) => (a as Record<string, unknown>).estado === 'reemplazada');
+      expect(marcado).toBeUndefined();
+    });
+
+    it('sin reemplazaId, nunca marca ninguna fila como reemplazada', async () => {
+      await POST(peticionAutenticada(valido));
+      const marcado = actualizados.find((a) => (a as Record<string, unknown>).estado === 'reemplazada');
+      expect(marcado).toBeUndefined();
+    });
+
+    it('la marca de reemplazada usa la guarda atómica de estado (in ESTADOS_MODIFICABLES), filtrando también por id', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'c1' }, error: null };
+      await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      // Sin esto, dos vendedores que abren "Modificar" sobre la misma fila
+      // vieja casi al mismo tiempo (o un vendedor que la cierra a mano en
+      // otra pestaña mientras el envío está en vuelo) podrían pisar un
+      // 'ganada'/'perdida' con 'reemplazada' -- la guarda es lo que hace que
+      // ese `update` sólo aplique si el estado sigue siendo modificable en
+      // el momento exacto de escribir, no sólo en el de la validación
+      // inicial, varios segundos antes (PDF + correo de por medio).
+      expect(filtrosUpdate).toContainEqual(['eq', 'id', REEMPLAZA_ID]);
+      expect(filtrosUpdate).toContainEqual(['in', 'estado', 'creada,enviada']);
+    });
+
+    it('registra en consola si falla el marcado de la vieja como reemplazada, sin tumbar la respuesta', async () => {
+      resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0007', contact_id: 'c1' }, error: null };
+      errorAlActualizar = { message: 'fila bloqueada' };
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await POST(peticionAutenticada({ ...valido, reemplazaId: REEMPLAZA_ID }));
+      expect(res.status).toBe(200);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('no se pudo marcar la vieja'),
+        'fila bloqueada',
+      );
+      consoleError.mockRestore();
     });
   });
 });

@@ -149,6 +149,21 @@ describe('calcularMetricas', () => {
     expect(m.sinRespuesta.monto).toBe(1464480);
   });
 
+  // "Modificar" (migración 0016): mismo criterio que el borrador -> convertida
+  // de arriba. La fila 'reemplazada' SÍ tiene lineas/totales reales (a
+  // diferencia de un borrador del agente), así que si entrara a
+  // ESTADOS_REALES duplicaría el negocio -- productos, origen y "sin
+  // respuesta" contarían el mismo hotel dos veces, con dos montos distintos.
+  it('no cuenta dos veces cuando una cotizacion se reemplaza ("Modificar")', () => {
+    const vieja = fila({ id: 'vieja', estado: 'reemplazada' });
+    const nueva = fila({ id: 'nueva', estado: 'enviada' });
+    const m = calcularMetricas([vieja, nueva], HOY);
+    expect(m.sinRespuesta.cantidad).toBe(1);
+    expect(m.sinRespuesta.monto).toBe(1464480);
+    expect(m.porOrigen).toEqual({ humano: 1 });
+    expect(m.productos[0]).toMatchObject({ unidades: 16, monto: 1296000 });
+  });
+
   it('marca por vencer solo entre 0 y 7 dias, y vencidas aparte', () => {
     const casos = [
       { id: 'a', enviado_at: '2026-08-04T12:00:00Z' }, // vence en 7 dias exactos -> porVencer

@@ -75,6 +75,13 @@ export const cotizacionSchema = z.object({
   // del agente se queda en 'borrador' para siempre y bloquea
   // `registrarIntencion` para ese contacto de por vida.
   borradorId: z.string().min(1).optional(),
+  // "Modificar" (migración 0016): el id de la cotización que ésta reemplaza,
+  // cuando el envío viene de esa acción en vez de "Crear" o "Duplicar".
+  // `z.uuid()` y no `z.string().min(1)` como `borradorId`: este id sí vuelve
+  // a la base en una consulta por columna `id` (uuid) -- un valor sin esa
+  // forma revienta Postgres como 500 en vez de 400 (mismo motivo que en
+  // /cerrar, /reenviar y /duplicar).
+  reemplazaId: z.uuid('El id de la cotización a reemplazar no es válido.').optional(),
 });
 
 export type CotizacionInput = z.infer<typeof cotizacionSchema>;

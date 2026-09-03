@@ -27,6 +27,11 @@ type FilaReenviar = {
   totales: { total: number };
   created_at: string;
   pdf_ruta: string | null;
+  // "Modificar" (migración 0016): sólo tiene valor cuando `estado` es
+  // 'reemplazada' -- el número de la cotización que la reemplazó, para que
+  // el mensaje de error de más abajo lo mencione en vez de decir "reemplazada
+  // por otra" a secas.
+  reemplazada_por_numero: string | null;
 };
 
 export async function POST(request: Request) {
@@ -65,7 +70,7 @@ export async function POST(request: Request) {
   // con una falla real, `error` viene poblado.
   const { data: fila, error: errorConsulta } = await db
     .from('cotizaciones')
-    .select('id, numero, estado, cliente, totales, created_at, pdf_ruta')
+    .select('id, numero, estado, cliente, totales, created_at, pdf_ruta, reemplazada_por_numero')
     .eq('id', datos.id)
     .maybeSingle();
 
@@ -79,6 +84,23 @@ export async function POST(request: Request) {
   }
 
   const filaTipada = fila as FilaReenviar;
+
+  // "Modificar" (migración 0016): una cotización reemplazada dejó de ser la
+  // vigente -- reenviarle al hotel el PDF con el precio viejo es peor que no
+  // reenviar nada. Se corta acá, antes de tocar Storage o Resend, incluso
+  // antes de la guarda de `pdf_ruta` de abajo (esta razón para no reenviar
+  // es más de fondo que "no hay nada que adjuntar").
+  if (filaTipada.estado === 'reemplazada') {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: filaTipada.reemplazada_por_numero
+          ? `Esta cotización fue reemplazada por ${filaTipada.reemplazada_por_numero}: no se puede reenviar.`
+          : 'Esta cotización fue reemplazada por otra: no se puede reenviar.',
+      },
+      { status: 409 },
+    );
+  }
 
   // Sin PDF guardado no hay nada que adjuntar al correo: un error claro acá
   // vale más que uno confuso más adelante al intentar descargar una ruta

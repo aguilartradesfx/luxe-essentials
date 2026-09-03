@@ -21,9 +21,15 @@ const listadoSchema = z.object({
 // Tarea 1): nombre libre, no una llave foránea a un usuario — las filas
 // anteriores a esta fase lo traen en null y así se muestran, sin inventar
 // un nombre (ver VistaListado.tsx).
+// `reemplaza_a_numero`/`reemplazada_por_numero` (migración 0016): el rastro
+// de "Modificar" entre dos filas -- en la nueva, a cuál reemplaza; en la
+// vieja, cuál la reemplazó. Se manda el numero denormalizado, no el id: es
+// lo que el vendedor reconoce (lo que el cliente cita por teléfono), y así
+// esta pantalla no necesita un join ni una segunda consulta para mostrarlo.
 const COLUMNAS =
   'id, numero, created_at, updated_at, estado, origen, contact_id, cliente, totales, ' +
-  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error, correo_error, vendedor';
+  'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error, correo_error, vendedor, ' +
+  'reemplaza_a_numero, reemplazada_por_numero';
 
 export async function POST(request: Request) {
   let crudo: unknown;

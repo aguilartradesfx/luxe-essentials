@@ -551,6 +551,22 @@ describe('POST /api/cotizacion/cerrar', () => {
     expect(cuerpo.error).toContain('convertida');
   });
 
+  // "Modificar" (migración 0016): 'reemplazada' no está en
+  // ESTADOS_CIERRE_INICIAL ni en ESTADOS_CORRECCION -- este caso ya queda
+  // cubierto sin tocar cerrar/route.ts, esta prueba sólo lo deja en
+  // evidencia (regresión: si alguien agregara 'reemplazada' a cualquiera de
+  // los dos conjuntos, esta prueba cae).
+  it('rechaza cerrar una cotización reemplazada', async () => {
+    resultadoActualizacionConSelect = { data: [], error: null };
+    resultadoFila = { data: { estado: 'reemplazada' }, error: null };
+    const res = await postCerrar(
+      conSesionYCsrf('http://localhost/api/cotizacion/cerrar', { id: ID_VALIDO, estado: 'ganada' }),
+    );
+    expect(res.status).toBe(409);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).toContain('reemplazada');
+  });
+
   it('devuelve 404 si el id no existe', async () => {
     resultadoActualizacionConSelect = { data: [], error: null };
     resultadoFila = { data: null, error: null };
@@ -693,6 +709,42 @@ describe('POST /api/cotizacion/reenviar', () => {
     expect(cuerpo.error.toLowerCase()).toContain('pdf');
     expect(enviarCotizacion).not.toHaveBeenCalled();
     expect(actualizaciones).toHaveLength(0);
+  });
+
+  // "Modificar" (migración 0016): una cotización reemplazada dejó de ser la
+  // vigente -- reenviarle al hotel el PDF con el precio viejo es peor que no
+  // reenviar nada.
+  it('rechaza reenviar una cotización reemplazada, sin tocar Storage ni Resend', async () => {
+    resultadoFila = {
+      data: filaReenviable({ estado: 'reemplazada', reemplazada_por_numero: 'COT-2026-0099' }),
+      error: null,
+    };
+    const res = await postReenviar(
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(409);
+    const cuerpo = await res.json();
+    expect(cuerpo.ok).toBe(false);
+    // Menciona con qué se reemplazó -- el vendedor necesita ese numero para
+    // saber a cuál cotización sí seguirle el rastro.
+    expect(cuerpo.error).toContain('COT-2026-0099');
+    expect(enlaceFirmado).not.toHaveBeenCalled();
+    expect(enviarCotizacion).not.toHaveBeenCalled();
+    expect(actualizaciones).toHaveLength(0);
+  });
+
+  it('rechaza reenviar una cotización reemplazada aunque no se conozca el numero de la que la reemplazó', async () => {
+    // `reemplazada_por_numero` nulo es defensivo (no debería pasar para una
+    // fila 'reemplazada' de verdad, la marca siempre las fija juntas), pero
+    // el mensaje no debe reventar ni desaparecer por eso.
+    resultadoFila = { data: filaReenviable({ estado: 'reemplazada', reemplazada_por_numero: null }), error: null };
+    const res = await postReenviar(
+      conSesionYCsrf('http://localhost/api/cotizacion/reenviar', { id: ID_VALIDO }),
+    );
+    expect(res.status).toBe(409);
+    const cuerpo = await res.json();
+    expect(cuerpo.error.length).toBeGreaterThan(0);
+    expect(enviarCotizacion).not.toHaveBeenCalled();
   });
 
   it('rechaza sin token anti-CSRF cuando se entra por cookie', async () => {
