@@ -162,7 +162,7 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
-const { listarPendientes, aprobar, rechazar, descuentosIguales, avisarSolicitudAprobacion } = await import(
+const { listarPendientes, aprobar, rechazar, cancelar, descuentosIguales, avisarSolicitudAprobacion } = await import(
   '@/lib/cotizador/aprobacion'
 );
 const { crearEstimate } = await import('@/lib/cotizador/ghl');
@@ -404,6 +404,49 @@ describe('aprobar', () => {
     const vieja = cotizaciones.find((f) => f.id === 'vieja')!;
     expect(vieja.estado).toBe('enviada');
   });
+
+  // Cabo suelto del compare-and-swap (ronda de correcciones, pantallas del
+  // descuento con aprobación): si el envío revienta a mitad de camino --
+  // DESPUÉS de reclamar la fila (estado 'borrador', mismo transitorio que
+  // usa una cotización recién creada) pero ANTES de que
+  // `enviarCotizacionAlHotel` termine su propio update -- la fila no puede
+  // quedarse parada en 'borrador': eso la saca de `/pendientes` (ya no está
+  // en 'esperando_aprobacion') sin que nadie -- ni el superadmin que la
+  // aprobaba, ni el vendedor que la pidió -- pueda volver a encontrarla.
+  //
+  // Verificación por mutación: si alguien borra el `try/catch` (o el update
+  // que libera la reclamación) de `aprobar`, esta prueba falla porque
+  // `cotizaciones[0].estado` queda en 'borrador' en vez de volver a
+  // 'esperando_aprobacion' -- y si alguien cambia el filtro
+  // `.eq('estado', ESTADO_RECLAMADO)` de esa liberación por uno sin
+  // condición, la prueba "no reclama una fila que ya se resolvió" (más
+  // abajo) es la que lo detecta.
+  it('si el envío revienta a mitad de camino, libera la reclamación: la fila vuelve a "esperando_aprobacion", sin aprobado_por/resuelto_at/descuento_aprobado', async () => {
+    vi.mocked(crearEstimate).mockRejectedValueOnce(new Error('ECONNRESET'));
+    const r = await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano' });
+
+    expect(r).toEqual({ ok: false, motivo: 'error', error: 'ECONNRESET' });
+    const fila = cotizaciones[0];
+    expect(fila.estado).toBe('esperando_aprobacion');
+    expect(fila.aprobado_por).toBeNull();
+    expect(fila.resuelto_at).toBeNull();
+    expect(fila.descuento_aprobado).toBeNull();
+    // Nunca se avisó nada: el envío no llegó a terminar.
+    expect(mockResolucion).not.toHaveBeenCalled();
+  });
+
+  // La fila liberada es recuperable de verdad -- no un "vuelve a
+  // esperando_aprobacion" cosmético que un segundo intento no puede usar.
+  it('una fila liberada por un fallo a mitad de camino se puede volver a aprobar después', async () => {
+    vi.mocked(crearEstimate).mockRejectedValueOnce(new Error('ECONNRESET'));
+    const primero = await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano' });
+    expect(primero.ok).toBe(false);
+
+    const segundo = await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano' });
+    expect(segundo).toMatchObject({ ok: true, estadoFinal: 'enviada' });
+    expect(cotizaciones[0].estado).toBe('enviada');
+    expect(cotizaciones[0].aprobado_por).toBe('Ana Solano');
+  });
 });
 
 describe('rechazar', () => {
@@ -498,5 +541,47 @@ describe('avisarSolicitudAprobacion', () => {
     });
     expect(r.ok).toBe(false);
     expect(mockSolicitud).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancelar', () => {
+  it('rechaza (no_encontrado) un id que no existe', async () => {
+    const r = await cancelar(supabaseAdmin(), { id: 'fantasma' });
+    expect(r).toEqual({ ok: false, motivo: 'no_encontrado' });
+  });
+
+  it('no alcanza con confiar en el navegador: rechaza (no_pendiente) una fila que ya no está esperando', async () => {
+    cotizaciones[0].estado = 'enviada';
+    const r = await cancelar(supabaseAdmin(), { id: 'cot-1' });
+    expect(r.ok).toBe(false);
+    if (!r.ok && r.motivo === 'no_pendiente') expect(r.estadoActual).toBe('enviada');
+    // No la pisó: sigue "enviada", no "borrador".
+    expect(cotizaciones[0].estado).toBe('enviada');
+  });
+
+  // El diseño, textual: "puede cancelar la solicitud -- vuelve a ser un
+  // borrador suyo, editable". No es un estado nuevo -- el mismo 'borrador'
+  // que ya entiende el resto del panel.
+  it('deja la fila en "borrador", sin borrar el rastro de la solicitud vieja', async () => {
+    const r = await cancelar(supabaseAdmin(), { id: 'cot-1' });
+    expect(r).toEqual({ ok: true });
+    const fila = cotizaciones[0];
+    expect(fila.estado).toBe('borrador');
+    // El rastro de la solicitud cancelada queda -- no se borra.
+    expect(fila.descuento_personalizado).toEqual({ general: 20 });
+    expect(fila.solicitado_por).toBe('Guillermo Rojas');
+  });
+
+  it('el update es un compare-and-swap: filtra por id Y por estado esperando_aprobacion', async () => {
+    await cancelar(supabaseAdmin(), { id: 'cot-1' });
+    expect(filtrosUpdateCot).toContainEqual(['eq', 'id', 'cot-1']);
+    expect(filtrosUpdateCot).toContainEqual(['eq', 'estado', 'esperando_aprobacion']);
+  });
+
+  it('nunca dispara la cadena de envío ni ningún correo', async () => {
+    await cancelar(supabaseAdmin(), { id: 'cot-1' });
+    expect(crearEstimate).not.toHaveBeenCalled();
+    expect(mockSolicitud).not.toHaveBeenCalled();
+    expect(mockResolucion).not.toHaveBeenCalled();
   });
 });

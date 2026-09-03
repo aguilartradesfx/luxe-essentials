@@ -297,14 +297,68 @@ export async function aprobar(
     return { ok: false, motivo: 'no_pendiente', estadoActual: 'esperando_aprobacion (en disputa)' };
   }
 
-  const resultadoEnvio = await enviarCotizacionAlHotel({
-    id: fila.id,
-    numero: fila.numero,
-    cotizacion,
-    cliente: fila.cliente,
-    contactIdEntrada: fila.contact_id ?? undefined,
-    reemplazaId: fila.reemplaza_a ?? null,
-  });
+  // Cabo suelto cerrado (ronda de correcciones, pantallas del descuento con
+  // aprobación): `enviarCotizacionAlHotel` termina SIEMPRE con su propio
+  // `update` que dice 'enviada' o 'error' (lib/cotizador/enviar.ts) -- pero
+  // eso vale mientras la función corra hasta el final. Si algo revienta a
+  // mitad de camino (hoy el único tramo sin su propio try/catch interno es
+  // `crearEstimate`, pero cualquier excepción no prevista cae acá igual),
+  // la fila se queda parada en `ESTADO_RECLAMADO` ('borrador') -- y a
+  // diferencia de una cotización recién creada (que nace en 'borrador' y
+  // ese es justo el huérfano YA aceptado en app/api/cotizacion/route.ts),
+  // ÉSTA venía de 'esperando_aprobacion': una fila visible, con
+  // `solicitado_por` y `descuento_personalizado` cargados, que un
+  // superadmin estaba mirando en el panel. Quedar en 'borrador' la saca de
+  // `/pendientes` (ya no está en ESTADO_PENDIENTE) sin haber salido nunca --
+  // invisible para el superadmin que la esperaba Y para el vendedor que la
+  // pidió, un huérfano peor que el ya aceptado.
+  //
+  // Por eso el `try/catch`: una excepción acá LIBERA la reclamación --
+  // vuelve a 'esperando_aprobacion', sin `aprobado_por`/`resuelto_at`/
+  // `descuento_aprobado` (esos se habían escrito recién, en el mismo update
+  // que reclamó) -- así la fila reaparece en `/pendientes`, intacta, lista
+  // para que cualquier superadmin la vuelva a intentar. No repara la
+  // ventana de un timeout real de la plataforma (Vercel mata la función sin
+  // darle chance a este `catch` de correr) -- ese es el mismo riesgo
+  // aceptado de siempre, documentado en app/api/cotizacion/route.ts -- pero
+  // sí cierra cualquier excepción de JavaScript (de red, de un `throw` en
+  // `crearEstimate`, lo que sea) que hoy dejaba la fila exactamente en ese
+  // estado ambiguo sin ninguna salida.
+  let resultadoEnvio;
+  try {
+    resultadoEnvio = await enviarCotizacionAlHotel({
+      id: fila.id,
+      numero: fila.numero,
+      cotizacion,
+      cliente: fila.cliente,
+      contactIdEntrada: fila.contact_id ?? undefined,
+      reemplazaId: fila.reemplaza_a ?? null,
+    });
+  } catch (err) {
+    const mensaje = err instanceof Error ? err.message : String(err);
+    console.error(
+      '[cotizador] El envío de la cotización aprobada reventó a mitad de camino; se libera la reclamación para que no quede atascada en "borrador".',
+      mensaje,
+    );
+    const { error: errorLiberar } = await db
+      .from('cotizaciones')
+      .update({
+        updated_at: new Date().toISOString(),
+        estado: ESTADO_PENDIENTE,
+        aprobado_por: null,
+        resuelto_at: null,
+        descuento_aprobado: null,
+      })
+      .eq('id', params.id)
+      .eq('estado', ESTADO_RECLAMADO);
+    if (errorLiberar) {
+      console.error(
+        '[cotizador] Y ADEMÁS no se pudo liberar la reclamación: la fila queda en "borrador", revisar a mano.',
+        errorLiberar.message,
+      );
+    }
+    return { ok: false, motivo: 'error', error: mensaje };
+  }
 
   const aviso = await avisarResolucion(db, deps, {
     nombreVendedor: fila.solicitado_por,
@@ -397,4 +451,60 @@ export async function rechazar(
   }
 
   return { ok: true, numero: fila.numero, avisoEnviado: aviso.ok };
+}
+
+export type ResultadoCancelar =
+  | { ok: true }
+  | { ok: false; motivo: 'no_encontrado' }
+  | { ok: false; motivo: 'no_pendiente'; estadoActual: string }
+  | { ok: false; motivo: 'error'; error: string };
+
+export type ParamsCancelar = { id: string };
+
+// "El vendedor no puede editar mientras espera" (diseño): la única salida
+// que tiene es cancelar -- la fila "vuelve a ser un borrador suyo,
+// editable" (palabras del diseño). Literalmente: vuelve al mismo
+// `ESTADO_RECLAMADO` ('borrador') que ya usa `aprobar` para reclamar la
+// fila -- no es un estado nuevo, y ya se muestra bien en `VistaListado`
+// (`ETIQUETAS_ESTADO.borrador`). No queda escondida ni en la cola del
+// agente (`/api/cotizacion/borradores` filtra por `origen = 'agente'`,
+// nunca 'humano') ni bloqueada en ningún lado -- el vendedor la retoma con
+// "Duplicar" (siempre disponible, cualquier estado), que resuelve las
+// líneas con los precios vigentes de hoy y, de querer el descuento de
+// nuevo, lo vuelve a pedir desde cero. Ningún dato de la solicitud vieja
+// (`descuento_personalizado`, `solicitado_por`) se borra: queda de rastro
+// de que esta fila fue, en algún momento, una solicitud cancelada.
+//
+// Mismo compare-and-swap que `aprobar`/`rechazar`: sólo cancela si la fila
+// TODAVÍA está esperando -- si un superadmin ya la aprobó o la rechazó en
+// el medio, cancelar ahora la pisaría por encima de una decisión que ya se
+// tomó (y, peor, en el caso de aprobada, encima de un envío que quizás ya
+// salió al cliente).
+//
+// Sin chequeo de quién la pidió -- mismo criterio que `/cerrar` y
+// `/reenviar` en este mismo módulo de cotizaciones: cualquier persona
+// autenticada del equipo puede tocar cualquier fila, no sólo la propia (ver
+// el comentario de `autenticarPeticion`, que ya documenta esa decisión para
+// el resto del panel). No se introduce acá una regla de "sólo el dueño"
+// que el resto del panel no tiene.
+export async function cancelar(db: Db, params: ParamsCancelar): Promise<ResultadoCancelar> {
+  const { data: canceladas, error } = await db
+    .from('cotizaciones')
+    .update({ updated_at: new Date().toISOString(), estado: ESTADO_RECLAMADO })
+    .eq('id', params.id)
+    .eq('estado', ESTADO_PENDIENTE)
+    .select('id');
+
+  if (error) {
+    console.error('[cotizador] No se pudo cancelar la solicitud de aprobación.', error.message);
+    return { ok: false, motivo: 'error', error: error.message };
+  }
+
+  if (canceladas && (canceladas as unknown[]).length > 0) {
+    return { ok: true };
+  }
+
+  const { data: filaActual } = await db.from('cotizaciones').select('estado').eq('id', params.id).maybeSingle();
+  if (!filaActual) return { ok: false, motivo: 'no_encontrado' };
+  return { ok: false, motivo: 'no_pendiente', estadoActual: (filaActual as { estado: string }).estado };
 }
