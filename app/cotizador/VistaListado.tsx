@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import type { LineaEntrada } from '@/lib/cotizador/tipos';
+import type { DescuentoPersonalizado, LineaEntrada } from '@/lib/cotizador/tipos';
 import type { PrefillCotizacion } from './Panel';
-import { formatearColones } from './formato';
+import { formatearColones, formatearDescuentoPersonalizado, formatearEspera } from './formato';
 
 // Tarea 10: la pestaña "Cotizaciones". Es la razón por la que se decidió
 // construir un panel en vez de seguir con el CRM: acá es donde el vendedor
@@ -20,7 +20,29 @@ import { formatearColones } from './formato';
 // 'reemplazada' (migración 0016): la cotización vieja que "Modificar" dejó
 // atrás -- ver ESTADOS_MODIFICABLES, más abajo, y el comentario grande en
 // app/api/cotizacion/route.ts para el criterio completo.
-type Estado = 'borrador' | 'creada' | 'enviada' | 'convertida' | 'ganada' | 'perdida' | 'error' | 'reemplazada';
+// 'esperando_aprobacion'/'rechazada' (fase 5, descuento con aprobación): ver
+// docs/superpowers/specs/2026-09-02-descuento-aprobacion-design.md y la
+// migración 0017.
+type Estado =
+  | 'borrador'
+  | 'creada'
+  | 'enviada'
+  | 'convertida'
+  | 'ganada'
+  | 'perdida'
+  | 'error'
+  | 'reemplazada'
+  | 'esperando_aprobacion'
+  | 'rechazada';
+
+// Fase 5: ninguna de las dos tiene nada que un vendedor haya mandado al
+// hotel -- 'esperando_aprobacion' porque el servidor corta ANTES de tocar
+// GoHighLevel/PDF/correo (ver app/api/cotizacion/route.ts), 'rechazada'
+// porque nunca pasó de ahí. "Ganada"/"Perdida" no tienen sentido sobre una
+// fila que nunca salió -- se ocultan junto a Reenviar/Modificar (ver más
+// abajo, que ya quedan afuera solos por no tener `pdf_ruta` ni estar en
+// `ESTADOS_MODIFICABLES`).
+const ESTADOS_SIN_CIERRE: Estado[] = ['esperando_aprobacion', 'rechazada'];
 
 // Igual que en VistaCrear.tsx: el jsonb `cliente`/`totales` no tiene forma
 // garantizada por TypeScript (viaja como `unknown` desde la base), así que
@@ -60,6 +82,17 @@ type FilaListado = {
   // "Modificar" posterior (una cadena de reemplazos, caso raro pero válido).
   reemplaza_a_numero: string | null;
   reemplazada_por_numero: string | null;
+  // Fase 5 (descuento con aprobación, migración 0017): sólo pobladas en las
+  // filas que pidieron un descuento fuera de escala. `descuento_aprobado`
+  // es lo único que distingue, en una fila ya resuelta, si el superadmin
+  // aprobó tal cual o cambió el porcentaje -- ver el comentario en
+  // app/api/cotizacion/listado/route.ts.
+  descuento_personalizado: DescuentoPersonalizado | null;
+  solicitado_por: string | null;
+  aprobado_por: string | null;
+  resuelto_at: string | null;
+  motivo_rechazo: string | null;
+  descuento_aprobado: DescuentoPersonalizado | null;
 };
 
 type Mensaje = { tipo: 'ok' | 'aviso' | 'error'; texto: string };
@@ -135,11 +168,20 @@ const ETIQUETAS_ESTADO: Record<Estado, string> = {
   perdida: 'Perdida',
   error: 'Error',
   reemplazada: 'Reemplazada',
+  esperando_aprobacion: 'Esperando aprobación',
+  rechazada: 'Rechazada',
 };
 
 // Colores por estado (Paso 3 del brief): sin respuesta en neutro, ganada en
 // verde, perdida en gris, error en rojo. El resto (borrador/convertida, que
 // casi nunca aparecen acá) cae en el mismo neutro que "sin respuesta".
+//
+// Fase 5: 'esperando_aprobacion' en ámbar -- mismo criterio que "vencida"
+// en VistaEquipo.tsx: necesita que alguien la mire, no es ni un éxito ni un
+// fallo todavía. 'rechazada' en rojo, mismo peso visual que 'error' -- las
+// dos son "esta cotización no llegó al cliente", aunque por motivos
+// distintos (uno es una decisión, el otro un fallo técnico); el texto de la
+// píldora ya distingue cuál es cuál.
 function estiloEstado(estado: Estado): string {
   switch (estado) {
     case 'ganada':
@@ -151,7 +193,10 @@ function estiloEstado(estado: Estado): string {
     case 'reemplazada':
       return 'bg-gray-200 text-gray-700';
     case 'error':
+    case 'rechazada':
       return 'bg-red-100 text-red-800';
+    case 'esperando_aprobacion':
+      return 'bg-amber-100 text-amber-800';
     default:
       return 'bg-[color:var(--carta-border)]/50 text-navy';
   }
@@ -442,6 +487,12 @@ const OPCIONES_FILTRO: { valor: string; etiqueta: string }[] = [
   { valor: 'error', etiqueta: 'Error' },
   { valor: 'ganada', etiqueta: 'Ganada' },
   { valor: 'perdida', etiqueta: 'Perdida' },
+  // Fase 5 (descuento con aprobación): para que un vendedor pueda revisar
+  // sus propias solicitudes sin tener que ser superadmin ni entrar a la
+  // pestaña "Aprobaciones" (que ni siquiera ve) -- acá sólo filtra, no
+  // aprueba ni rechaza nada.
+  { valor: 'esperando_aprobacion', etiqueta: 'Esperando aprobación' },
+  { valor: 'rechazada', etiqueta: 'Rechazada' },
 ];
 
 type Props = {
@@ -768,6 +819,44 @@ export function VistaListado({
     }
   }
 
+  // Fase 5 (descuento con aprobación): "cancelar" es lo único que el diseño
+  // le permite hacer al vendedor con una cotización que quedó esperando --
+  // no puede editarla en el lugar (ver
+  // docs/superpowers/specs/2026-09-02-descuento-aprobacion-design.md). La
+  // fila vuelve a 'borrador' (lib/cotizador/aprobacion.ts, `cancelar`) --
+  // editable de nuevo vía "Duplicar", que ya está disponible sobre
+  // cualquier estado.
+  async function cancelarSolicitud(fila: FilaListado) {
+    setProcesandoId(fila.id);
+    try {
+      const csrf = obtenerCsrf();
+      const res = await fetch('/api/cotizacion/cancelar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Regla de seguridad 1: /cancelar escribe, exige el token anti-CSRF.
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
+        },
+        body: JSON.stringify({ id: fila.id }),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        if (res.status === 401) {
+          onSesionInvalida();
+          return;
+        }
+        setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: datos.error ?? `Error ${res.status}` } }));
+        return;
+      }
+      setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'ok', texto: 'Solicitud cancelada.' } }));
+      await cargar(filtroEstado);
+    } catch {
+      setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: 'Fallo de red.' } }));
+    } finally {
+      setProcesandoId(null);
+    }
+  }
+
   // Ronda de correcciones 1: "Por vencer" recorta y ordena del lado del
   // cliente (ver `cargar` y la nota de `FILTRO_POR_VENCER`) -- las más
   // urgentes primero, para que la fila que vence hoy no dependa de scrollear
@@ -913,6 +1002,37 @@ export function VistaListado({
                       {fila.reemplaza_a_numero && (
                         <p className="mt-1 text-xs text-teal">Reemplaza a {fila.reemplaza_a_numero}.</p>
                       )}
+                      {/* Fase 5: el descuento pedido, quién lo pidió, y (si
+                          ya se resolvió) el desenlace -- lo mismo que ya
+                          muestra VistaAprobaciones, sólo que acá convive con
+                          el resto del historial de la fila, así que se
+                          condensa en un par de líneas de texto en vez de
+                          tarjetas propias. */}
+                      {fila.descuento_personalizado && fila.estado === 'esperando_aprobacion' && (
+                        <p className="mt-1 max-w-[16rem] text-xs text-amber-800">
+                          Pedido: {formatearDescuentoPersonalizado(fila.descuento_personalizado)}
+                          {fila.solicitado_por ? ` (por ${fila.solicitado_por})` : ''} -- esperando hace{' '}
+                          {formatearEspera(fila.created_at)}.
+                        </p>
+                      )}
+                      {fila.estado === 'rechazada' && (
+                        <p className="mt-1 max-w-[16rem] text-xs text-red-700">
+                          {fila.motivo_rechazo ? `Motivo: ${fila.motivo_rechazo}. ` : ''}
+                          {fila.descuento_personalizado
+                            ? `Pedido: ${formatearDescuentoPersonalizado(fila.descuento_personalizado)}. `
+                            : ''}
+                          {fila.aprobado_por ? `Rechazada por ${fila.aprobado_por}.` : ''}
+                        </p>
+                      )}
+                      {fila.descuento_aprobado &&
+                        fila.descuento_personalizado &&
+                        fila.estado !== 'esperando_aprobacion' &&
+                        fila.estado !== 'rechazada' && (
+                          <p className="mt-1 max-w-[16rem] text-xs text-teal">
+                            Descuento aprobado: {formatearDescuentoPersonalizado(fila.descuento_aprobado)}
+                            {fila.aprobado_por ? ` (por ${fila.aprobado_por})` : ''}.
+                          </p>
+                        )}
                     </td>
                     <td className="px-3 py-3 align-top">
                       {/* Jerarquía de acciones (hallazgo del dueño): seis
@@ -925,27 +1045,37 @@ export function VistaListado({
                           lo más usado. El resto (revisar el PDF, reenviar,
                           duplicar, saltar al CRM) es apoyo situacional: se
                           recoge detrás del botón de tres puntos, ver
-                          `MenuAcciones` más arriba en el archivo. */}
+                          `MenuAcciones` más arriba en el archivo.
+
+                          Fase 5: ninguna de las dos aplica sobre
+                          'esperando_aprobacion'/'rechazada' -- ver
+                          ESTADOS_SIN_CIERRE, arriba en el archivo: nada de
+                          eso salió al hotel todavía, así que no hay nada
+                          que marcar ganado o perdido. */}
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          disabled={enProceso}
-                          onClick={() => void cerrar(fila.id, 'ganada')}
-                          className="rounded-lg bg-navy px-2.5 py-1 text-xs font-medium text-beige hover:bg-navy/90 disabled:opacity-40"
-                        >
-                          Ganada
-                        </button>
-                        <button
-                          type="button"
-                          disabled={enProceso}
-                          onClick={() => {
-                            setPidiendoMotivoId(fila.id);
-                            setMotivoTexto('');
-                          }}
-                          className="rounded-lg border border-[var(--carta-border)] px-2.5 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
-                        >
-                          Perdida
-                        </button>
+                        {!ESTADOS_SIN_CIERRE.includes(fila.estado) && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={enProceso}
+                              onClick={() => void cerrar(fila.id, 'ganada')}
+                              className="rounded-lg bg-navy px-2.5 py-1 text-xs font-medium text-beige hover:bg-navy/90 disabled:opacity-40"
+                            >
+                              Ganada
+                            </button>
+                            <button
+                              type="button"
+                              disabled={enProceso}
+                              onClick={() => {
+                                setPidiendoMotivoId(fila.id);
+                                setMotivoTexto('');
+                              }}
+                              className="rounded-lg border border-[var(--carta-border)] px-2.5 py-1 text-xs font-medium text-navy hover:bg-navy hover:text-beige disabled:opacity-40"
+                            >
+                              Perdida
+                            </button>
+                          </>
+                        )}
                         <MenuAcciones
                           id={`menu-acciones-${fila.id}`}
                           etiqueta={`Más acciones para ${nombre}`}
@@ -1008,6 +1138,21 @@ export function VistaListado({
                                     tipo: 'enlace' as const,
                                     etiqueta: 'Ver en GoHighLevel',
                                     href: `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${fila.contact_id}`,
+                                  },
+                                ]
+                              : []),
+                            // Fase 5: "cancelar" es lo único que el diseño
+                            // le permite hacer al vendedor con una
+                            // solicitud que sigue esperando -- sólo sobre
+                            // 'esperando_aprobacion', nunca sobre una ya
+                            // resuelta.
+                            ...(fila.estado === 'esperando_aprobacion'
+                              ? [
+                                  {
+                                    tipo: 'boton' as const,
+                                    etiqueta: 'Cancelar solicitud',
+                                    disabled: enProceso,
+                                    onClick: () => void cancelarSolicitud(fila),
                                   },
                                 ]
                               : []),
