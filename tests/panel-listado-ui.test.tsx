@@ -65,6 +65,28 @@ const FILA_GANADA = {
   contact_id: null,
 };
 
+// "Modificar" (migración 0016): la fila vieja que ya fue reemplazada -- sin
+// Reenviar ni Modificar disponibles, con el rastro hacia la que la
+// reemplazó.
+const FILA_REEMPLAZADA = {
+  ...FILA_ABIERTA,
+  id: 'a1b2c3d4-0000-4000-8000-000000000004',
+  numero: 'COT-2026-0013',
+  estado: 'reemplazada',
+  cliente: { nombre: 'Diana Solís', empresa: 'Hotel Diana', email: 'diana@hotel.com' },
+  reemplazada_por_numero: 'COT-2026-0014',
+};
+
+// La fila nueva que reemplazó a `FILA_REEMPLAZADA`, con el rastro en el otro
+// sentido.
+const FILA_REEMPLAZO = {
+  ...FILA_ABIERTA,
+  id: 'a1b2c3d4-0000-4000-8000-000000000005',
+  numero: 'COT-2026-0014',
+  cliente: { nombre: 'Diana Solís', empresa: 'Hotel Diana', email: 'diana@hotel.com' },
+  reemplaza_a_numero: 'COT-2026-0013',
+};
+
 type OpcionesFetch = {
   filas?: unknown[];
   cerrarStatus?: number;
@@ -446,6 +468,95 @@ describe('VistaListado', () => {
     });
   });
 
+  // "Modificar" (migración 0016): mismo callback que "Duplicar" (ver el
+  // comentario de `modificar()` en VistaListado.tsx), con tres datos de más
+  // -- `reemplazaId`, `reemplazaNumero` y `contactId` -- que son justo los
+  // que Panel/VistaCrear necesitan para reutilizar el contacto y enlazar
+  // las dos filas al enviar.
+  it('"Modificar" lleva a la vista de crear con las líneas cargadas y el vínculo a la cotización original', async () => {
+    mockFetch({ duplicarLineas: [{ skuId: 'set-600-king', cantidad: 12 }] });
+    const usuario = userEvent.setup();
+    const { onDuplicar } = renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /modificar/i }));
+
+    await waitFor(() => {
+      expect(onDuplicar).toHaveBeenCalledWith({
+        cliente: {
+          nombre: 'Ana Pérez',
+          empresa: 'Hotel Ana',
+          email: 'ana@hotel.com',
+          telefono: '',
+          direccion: '',
+        },
+        lineas: [{ skuId: 'set-600-king', cantidad: 12 }],
+        reemplazaId: FILA_ABIERTA.id,
+        reemplazaNumero: FILA_ABIERTA.numero,
+        contactId: FILA_ABIERTA.contact_id,
+      });
+    });
+  });
+
+  // ESTADOS_MODIFICABLES = ['creada', 'enviada'] -- 'ganada' queda afuera:
+  // ver el comentario grande en app/api/cotizacion/route.ts para el
+  // criterio completo.
+  it('"Modificar" no aparece en una fila ganada', async () => {
+    mockFetch();
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/carla gómez/i)).toBeInTheDocument());
+    const fila = screen.getByText(/carla gómez/i).closest('tr') as HTMLElement;
+    await abrirMenu(usuario, fila);
+    expect(screen.queryByRole('menuitem', { name: /modificar/i })).not.toBeInTheDocument();
+    // El menú no queda vacío: "Duplicar" sigue disponible siempre.
+    expect(screen.getByRole('menuitem', { name: /duplicar/i })).toBeInTheDocument();
+  });
+
+  // Una cotización ya reemplazada no se puede volver a modificar ni
+  // reenviar -- ni siquiera cuando tiene `pdf_ruta` (el PDF vigente hoy es
+  // el de la fila que la reemplazó, no el suyo).
+  it('una fila reemplazada no ofrece "Modificar" ni "Reenviar", pero sí "Ver PDF" y "Duplicar"', async () => {
+    mockFetch({ filas: [FILA_REEMPLAZADA] });
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/diana solís/i)).toBeInTheDocument());
+    const fila = screen.getByText(/diana solís/i).closest('tr') as HTMLElement;
+    await abrirMenu(usuario, fila);
+    expect(screen.queryByRole('menuitem', { name: /modificar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /reenviar/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /ver pdf/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /duplicar/i })).toBeInTheDocument();
+  });
+
+  // "Dejar rastro entre las dos" (encargo del dueño): el listado tiene que
+  // mostrar la relación en las DOS filas, con el número de cotización -- lo
+  // que el cliente cita por teléfono.
+  it('muestra el rastro entre las dos cotizaciones, con su número, en las dos filas', async () => {
+    mockFetch({ filas: [FILA_REEMPLAZADA, FILA_REEMPLAZO] });
+    renderVista();
+
+    await waitFor(() => expect(screen.getAllByText(/diana solís/i)).toHaveLength(2));
+    const filaVieja = screen.getByText('COT-2026-0013').closest('tr') as HTMLElement;
+    const filaNueva = screen.getByText('COT-2026-0014').closest('tr') as HTMLElement;
+
+    expect(within(filaVieja).getByText(/reemplazada por cot-2026-0014/i)).toBeInTheDocument();
+    expect(within(filaNueva).getByText(/reemplaza a cot-2026-0013/i)).toBeInTheDocument();
+  });
+
+  it('una fila sin ningún vínculo no muestra ningún aviso de reemplazo', async () => {
+    mockFetch();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    expect(screen.queryByText(/reemplazada por/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/reemplaza a/i)).not.toBeInTheDocument();
+  });
+
   // Ronda de correcciones final (hallazgo importante): el diseño lista cinco
   // acciones por fila y "ver el PDF" era la única que nunca se construyó —
   // hoy la única forma de ver un PDF ya guardado era reenviárselo al
@@ -805,7 +916,11 @@ describe('VistaListado', () => {
       expect(boton).toHaveAttribute('aria-controls', menu.id);
     });
 
-    it('el menú lista las cuatro acciones de apoyo, y no "Ganada"/"Perdida"', async () => {
+    // "Modificar" (migración 0016) sumó una quinta acción de apoyo al menú
+    // -- el título ya no dice "las cuatro", pero la fila de prueba
+    // (`FILA_ABIERTA`, estado 'enviada') sigue siendo la misma: entra en
+    // ESTADOS_MODIFICABLES, así que "Modificar" aparece acá también.
+    it('el menú lista las cinco acciones de apoyo, y no "Ganada"/"Perdida"', async () => {
       mockFetch();
       const usuario = userEvent.setup();
       renderVista();
@@ -820,7 +935,7 @@ describe('VistaListado', () => {
 
       await abrirMenu(usuario, fila);
       const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
-      expect(items).toEqual(['Ver PDF', 'Reenviar', 'Duplicar', 'Ver en GoHighLevel']);
+      expect(items).toEqual(['Ver PDF', 'Reenviar', 'Duplicar', 'Modificar', 'Ver en GoHighLevel']);
     });
 
     it('Escape cierra el menú y devuelve el foco al botón de tres puntos', async () => {
@@ -895,21 +1010,23 @@ describe('VistaListado', () => {
       const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
       await abrirMenu(usuario, fila);
 
+      // Cinco ítems desde "Modificar" (migración 0016): Ver PDF, Reenviar,
+      // Duplicar, Modificar, Ver en GoHighLevel.
       const items = screen.getAllByRole('menuitem');
       expect(items[0]).toHaveFocus(); // "Ver PDF"
 
       await usuario.keyboard('{ArrowDown}');
       expect(items[1]).toHaveFocus(); // "Reenviar"
 
-      await usuario.keyboard('{ArrowDown}{ArrowDown}');
-      expect(items[3]).toHaveFocus(); // "Ver en GoHighLevel"
+      await usuario.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
+      expect(items[4]).toHaveFocus(); // "Ver en GoHighLevel"
 
       // Cierra el ciclo: de la última vuelve a la primera.
       await usuario.keyboard('{ArrowDown}');
       expect(items[0]).toHaveFocus();
 
       await usuario.keyboard('{ArrowUp}');
-      expect(items[3]).toHaveFocus(); // vuelve a la última
+      expect(items[4]).toHaveFocus(); // vuelve a la última
     });
 
     it('abrir el menú de otra fila cierra el de la fila anterior', async () => {

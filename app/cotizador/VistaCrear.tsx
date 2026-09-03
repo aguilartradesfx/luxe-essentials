@@ -44,6 +44,17 @@ type Recordatorio = { producto: string; cantidadTexto: string };
 //    contacto nuevo en GoHighLevel para alguien que ya existe ahí.
 type BorradorActivo = { id: string; contactId: string | null };
 
+// "Modificar" (migración 0016): qué cotización vieja está detrás de la que
+// se está armando, si vino de esa acción (no de "Duplicar" a secas, ni de
+// "Crear" desde cero). Igual que `BorradorActivo`, se manda de vuelta al
+// servidor con el envío final -- `reemplazaId` para que la marque
+// 'reemplazada' (recién cuando el envío sale bien, nunca antes: ver
+// app/api/cotizacion/route.ts) y `contactId` para reutilizar el contacto de
+// GoHighLevel de esa cotización vieja en vez de dar de alta uno nuevo.
+// `numero` es sólo para el aviso que ve el vendedor acá abajo -- el
+// servidor relee el numero real, nunca confía en éste.
+type ReemplazaActivo = { id: string; contactId: string | null; numero: string };
+
 // El jsonb `cliente` de un borrador no tiene forma garantizada: se lee campo
 // por campo, y cualquier cosa que no sea string se trata como ausente en vez
 // de reventar la pantalla.
@@ -294,6 +305,8 @@ export function VistaCrear({
   // Ronda de correcciones 2 (hallazgo I1): ver el comentario de
   // `BorradorActivo` arriba.
   const [borradorActivo, setBorradorActivo] = useState<BorradorActivo | null>(null);
+  // "Modificar": ver el comentario de `ReemplazaActivo` arriba.
+  const [reemplazaActivo, setReemplazaActivo] = useState<ReemplazaActivo | null>(null);
 
   // Tarea 10 ("Duplicar"). Ronda de correcciones 1 (hallazgo importante):
   // esta vista YA NO se desmonta al cambiar de pestaña (ver Panel.tsx) —
@@ -450,21 +463,40 @@ export function VistaCrear({
   const hayLineaDescontinuada = useMemo(() => lineas.some((l) => !porId.has(l.skuId)), [lineas, porId]);
 
   // Aplica una plantilla nueva de "Duplicar" (Tarea 10, ronda de
-  // correcciones 1). Reacciona a CADA cambio de `plantilla` -- no solo al
-  // montar -- porque esta vista ya no se desmonta al salir de la pestaña
-  // "Crear" (ver Panel.tsx): el vendedor puede duplicar, volver a
-  // "Cotizaciones", duplicar OTRA fila y volver, todo sin que esta vista se
-  // haya reiniciado nunca. Pisa el cliente y las lineas que hubiera (mismo
-  // criterio que ya tenia `nuevaCotizacion`: empezar de nuevo es explicito,
-  // el vendedor lo pidio con el clic en "Duplicar"). Avisa a `Panel` que ya
-  // la aplico para que la limpie -- si no, un cambio futuro de `plantilla`
-  // a la misma referencia (o un remonte) la reaplicaria de nuevo.
+  // correcciones 1) o de "Modificar" (migración 0016). Reacciona a CADA
+  // cambio de `plantilla` -- no solo al montar -- porque esta vista ya no
+  // se desmonta al salir de la pestaña "Crear" (ver Panel.tsx): el vendedor
+  // puede duplicar, volver a "Cotizaciones", duplicar OTRA fila y volver,
+  // todo sin que esta vista se haya reiniciado nunca. Pisa el cliente y las
+  // lineas que hubiera (mismo criterio que ya tenia `nuevaCotizacion`:
+  // empezar de nuevo es explicito, el vendedor lo pidio con el clic en
+  // "Duplicar"/"Modificar"). Avisa a `Panel` que ya la aplico para que la
+  // limpie -- si no, un cambio futuro de `plantilla` a la misma referencia
+  // (o un remonte) la reaplicaria de nuevo.
+  //
+  // `setReemplazaActivo` se fija SIEMPRE (a un valor o a `null`), no solo
+  // cuando `plantilla.reemplazaId` existe: sin el `else` implicito acá, un
+  // "Modificar" que dejó `reemplazaActivo` puesto sobreviviría a un
+  // "Duplicar" posterior sobre OTRA fila (`plantilla` cambia, pero
+  // `reemplazaId` ya no viene) -- el envío final mandaría un `reemplazaId`
+  // de una cotización que el vendedor ni siquiera está mirando.
+  // `setBorradorActivo(null)` por el mismo motivo, en la otra direccion: sin
+  // esto, un "Usar" un borrador del agente seguido de un "Duplicar"/
+  // "Modificar" arrastraria el `borradorId`/`contactId` de un borrador ajeno
+  // a esta cotizacion nueva (mismo riesgo que ya resuelve `nuevaCotizacion`
+  // para el boton "Nueva cotización", mas abajo).
   useEffect(() => {
     if (!plantilla) return;
     setCliente({ ...CLIENTE_VACIO, ...plantilla.cliente });
     setLineas(plantilla.lineas.map((l) => ({ skuId: l.skuId, cantidadTexto: String(l.cantidad) })));
     setResultado(null);
     setCreado(false);
+    setBorradorActivo(null);
+    setReemplazaActivo(
+      plantilla.reemplazaId
+        ? { id: plantilla.reemplazaId, contactId: plantilla.contactId ?? null, numero: plantilla.reemplazaNumero ?? '' }
+        : null,
+    );
     onPlantillaConsumida?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- solo debe reaccionar a `plantilla`; `onPlantillaConsumida` no es estable entre renders de Panel.
   }, [plantilla]);
@@ -627,6 +659,9 @@ export function VistaCrear({
     // arrastraría el `borradorId`/`contactId` del borrador anterior y
     // cerraría (o pisaría el contacto de) una fila que no le corresponde.
     setBorradorActivo(null);
+    // Mismo motivo, para "Modificar": una cotización nueva armada desde cero
+    // (botón "Nueva cotización") no reemplaza nada.
+    setReemplazaActivo(null);
   }
 
   // Convierte un borrador en el punto de partida de una cotización real:
@@ -709,7 +744,17 @@ export function VistaCrear({
           // `JSON.stringify`, así que una cotización armada desde cero no
           // manda ninguno de los dos.
           borradorId: borradorActivo?.id,
-          contactId: borradorActivo?.contactId ?? undefined,
+          // "Modificar" (migración 0016): `reemplazaId` sólo va si esta
+          // cotización viene de esa acción -- le dice al servidor qué fila
+          // vieja marcar 'reemplazada' cuando el envío salga bien. El
+          // `contactId` puede venir del reemplazo o del borrador -- nunca
+          // los dos a la vez (`reemplazaActivo`/`borradorActivo` se
+          // resetean entre sí, ver el efecto de `plantilla` y
+          // `nuevaCotizacion` más arriba), así que el orden acá no decide
+          // nada en la práctica; se deja `reemplazaActivo` primero por ser
+          // el caso más nuevo.
+          reemplazaId: reemplazaActivo?.id,
+          contactId: reemplazaActivo?.contactId ?? borradorActivo?.contactId ?? undefined,
         }),
       });
       const datos = await res.json();
@@ -1037,6 +1082,18 @@ export function VistaCrear({
 
         <div className="rounded-xl border border-[var(--carta-border)] bg-[var(--carta-fill)] p-4">
           <h2 className="text-xs font-medium uppercase tracking-wide text-teal">Datos del cliente</h2>
+          {/* "Modificar" (migración 0016): el único aviso visible de que esta
+              cotización va a reemplazar otra -- sin esto, el formulario se ve
+              idéntico a "Duplicar" y el vendedor no tiene forma de confirmar
+              que está tocando la fila correcta antes de mandar. El numero es
+              el que trajo la plantilla (snapshot del listado); si viniera
+              vacío por algún motivo, no se inventa uno. */}
+          {reemplazaActivo && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Vas a reemplazar la cotización {reemplazaActivo.numero || 'anterior'}. Al enviar, esa queda
+              marcada como reemplazada.
+            </p>
+          )}
           <div className="mt-3 space-y-3">
             <label className="block text-xs text-teal">
               Nombre

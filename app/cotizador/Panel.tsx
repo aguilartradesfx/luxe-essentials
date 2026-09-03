@@ -30,6 +30,18 @@ export type SkuUI = { id: string; nombre: string; familia: string };
 export type PrefillCotizacion = {
   cliente: { nombre: string; empresa: string; email: string; telefono: string; direccion: string };
   lineas: LineaEntrada[];
+  // "Modificar" (migración 0016): sólo van cuando esta plantilla viene de
+  // esa acción, no de "Duplicar" a secas. `reemplazaId` es el id de la
+  // cotización vieja -- viaja hasta el envío final para que el servidor la
+  // marque 'reemplazada' recién cuando la nueva sale de verdad (ver
+  // app/api/cotizacion/route.ts). `contactId` es el contacto de GoHighLevel
+  // de esa cotización vieja, para reutilizarlo en vez de dar de alta uno
+  // nuevo. `reemplazaNumero` es sólo para mostrarle al vendedor, en
+  // `VistaCrear`, a cuál está por reemplazar -- el servidor nunca confía en
+  // este valor (relee el numero real de la fila vieja al procesar el envío).
+  reemplazaId?: string;
+  reemplazaNumero?: string;
+  contactId?: string;
 };
 
 type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo';
@@ -351,9 +363,13 @@ export default function Panel() {
     setPidiendoClave(true);
   }
 
-  // "Duplicar" (Tarea 10): `VistaListado` ya resolvió el dato (cliente +
-  // líneas, sin precios); acá solo se guarda para el próximo montaje de
-  // `VistaCrear` y se salta a la pestaña "Crear".
+  // "Duplicar" (Tarea 10) y "Modificar" (migración 0016): las dos le pasan
+  // a esta misma función el mismo tipo de dato (`VistaListado` ya lo
+  // resolvió -- cliente + líneas, sin precios, y para "Modificar" también
+  // `reemplazaId`/`reemplazaNumero`/`contactId`); acá no hay que
+  // distinguirlas -- solo se guarda para el próximo montaje de `VistaCrear`
+  // (que sí reacciona distinto según venga o no `reemplazaId`, ver su
+  // efecto sobre `plantilla`) y se salta a la pestaña "Crear".
   function onDuplicar(datos: PrefillCotizacion) {
     setPlantilla(datos);
     setPestana('crear');

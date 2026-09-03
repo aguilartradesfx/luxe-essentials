@@ -17,7 +17,10 @@ import { formatearColones } from './formato';
 // y app/api/cotizacion/route.ts): 'borrador'/'convertida' son del flujo del
 // agente y rara vez aparecen acá, pero el tipo los contempla para no
 // reventar si alguno se cuela.
-type Estado = 'borrador' | 'creada' | 'enviada' | 'convertida' | 'ganada' | 'perdida' | 'error';
+// 'reemplazada' (migración 0016): la cotización vieja que "Modificar" dejó
+// atrás -- ver ESTADOS_MODIFICABLES, más abajo, y el comentario grande en
+// app/api/cotizacion/route.ts para el criterio completo.
+type Estado = 'borrador' | 'creada' | 'enviada' | 'convertida' | 'ganada' | 'perdida' | 'error' | 'reemplazada';
 
 // Igual que en VistaCrear.tsx: el jsonb `cliente`/`totales` no tiene forma
 // garantizada por TypeScript (viaja como `unknown` desde la base), así que
@@ -48,6 +51,15 @@ type FilaListado = {
   // el sistema. Las filas anteriores a esta fase quedan en null a
   // propósito: no se inventa un nombre para ellas, se muestra un guion.
   vendedor: string | null;
+  // "Modificar" (migración 0016): el rastro entre dos filas, ya resuelto a
+  // numero por el servidor (ver el comentario en
+  // app/api/cotizacion/listado/route.ts). En la fila nueva, a cuál
+  // reemplaza; en la vieja, cuál la reemplazó. A lo sumo uno de los dos es
+  // no nulo en una fila dada -- salvo que esa fila haya sido, en algún
+  // momento, tanto el resultado de un "Modificar" como el blanco de otro
+  // "Modificar" posterior (una cadena de reemplazos, caso raro pero válido).
+  reemplaza_a_numero: string | null;
+  reemplazada_por_numero: string | null;
 };
 
 type Mensaje = { tipo: 'ok' | 'aviso' | 'error'; texto: string };
@@ -79,7 +91,19 @@ const DIAS_VIGENCIA = 30;
 const DIAS_AVISO_VENCIMIENTO = 7;
 // Solo una cotización sin respuesta todavía puede "vencer": una ya cerrada
 // (ganada/perdida) o convertida no necesita que nadie la llame por eso.
+// 'reemplazada' tampoco: dejó de ser la vigente, la fila nueva es la que
+// puede vencer.
 const ESTADOS_ABIERTOS: Estado[] = ['creada', 'enviada', 'error'];
+
+// "Modificar" (migración 0016): sobre qué estados aparece la opción en el
+// menú. Mismo criterio (y mismo par de estados) que `ESTADOS_MODIFICABLES`
+// en app/api/cotizacion/route.ts -- duplicado acá porque esta pantalla no
+// puede importar código del servidor (mismo motivo que `DIAS_VIGENCIA`,
+// arriba). Ocultar la opción cuando no aplica es sólo cosmético: el
+// servidor vuelve a validar el estado real al recibir el envío final, así
+// que esto no es la protección de verdad, es evitar ofrecerle al vendedor
+// un botón que el servidor va a rechazar seguro.
+const ESTADOS_MODIFICABLES: Estado[] = ['creada', 'enviada'];
 
 // Revisión final (hallazgo menor): `vencida` se calcula aparte de
 // `diasRestantes`, directo sobre los milisegundos, y no derivándola de
@@ -110,6 +134,7 @@ const ETIQUETAS_ESTADO: Record<Estado, string> = {
   ganada: 'Ganada',
   perdida: 'Perdida',
   error: 'Error',
+  reemplazada: 'Reemplazada',
 };
 
 // Colores por estado (Paso 3 del brief): sin respuesta en neutro, ganada en
@@ -120,6 +145,10 @@ function estiloEstado(estado: Estado): string {
     case 'ganada':
       return 'bg-emerald-100 text-emerald-800';
     case 'perdida':
+    // "Modificar": mismo gris neutro que 'perdida' -- ninguna de las dos es
+    // un fallo (rojo) ni un éxito (verde), es una fila que dejó de estar
+    // activa.
+    case 'reemplazada':
       return 'bg-gray-200 text-gray-700';
     case 'error':
       return 'bg-red-100 text-red-800';
@@ -690,6 +719,55 @@ export function VistaListado({
     }
   }
 
+  // "Modificar" (migración 0016): mismo camino que "Duplicar" -- reutiliza
+  // la misma ruta de solo lectura (`/api/cotizacion/duplicar`, que ya trae
+  // exactamente lo que hace falta: `skuId`/`cantidad` por línea, sin
+  // precios) porque "Modificar" es "Duplicar" más tres cosas, y las tres
+  // viajan en el payload que arma esta función, no en la ruta que lee las
+  // líneas:
+  //   1. reutilizar el contacto: `contactId: fila.contact_id`.
+  //   2. enlazar las dos filas: `reemplazaId: fila.id`.
+  //   3. marcar la vieja: eso lo hace el servidor, al final del envío, sólo
+  //      si sale bien (`app/api/cotizacion/route.ts`) -- acá no se marca
+  //      nada todavía. Abrir "Modificar" y no enviar no debe dejar rastro.
+  async function modificar(fila: FilaListado) {
+    setProcesandoId(fila.id);
+    try {
+      const res = await fetch('/api/cotizacion/duplicar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: fila.id }),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        if (res.status === 401) {
+          onSesionInvalida();
+          return;
+        }
+        setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: datos.error ?? `Error ${res.status}` } }));
+        return;
+      }
+      const c = fila.cliente ?? {};
+      onDuplicar({
+        cliente: {
+          nombre: textoDe(c.nombre),
+          empresa: textoDe(c.empresa),
+          email: textoDe(c.email),
+          telefono: textoDe(c.telefono),
+          direccion: textoDe(c.direccion),
+        },
+        lineas: (datos.lineas ?? []) as LineaEntrada[],
+        reemplazaId: fila.id,
+        reemplazaNumero: fila.numero ?? undefined,
+        contactId: fila.contact_id ?? undefined,
+      });
+    } catch {
+      setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: 'Fallo de red.' } }));
+    } finally {
+      setProcesandoId(null);
+    }
+  }
+
   // Ronda de correcciones 1: "Por vencer" recorta y ordena del lado del
   // cliente (ver `cargar` y la nota de `FILTRO_POR_VENCER`) -- las más
   // urgentes primero, para que la fila que vence hoy no dependa de scrollear
@@ -822,6 +900,19 @@ export function VistaListado({
                           onToggle={() => alternarDetalle(`ghl:${fila.id}`)}
                         />
                       )}
+                      {/* "Modificar" (migración 0016): el rastro entre dos
+                          filas, con el número de cotización -- lo que el
+                          cliente cita por teléfono, no un id. En la fila
+                          vieja (reemplazada), a quién le cedió el lugar; en
+                          la nueva, a cuál reemplazó. */}
+                      {fila.reemplazada_por_numero && (
+                        <p className="mt-1 text-xs text-teal">
+                          Reemplazada por {fila.reemplazada_por_numero}.
+                        </p>
+                      )}
+                      {fila.reemplaza_a_numero && (
+                        <p className="mt-1 text-xs text-teal">Reemplaza a {fila.reemplaza_a_numero}.</p>
+                      )}
                     </td>
                     <td className="px-3 py-3 align-top">
                       {/* Jerarquía de acciones (hallazgo del dueño): seis
@@ -870,6 +961,20 @@ export function VistaListado({
                                     disabled: enProceso,
                                     onClick: () => void verPdf(fila),
                                   },
+                                ]
+                              : []),
+                            // "Modificar" (migración 0016): "Reenviar" ahora
+                            // depende de dos condiciones, no una sola --
+                            // `pdf_ruta` (siempre) Y que la fila no esté ya
+                            // 'reemplazada' (mandarle al hotel un PDF con un
+                            // precio que ya no vale es peor que no reenviar
+                            // nada; el servidor también lo rechaza, esto es
+                            // sólo para no ofrecer el botón). "Ver PDF"
+                            // arriba NO lleva esta segunda condición a
+                            // propósito: revisar el PDF viejo de una fila ya
+                            // reemplazada sigue siendo útil e inofensivo.
+                            ...(fila.pdf_ruta && fila.estado !== 'reemplazada'
+                              ? [
                                   {
                                     tipo: 'boton' as const,
                                     etiqueta: 'Reenviar',
@@ -884,6 +989,19 @@ export function VistaListado({
                               disabled: enProceso,
                               onClick: () => void duplicar(fila),
                             },
+                            // "Modificar" (migración 0016): sólo sobre las
+                            // dos formas de "hay un precio en pie" -- ver
+                            // ESTADOS_MODIFICABLES, arriba en el archivo.
+                            ...(ESTADOS_MODIFICABLES.includes(fila.estado)
+                              ? [
+                                  {
+                                    tipo: 'boton' as const,
+                                    etiqueta: 'Modificar',
+                                    disabled: enProceso,
+                                    onClick: () => void modificar(fila),
+                                  },
+                                ]
+                              : []),
                             ...(fila.contact_id && locationId
                               ? [
                                   {
