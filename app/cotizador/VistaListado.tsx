@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import type { PrefillCotizacion } from './Panel';
 import { formatearColones } from './formato';
@@ -192,6 +193,208 @@ function AvisoError({
   );
 }
 
+// Hallazgo del dueño: seis controles por fila (Ganada, Perdida, Ver PDF,
+// Reenviar, Duplicar, Ver en GoHighLevel) ocupaban más espacio que los
+// datos de la cotización. `ITEM_MENU` describe las cuatro que se recogen
+// detrás de un botón de tres puntos por fila: son apoyo situacional (revisar
+// un PDF ya mandado, reenviarlo, duplicar la cotización, saltar a la ficha
+// del contacto en el CRM) -- ninguna es algo que un vendedor haga con cada
+// fila que mira. "Ganada" y "Perdida" NO entran acá a propósito: son la
+// decisión que un vendedor toma con la mayor frecuencia al repasar su
+// listado -- es la razón de ser de esta pantalla -- y enterrarla a dos
+// clics (abrir el menú, después elegir) cambiaría un problema de saturación
+// por uno de fricción en lo que más se usa. Se quedan como botones sólidos,
+// igual que antes.
+type ItemMenu =
+  | { tipo: 'boton'; etiqueta: string; disabled?: boolean; onClick: () => void }
+  | { tipo: 'enlace'; etiqueta: string; href: string };
+
+// El menú se porta a `document.body` (posición `fixed`, calculada a mano
+// con `getBoundingClientRect`) en vez de `absolute` dentro de la fila. La
+// tabla ya vive en un contenedor con `overflow-x-auto` (ver más abajo, en
+// VistaListado) -- y por cómo funciona `overflow` en CSS, fijar solo el eje
+// X ahí convierte el eje Y en `auto` también, aunque nadie lo haya pedido.
+// Un menú `absolute` dentro de esa fila quedaría recortado contra el borde
+// inferior del contenedor en vez de flotar sobre la tabla. `fixed` fuera de
+// ese árbol no tiene ese problema, y en el iframe angosto de GoHighLevel
+// (el otro riesgo real acá) `ubicar()` recalcula el lado en el que cae el
+// menú para que no se corte contra el borde derecho de la ventana.
+function MenuAcciones({
+  id,
+  etiqueta,
+  abierto,
+  onAbrir,
+  onCerrar,
+  items,
+}: {
+  id: string;
+  etiqueta: string;
+  abierto: boolean;
+  onAbrir: () => void;
+  onCerrar: () => void;
+  items: ItemMenu[];
+}) {
+  const botonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [posicion, setPosicion] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!abierto) return;
+    const ANCHO_MENU = 208; // Ancho fijo (ver className del menú, abajo) -- se necesita antes de pintarlo para calcular dónde cae.
+    const MARGEN = 8;
+    function ubicar() {
+      const boton = botonRef.current;
+      if (!boton) return;
+      const rect = boton.getBoundingClientRect();
+      // Por defecto el borde derecho del menú se alinea con el del botón
+      // (cuelga hacia la izquierda, como es habitual). Si eso lo saca por
+      // el borde izquierdo de la ventana, se alinea por la izquierda del
+      // botón en su lugar; si ninguna de las dos alcanza (columna muy
+      // angosta), se pega al margen mínimo.
+      let left = rect.right - ANCHO_MENU;
+      if (left < MARGEN) left = rect.left;
+      if (left + ANCHO_MENU > window.innerWidth - MARGEN) left = window.innerWidth - ANCHO_MENU - MARGEN;
+      if (left < MARGEN) left = MARGEN;
+      setPosicion({ top: rect.bottom + 4, left });
+    }
+    ubicar();
+    window.addEventListener('resize', ubicar);
+    window.addEventListener('scroll', ubicar, true);
+    return () => {
+      window.removeEventListener('resize', ubicar);
+      window.removeEventListener('scroll', ubicar, true);
+    };
+  }, [abierto]);
+
+  // Foco inicial en el primer ítem habilitado: quien abre con Enter/Espacio
+  // ya puede navegar con flechas sin un Tab de más. `enfocado` evita
+  // repetirlo en cada recálculo de `posicion` (scroll/resize) mientras el
+  // menú sigue abierto -- sin ese resguardo, un scroll a mitad de la
+  // navegación con flechas le robaría el foco de vuelta al primer ítem.
+  // Depende de `posicion` (no solo de `abierto`) porque el menú recién
+  // existe en el DOM -- vía el portal, más abajo -- una vez que `posicion`
+  // deja de ser `null`; enfocar un ítem que todavía no se pintó no hace
+  // nada.
+  const enfocadoRef = useRef(false);
+  useEffect(() => {
+    if (!abierto) {
+      enfocadoRef.current = false;
+      return;
+    }
+    if (enfocadoRef.current || !posicion) return;
+    enfocadoRef.current = true;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
+  }, [abierto, posicion]);
+
+  // Clic afuera cierra. `mousedown`, no `click` -- así se adelanta al clic
+  // que podría estar abriendo OTRO menú (el botón de otra fila): si fuera
+  // `click`, ese mismo evento cerraría este Y dispararía el `onClick` que
+  // abre el otro, en el mismo ciclo, sin pelearse -- pero da la casualidad
+  // de que funciona por eso, no a propósito. `mousedown` lo evita de raíz.
+  useEffect(() => {
+    if (!abierto) return;
+    function alPulsar(e: MouseEvent) {
+      const objetivo = e.target as Node;
+      if (botonRef.current?.contains(objetivo) || menuRef.current?.contains(objetivo)) return;
+      onCerrar();
+    }
+    document.addEventListener('mousedown', alPulsar);
+    return () => document.removeEventListener('mousedown', alPulsar);
+  }, [abierto, onCerrar]);
+
+  // Escape cierra y devuelve el foco al botón -- que el vendedor no pierda
+  // su lugar en la tabla. Flechas/Home/End navegan entre ítems, como se
+  // espera de un `role="menu"`. Tab también cierra: el foco de todas formas
+  // se va del menú, y no tiene sentido dejarlo abierto flotando sin nada
+  // enfocado adentro.
+  function alTeclado(e: KeyboardEvent<HTMLDivElement>) {
+    const habilitados = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [],
+    );
+    const actual = habilitados.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onCerrar();
+      botonRef.current?.focus();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      habilitados[(actual + 1) % habilitados.length]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      habilitados[(actual - 1 + habilitados.length) % habilitados.length]?.focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      habilitados[0]?.focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      habilitados[habilitados.length - 1]?.focus();
+    } else if (e.key === 'Tab') {
+      onCerrar();
+    }
+  }
+
+  return (
+    <>
+      <button
+        ref={botonRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={abierto}
+        aria-controls={id}
+        aria-label={etiqueta}
+        onClick={() => (abierto ? onCerrar() : onAbrir())}
+        className="rounded-lg border border-[var(--carta-border)] px-2 py-1 text-sm leading-none text-navy hover:bg-navy hover:text-beige"
+      >
+        ⋯
+      </button>
+      {abierto &&
+        posicion &&
+        createPortal(
+          <div
+            ref={menuRef}
+            id={id}
+            role="menu"
+            aria-label={etiqueta}
+            onKeyDown={alTeclado}
+            style={{ position: 'fixed', top: posicion.top, left: posicion.left, width: 208 }}
+            className="z-50 overflow-hidden rounded-lg border border-[var(--carta-border)] bg-white py-1 text-sm shadow-lg"
+          >
+            {items.map((item, i) =>
+              item.tipo === 'enlace' ? (
+                <a
+                  key={i}
+                  role="menuitem"
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={onCerrar}
+                  className="block px-3 py-1.5 text-navy hover:bg-[var(--carta-fill)]"
+                >
+                  {item.etiqueta}
+                </a>
+              ) : (
+                <button
+                  key={i}
+                  type="button"
+                  role="menuitem"
+                  disabled={item.disabled}
+                  onClick={() => {
+                    onCerrar();
+                    item.onClick();
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-navy hover:bg-[var(--carta-fill)] disabled:opacity-40"
+                >
+                  {item.etiqueta}
+                </button>
+              ),
+            )}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 // Ronda de correcciones 1 (hallazgo): "Por vencer" no es un estado que el
 // servidor entienda -- es un cruce de "sin respuesta" + "vence pronto" que
 // solo esta pantalla puede calcular (ver `calcularVigencia`). Con la lista
@@ -272,6 +475,12 @@ export function VistaListado({
     setDetallesAbiertos((d) => ({ ...d, [clave]: !d[clave] }));
   }
 
+  // Qué fila tiene el menú de acciones (Ver PDF/Reenviar/Duplicar/Ver en
+  // GoHighLevel) desplegado ahora mismo. Una fila a la vez, mismo criterio
+  // que `procesandoId`: abrir otro cierra el anterior solo con sobreescribir
+  // este valor.
+  const [menuAbiertoId, setMenuAbiertoId] = useState<string | null>(null);
+
   // `estaCancelado`: solo lo usa el efecto de abajo, para que una respuesta
   // que llega tarde (el vendedor cambió el filtro dos veces seguido) no
   // pise el resultado de una consulta más nueva con uno viejo. Las otras
@@ -320,6 +529,7 @@ export function VistaListado({
     // acaban de dejar (después de cerrar/reenviar/duplicar con éxito o
     // error) no pasan por este efecto, así que no las toca.
     setMensajesFila({});
+    setMenuAbiertoId(null);
     void cargar(filtroEstado, () => cancelado);
     return () => {
       cancelado = true;
@@ -615,13 +825,16 @@ export function VistaListado({
                     </td>
                     <td className="px-3 py-3 align-top">
                       {/* Jerarquía de acciones (hallazgo del dueño): seis
-                          botones iguales no dejaban resaltar ninguno.
-                          "Ganada"/"Perdida" son la decisión que cierra la
-                          fila -- la razón de ser de esta pantalla -- y
-                          quedan como botones sólidos. El resto son apoyo
-                          situacional (revisar el PDF, reenviar, duplicar,
-                          saltar al CRM): se recogen como enlaces de texto,
-                          sin perder que siguen siendo un clic directo. */}
+                          controles por fila ocupaban más espacio que los
+                          datos de la cotización. "Ganada"/"Perdida" son la
+                          decisión que un vendedor toma con más frecuencia al
+                          repasar su listado -- la razón de ser de esta
+                          pantalla -- y quedan afuera del menú, como botones
+                          sólidos, para no cambiar saturación por fricción en
+                          lo más usado. El resto (revisar el PDF, reenviar,
+                          duplicar, saltar al CRM) es apoyo situacional: se
+                          recoge detrás del botón de tres puntos, ver
+                          `MenuAcciones` más arriba en el archivo. */}
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
@@ -642,47 +855,46 @@ export function VistaListado({
                         >
                           Perdida
                         </button>
-                      </div>
-
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-teal">
-                        {fila.pdf_ruta && (
-                          <button
-                            type="button"
-                            disabled={enProceso}
-                            onClick={() => void verPdf(fila)}
-                            className="underline decoration-dotted underline-offset-2 hover:text-navy disabled:opacity-40"
-                          >
-                            Ver PDF
-                          </button>
-                        )}
-                        {fila.pdf_ruta && (
-                          <button
-                            type="button"
-                            disabled={enProceso}
-                            onClick={() => void reenviar(fila.id)}
-                            className="underline decoration-dotted underline-offset-2 hover:text-navy disabled:opacity-40"
-                          >
-                            Reenviar
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={enProceso}
-                          onClick={() => void duplicar(fila)}
-                          className="underline decoration-dotted underline-offset-2 hover:text-navy disabled:opacity-40"
-                        >
-                          Duplicar
-                        </button>
-                        {fila.contact_id && locationId && (
-                          <a
-                            href={`https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${fila.contact_id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline hover:text-navy"
-                          >
-                            Ver en GoHighLevel
-                          </a>
-                        )}
+                        <MenuAcciones
+                          id={`menu-acciones-${fila.id}`}
+                          etiqueta={`Más acciones para ${nombre}`}
+                          abierto={menuAbiertoId === fila.id}
+                          onAbrir={() => setMenuAbiertoId(fila.id)}
+                          onCerrar={() => setMenuAbiertoId(null)}
+                          items={[
+                            ...(fila.pdf_ruta
+                              ? [
+                                  {
+                                    tipo: 'boton' as const,
+                                    etiqueta: 'Ver PDF',
+                                    disabled: enProceso,
+                                    onClick: () => void verPdf(fila),
+                                  },
+                                  {
+                                    tipo: 'boton' as const,
+                                    etiqueta: 'Reenviar',
+                                    disabled: enProceso,
+                                    onClick: () => void reenviar(fila.id),
+                                  },
+                                ]
+                              : []),
+                            {
+                              tipo: 'boton' as const,
+                              etiqueta: 'Duplicar',
+                              disabled: enProceso,
+                              onClick: () => void duplicar(fila),
+                            },
+                            ...(fila.contact_id && locationId
+                              ? [
+                                  {
+                                    tipo: 'enlace' as const,
+                                    etiqueta: 'Ver en GoHighLevel',
+                                    href: `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${fila.contact_id}`,
+                                  },
+                                ]
+                              : []),
+                          ]}
+                        />
                       </div>
 
                       {pidiendoMotivoId === fila.id && (

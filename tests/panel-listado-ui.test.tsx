@@ -156,6 +156,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Ver PDF / Reenviar / Duplicar / Ver en GoHighLevel viven detrás del botón
+// de tres puntos (menú de acciones) de cada fila -- ver `MenuAcciones` en
+// VistaListado.tsx. `usuario` ya viene de `userEvent.setup()` en cada
+// prueba; este helper solo abre el menú de la fila dada, con el mismo
+// cliente. El menú se porta a `document.body` (para no quedar recortado
+// por el `overflow-x-auto` de la tabla -- ver el comentario en
+// `MenuAcciones`), así que sus ítems ya NO están dentro del `<tr>`: quien
+// llama a este helper debe buscarlos con `screen`, no con `within(fila)`.
+async function abrirMenu(usuario: ReturnType<typeof userEvent.setup>, fila: HTMLElement) {
+  await usuario.click(within(fila).getByRole('button', { name: /más acciones/i }));
+}
+
 describe('VistaListado', () => {
   it('lista las cotizaciones con cliente, monto y estado', async () => {
     mockFetch();
@@ -328,7 +340,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /reenviar/i }));
 
     await waitFor(() => {
       const llamada = llamadas.find((l) => l.url.endsWith('/api/cotizacion/reenviar'));
@@ -375,7 +388,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /reenviar/i }));
 
     await waitFor(() => {
       expect(within(fila).getByText(/reenviado/i)).toBeInTheDocument();
@@ -400,7 +414,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /reenviar/i }));
 
     await waitFor(() => {
       expect(within(fila).getByText(/no se pudo actualizar el registro/i)).toBeInTheDocument();
@@ -414,7 +429,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /duplicar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /duplicar/i }));
 
     await waitFor(() => {
       expect(onDuplicar).toHaveBeenCalledWith({
@@ -443,7 +459,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /ver pdf/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /ver pdf/i }));
 
     await waitFor(() => {
       expect(abrir).toHaveBeenCalledWith('https://firmada/cot-1.pdf', '_blank', 'noopener,noreferrer');
@@ -452,11 +469,18 @@ describe('VistaListado', () => {
 
   it('"Ver PDF" no aparece en una fila sin pdf_ruta', async () => {
     mockFetch({ filas: [{ ...FILA_ABIERTA, pdf_ruta: null }] });
+    const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    expect(within(fila).queryByRole('button', { name: /ver pdf/i })).not.toBeInTheDocument();
+    await abrirMenu(usuario, fila);
+    expect(screen.queryByRole('menuitem', { name: /ver pdf/i })).not.toBeInTheDocument();
+    // "Reenviar" depende de la misma condición (`pdf_ruta`) que "Ver PDF" --
+    // sin PDF guardado, no hay nada que reenviar tampoco.
+    expect(screen.queryByRole('menuitem', { name: /reenviar/i })).not.toBeInTheDocument();
+    // El menú no queda vacío: "Duplicar" no depende de `pdf_ruta`.
+    expect(screen.getByRole('menuitem', { name: /duplicar/i })).toBeInTheDocument();
   });
 
   it('un error al pedir el PDF se muestra en la fila, no se abre ninguna pestaña', async () => {
@@ -467,7 +491,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /ver pdf/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /ver pdf/i }));
 
     await waitFor(() => {
       expect(within(fila).getByText(/no tiene un pdf guardado/i)).toBeInTheDocument();
@@ -482,7 +507,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /ver pdf/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /ver pdf/i }));
 
     await waitFor(() => {
       expect(onSesionInvalida).toHaveBeenCalledTimes(1);
@@ -601,19 +627,23 @@ describe('VistaListado', () => {
 
   it('hay un enlace a la ficha del contacto en GoHighLevel cuando la fila tiene contact_id', async () => {
     mockFetch();
+    const usuario = userEvent.setup();
     renderVista();
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const filaConContacto = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    const enlace = within(filaConContacto).getByRole('link', { name: /gohighlevel/i });
+    await abrirMenu(usuario, filaConContacto);
+    const enlace = screen.getByRole('menuitem', { name: /gohighlevel/i });
     expect(enlace).toHaveAttribute(
       'href',
       `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${FILA_ABIERTA.contact_id}`,
     );
+    await usuario.keyboard('{Escape}');
 
     // La fila sin `contact_id` (FILA_POR_VENCER) no lleva ese enlace.
     const filaSinContacto = screen.getByText(/beto ruiz/i).closest('tr') as HTMLElement;
-    expect(within(filaSinContacto).queryByRole('link', { name: /gohighlevel/i })).not.toBeInTheDocument();
+    await abrirMenu(usuario, filaSinContacto);
+    expect(screen.queryByRole('menuitem', { name: /gohighlevel/i })).not.toBeInTheDocument();
   });
 
   it('sin cotizaciones, un texto neutro', async () => {
@@ -662,7 +692,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /reenviar/i }));
 
     await waitFor(() => {
       expect(onSesionInvalida).toHaveBeenCalledTimes(1);
@@ -676,7 +707,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /duplicar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /duplicar/i }));
 
     await waitFor(() => {
       expect(onSesionInvalida).toHaveBeenCalledTimes(1);
@@ -733,7 +765,8 @@ describe('VistaListado', () => {
 
     await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
     const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
-    await usuario.click(within(fila).getByRole('button', { name: /reenviar/i }));
+    await abrirMenu(usuario, fila);
+    await usuario.click(screen.getByRole('menuitem', { name: /reenviar/i }));
     await waitFor(() => expect(within(fila).getByText(/reenviado/i)).toBeInTheDocument());
 
     // Filtra por el propio estado de la fila de Ana ('enviada'): sigue
@@ -744,5 +777,271 @@ describe('VistaListado', () => {
       expect(screen.getByText(/ana pérez/i)).toBeInTheDocument();
     });
     expect(screen.queryByText(/reenviado/i)).not.toBeInTheDocument();
+  });
+
+  // El menú de tres puntos (Ver PDF/Reenviar/Duplicar/Ver en GoHighLevel) es
+  // el control nuevo de este pedido: los atributos de accesibilidad de un
+  // menú, y las tres formas en que "se espera" que se cierre.
+  describe('menú de acciones', () => {
+    it('el botón lleva aria-haspopup y aria-expanded, y el panel es un role="menu"', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const boton = within(fila).getByRole('button', { name: /más acciones/i });
+      expect(boton).toHaveAttribute('aria-haspopup', 'menu');
+      expect(boton).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+      await usuario.click(boton);
+
+      expect(boton).toHaveAttribute('aria-expanded', 'true');
+      const menu = screen.getByRole('menu');
+      expect(menu).toBeInTheDocument();
+      // `aria-controls` en el botón tiene que apuntar al panel que abre --
+      // es lo que le dice a un lector de pantalla que ambos van juntos.
+      expect(boton).toHaveAttribute('aria-controls', menu.id);
+    });
+
+    it('el menú lista las cuatro acciones de apoyo, y no "Ganada"/"Perdida"', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      // "Ganada"/"Perdida" siguen siendo botones sueltos de la fila, no
+      // entran al menú -- por eso siguen encontrándose con `within(fila)`
+      // sin abrir nada.
+      expect(within(fila).getByRole('button', { name: /^ganada$/i })).toBeInTheDocument();
+      expect(within(fila).getByRole('button', { name: /^perdida$/i })).toBeInTheDocument();
+
+      await abrirMenu(usuario, fila);
+      const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
+      expect(items).toEqual(['Ver PDF', 'Reenviar', 'Duplicar', 'Ver en GoHighLevel']);
+    });
+
+    it('Escape cierra el menú y devuelve el foco al botón de tres puntos', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const boton = within(fila).getByRole('button', { name: /más acciones/i });
+      await abrirMenu(usuario, fila);
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+
+      await usuario.keyboard('{Escape}');
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(boton).toHaveAttribute('aria-expanded', 'false');
+      expect(boton).toHaveFocus();
+    });
+
+    it('un clic fuera del menú lo cierra', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      await abrirMenu(usuario, fila);
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+
+      // Clic en un rincón de la página que no es ni el botón ni el menú --
+      // el encabezado del filtro, por ejemplo.
+      await usuario.click(screen.getByLabelText(/filtrar por estado/i));
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+
+    it('Tab se sale del menú y lo cierra, en vez de dejarlo flotando sin nada enfocado', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      await abrirMenu(usuario, fila);
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+
+      await usuario.tab();
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+
+    it('elegir una opción del menú lo cierra', async () => {
+      mockFetch({ duplicarLineas: [] });
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      await abrirMenu(usuario, fila);
+      await usuario.click(screen.getByRole('menuitem', { name: /duplicar/i }));
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+
+    it('el foco cae en el primer ítem al abrir, y las flechas navegan entre ítems', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      await abrirMenu(usuario, fila);
+
+      const items = screen.getAllByRole('menuitem');
+      expect(items[0]).toHaveFocus(); // "Ver PDF"
+
+      await usuario.keyboard('{ArrowDown}');
+      expect(items[1]).toHaveFocus(); // "Reenviar"
+
+      await usuario.keyboard('{ArrowDown}{ArrowDown}');
+      expect(items[3]).toHaveFocus(); // "Ver en GoHighLevel"
+
+      // Cierra el ciclo: de la última vuelve a la primera.
+      await usuario.keyboard('{ArrowDown}');
+      expect(items[0]).toHaveFocus();
+
+      await usuario.keyboard('{ArrowUp}');
+      expect(items[3]).toHaveFocus(); // vuelve a la última
+    });
+
+    it('abrir el menú de otra fila cierra el de la fila anterior', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/beto ruiz/i)).toBeInTheDocument());
+      const filaAna = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const filaBeto = screen.getByText(/beto ruiz/i).closest('tr') as HTMLElement;
+
+      await abrirMenu(usuario, filaAna);
+      expect(screen.getByRole('menu')).toHaveAttribute('aria-label', 'Más acciones para Ana Pérez');
+
+      await abrirMenu(usuario, filaBeto);
+
+      expect(screen.getAllByRole('menu')).toHaveLength(1);
+      expect(screen.getByRole('menu')).toHaveAttribute('aria-label', 'Más acciones para Beto Ruiz');
+    });
+
+    // El riesgo concreto del pedido: el panel vive en un iframe angosto de
+    // GoHighLevel, y la tabla ya tiene su propio scroll horizontal. jsdom no
+    // hace layout de verdad (todo `getBoundingClientRect` da ceros por
+    // defecto), así que sin este `mockReturnValue` el cálculo de
+    // `ubicar()` nunca ejercita la rama que evita el corte -- queda sin
+    // ninguna prueba detrás. Se simula el botón pegado al borde derecho de
+    // una ventana de 375px (ancho típico de un iframe embebido) para que
+    // el menú, de 208px, sí necesite correrse hacia la izquierda.
+    it('el menú no se corta contra el borde derecho de una ventana angosta', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      const anchoOriginal = window.innerWidth;
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const boton = within(fila).getByRole('button', { name: /más acciones/i });
+      vi.spyOn(boton, 'getBoundingClientRect').mockReturnValue({
+        top: 100,
+        bottom: 120,
+        left: 340,
+        right: 370,
+        width: 30,
+        height: 20,
+        x: 340,
+        y: 100,
+        toJSON() {},
+      } as DOMRect);
+
+      await usuario.click(boton);
+
+      const menu = screen.getByRole('menu');
+      const left = parseFloat(menu.style.left);
+      const ANCHO_MENU = 208;
+      // Ni pegado contra el borde izquierdo de la ventana...
+      expect(left).toBeGreaterThanOrEqual(8);
+      // ...ni saliéndose por el derecho -- que es justo lo que pasaba antes
+      // de que `ubicar()` recalculara el lado.
+      expect(left + ANCHO_MENU).toBeLessThanOrEqual(375 - 8);
+
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: anchoOriginal });
+    });
+
+    // Complementa la prueba anterior: cuando el botón NO está pegado al
+    // borde derecho pero el menú tampoco entra "colgando hacia la
+    // izquierda" desde su borde derecho (una columna angosta a media
+    // tabla), `ubicar()` lo alinea con el borde IZQUIERDO del botón en vez
+    // de aplastarlo contra el margen mínimo de la ventana -- que quedaría
+    // lejos del botón que lo abrió.
+    it('si no cae colgando hacia la izquierda, el menú se alinea con el borde izquierdo del botón', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const boton = within(fila).getByRole('button', { name: /más acciones/i });
+      // rect.right - 208 (ancho del menú) da negativo -- no alcanza colgando
+      // a la izquierda -- pero el botón no está para nada cerca del borde
+      // de la ventana (rect.left = 100, ventana de 800px de ancho).
+      vi.spyOn(boton, 'getBoundingClientRect').mockReturnValue({
+        top: 100,
+        bottom: 120,
+        left: 100,
+        right: 140,
+        width: 40,
+        height: 20,
+        x: 100,
+        y: 100,
+        toJSON() {},
+      } as DOMRect);
+
+      await usuario.click(boton);
+
+      const menu = screen.getByRole('menu');
+      expect(parseFloat(menu.style.left)).toBe(100);
+    });
+
+    // Caso extremo pero real dentro de un iframe: una ventana más angosta
+    // que el propio menú (208px) más sus dos márgenes. El clamp por la
+    // derecha por sí solo empujaría el menú a un `left` negativo -- fuera
+    // de la ventana por la izquierda. El último clamp lo trae de vuelta al
+    // margen mínimo en vez de dejarlo cortado.
+    it('en una ventana más angosta que el propio menú, no lo empuja a un left negativo', async () => {
+      mockFetch();
+      const usuario = userEvent.setup();
+      const anchoOriginal = window.innerWidth;
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 180 });
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const boton = within(fila).getByRole('button', { name: /más acciones/i });
+      vi.spyOn(boton, 'getBoundingClientRect').mockReturnValue({
+        top: 100,
+        bottom: 120,
+        left: 150,
+        right: 170,
+        width: 20,
+        height: 20,
+        x: 150,
+        y: 100,
+        toJSON() {},
+      } as DOMRect);
+
+      await usuario.click(boton);
+
+      const menu = screen.getByRole('menu');
+      expect(parseFloat(menu.style.left)).toBe(8);
+
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: anchoOriginal });
+    });
   });
 });
