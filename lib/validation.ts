@@ -1,10 +1,94 @@
 import { z } from 'zod';
 import { IVA_GENERAL } from '@/lib/cotizador/iva';
+import { DESCUENTO_PERSONALIZADO_MAX, GRUPOS } from '@/lib/cotizador/tipos';
 
 export const LINEAS = ['uniformes', 'hogar', 'ambas'] as const;
 
 const opcional = (max: number, message: string) =>
   z.string().trim().max(max, message).optional();
+
+// Descuento personalizado con aprobación (fase 5, base — ver
+// docs/superpowers/specs/2026-09-02-descuento-aprobacion-design.md). Llega
+// desde el navegador, así que se valida con el mismo rigor que el resto de
+// este archivo: nunca se confía en que el número viene bien.
+//
+// Mismo tope que el motor (`DESCUENTO_PERSONALIZADO_MAX` en
+// lib/cotizador/tipos.ts, que `lib/cotizador/calcular.ts` también usa): el
+// número vive en un solo lugar para que un cambio ahí no desalinee esta
+// validación de la que de verdad hace valer el motor. [0, 100), igual que
+// ahí: 0 no se prohíbe ("puede ser menor que el de escala", diseño), y a
+// 100% el producto queda gratis, casi siempre por un error de tecleo — ver
+// el razonamiento completo junto a esa constante.
+const pctDescuentoPersonalizado = (etiqueta: string) =>
+  z
+    .number(`El descuento ${etiqueta} debe ser un número.`)
+    .min(0, `El descuento ${etiqueta} no puede ser negativo.`)
+    .lt(
+      DESCUENTO_PERSONALIZADO_MAX,
+      `El descuento ${etiqueta} no puede llegar al 100%: eso regala el producto, no lo descuenta.`,
+    );
+
+// Las claves de `familias` tienen que ser un `GrupoDescuento` real (los seis
+// de lib/cotizador/tipos.ts, los mismos que ya acumulan cantidad para el
+// escalón automático) y NO el campo `Sku.familia` de texto libre del
+// catálogo — ver el comentario de `DescuentoPersonalizado` en tipos.ts. Se
+// valida con `.refine` sobre las claves en vez de `z.partialRecord`
+// enum-keyed: ese devuelve un mensaje genérico en inglés ("Invalid key in
+// record") que rompería la consistencia del resto de los mensajes de este
+// archivo — todos en español, todos accionables.
+//
+// Una clave que sea un grupo real pero sin ninguna línea de ese grupo en la
+// cotización NO se rechaza acá a propósito: la vista previa llama a este
+// mismo esquema en cada tecla, con las líneas que haya en pantalla en ese
+// momento, y es habitual negociar el descuento antes de terminar de armar
+// el carrito. `calcular` ya trata esa familia como un no-op inofensivo (ver
+// ese archivo). Lo que sí se rechaza es una clave que no sea un grupo de
+// verdad: un typo ahí sería un descuento que el vendedor pidió y que nunca
+// se aplica, en silencio — y eso es peor que un error explícito.
+const familiasDescuentoSchema = z
+  .record(z.string(), pctDescuentoPersonalizado('de familia'))
+  .refine((obj) => Object.keys(obj).length > 0, {
+    message: 'El descuento por familia necesita al menos una familia.',
+  })
+  .refine((obj) => Object.keys(obj).every((clave) => (GRUPOS as readonly string[]).includes(clave)), {
+    message: `Familia de descuento desconocida. Debe ser una de: ${GRUPOS.join(', ')}.`,
+  });
+
+// Decisión (fase 5): el descuento personalizado llega en una de dos formas
+// -- general, o por familia -- NUNCA LAS DOS A LA VEZ. El diseño ya lo
+// documenta así ("{ general: n } o { familias: {...} }", migración 0017):
+// es una elección entre dos caminos, no dos descuentos que se combinan
+// (sumarlos volvería el precio final impredecible, mismo motivo que en
+// `calcular`). Si el navegador manda las dos claves a la vez -- o
+// ninguna -- se rechaza entero en vez de adivinar cuál de las dos vale.
+// `calcular` vuelve a revisar esto puertas adentro (mismo criterio que ya
+// usa con `tasaIva`): esta es la validación real, esa es la última línea
+// de defensa si algún día alguien llama al motor sin pasar por acá.
+//
+// El `.transform` final angosta el tipo de salida a la unión discriminada
+// `DescuentoPersonalizado` (lib/cotizador/tipos.ts) -- la misma forma que
+// espera `opciones.descuentoPersonalizado` en `calcular` -- para que quien
+// arme la llamada no tenga que repetir el `if` de cuál de las dos claves
+// vino.
+export const descuentoPersonalizadoSchema = z
+  .object({
+    general: pctDescuentoPersonalizado('general').optional(),
+    familias: familiasDescuentoSchema.optional(),
+  })
+  .strict()
+  .superRefine((valor, ctx) => {
+    const tieneGeneral = valor.general !== undefined;
+    const tieneFamilias = valor.familias !== undefined;
+    if (tieneGeneral === tieneFamilias) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'El descuento personalizado debe traer "general" o "familias", no los dos ni ninguno.',
+      });
+    }
+  })
+  .transform((valor) =>
+    valor.general !== undefined ? { general: valor.general } : { familias: valor.familias! },
+  );
 
 export const leadSchema = z.object({
   nombre: z.string().trim().min(2, 'Escribe tu nombre completo.').max(120, 'Escribe un nombre más corto.'),
@@ -82,6 +166,10 @@ export const cotizacionSchema = z.object({
   // forma revienta Postgres como 500 en vez de 400 (mismo motivo que en
   // /cerrar, /reenviar y /duplicar).
   reemplazaId: z.uuid('El id de la cotización a reemplazar no es válido.').optional(),
+  // Fase 5 (descuento con aprobación, base): ver `descuentoPersonalizadoSchema`
+  // más arriba para qué se valida y por qué. Opcional: la inmensa mayoría de
+  // las cotizaciones sigue sin ningún descuento fuera de escala.
+  descuentoPersonalizado: descuentoPersonalizadoSchema.optional(),
 });
 
 export type CotizacionInput = z.infer<typeof cotizacionSchema>;
@@ -113,6 +201,10 @@ export const previsualizarSchema = z.object({
     .max(IVA_GENERAL, `La tasa de IVA no puede superar la tasa general (${IVA_GENERAL * 100}%).`)
     .optional(),
   bordadoEspecial: z.boolean({ message: 'Bordado especial debe ser verdadero o falso.' }).optional(),
+  // Mismo motivo que en `cotizacionSchema`: la vista previa tiene que poder
+  // mostrar el efecto del descuento personalizado antes de que el vendedor
+  // lo mande a aprobación.
+  descuentoPersonalizado: descuentoPersonalizadoSchema.optional(),
 });
 
 export type PrevisualizarInput = z.infer<typeof previsualizarSchema>;
