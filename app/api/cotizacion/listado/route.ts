@@ -26,10 +26,21 @@ const listadoSchema = z.object({
 // vieja, cuál la reemplazó. Se manda el numero denormalizado, no el id: es
 // lo que el vendedor reconoce (lo que el cliente cita por teléfono), y así
 // esta pantalla no necesita un join ni una segunda consulta para mostrarlo.
+//
+// Fase 5 (descuento con aprobación, migración 0017): las seis columnas
+// nuevas de `cotizaciones`. Esta pantalla es la que la pantalla general
+// (todos los estados, no sólo las pendientes -- para eso está
+// /api/cotizacion/pendientes) necesita para mostrar el estado
+// 'esperando_aprobacion'/'rechazada', quién lo pidió y, restando
+// `created_at` a ahora, cuánto lleva esperando (diseño, sección de
+// riesgos: "el listado muestra cuánto lleva esperando"). `descuento_aprobado`
+// viaja también: es lo único que distingue, en una fila ya resuelta, si el
+// superadmin aprobó tal cual o cambió el porcentaje.
 const COLUMNAS =
   'id, numero, created_at, updated_at, estado, origen, contact_id, cliente, totales, ' +
   'enviado_at, cerrada_at, pdf_ruta, motivo_cierre, ghl_estimate_id, ghl_error, correo_error, vendedor, ' +
-  'reemplaza_a_numero, reemplazada_por_numero';
+  'reemplaza_a_numero, reemplazada_por_numero, ' +
+  'descuento_personalizado, solicitado_por, aprobado_por, resuelto_at, motivo_rechazo, descuento_aprobado';
 
 export async function POST(request: Request) {
   let crudo: unknown;

@@ -38,6 +38,16 @@ vi.mock('@/lib/cotizador/almacen', () => ({
 vi.mock('@/lib/cotizador/correo', () => ({
   enviarCotizacion: vi.fn().mockResolvedValue({ ok: true, resendId: 're_1' }),
 }));
+// Fase 5 (descuento con aprobación): el aviso a los superadmin cuando una
+// cotización queda 'esperando_aprobacion'. El CONTENIDO del correo ya está
+// probado en tests/correo-aprobacion.test.ts, y `avisarSolicitudAprobacion`
+// (que arma la lista de superadmin activos) en tests/aprobacion.test.ts --
+// acá sólo importa que esta ruta lo llame (o no) en el momento correcto,
+// con los datos correctos. Mismo criterio que el resto de los `vi.mock` de
+// este archivo.
+vi.mock('@/lib/cotizador/aprobacion', () => ({
+  avisarSolicitudAprobacion: vi.fn().mockResolvedValue({ ok: true, resendId: 're_sol' }),
+}));
 
 const insertado: unknown[] = [];
 const actualizados: unknown[] = [];
@@ -58,48 +68,74 @@ let resultadoFilaVieja: { data: unknown; error: { message: string } | null } = {
   data: { estado: 'enviada', numero: 'COT-2026-0001', contact_id: 'contacto-viejo' },
   error: null,
 };
+// Fase 5: lo que `autorizarSuperadmin` (lib/cotizador/equipo.ts, no
+// mockeado -- se ejercita real) relee de `usuarios_panel` para quien manda
+// la petición. Por defecto calza con la sesión por defecto de
+// `peticionAutenticada` (id `aaaaaaaa-0000-4000-8000-000000000001`,
+// vendedor real): así las 61 pruebas ya existentes de este archivo, que
+// nunca mandan `descuentoPersonalizado`, ni siquiera llegan a leer esto
+// (route.ts sólo llama a `autorizarSuperadmin` cuando `descuentoPersonalizado`
+// viene) y quedan intocadas.
+let resultadoUsuarioPanel: { data: unknown; error: { message: string } | null } = {
+  data: { id: 'aaaaaaaa-0000-4000-8000-000000000001', rol: 'vendedor', activo: true },
+  error: null,
+};
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
-    from: () => ({
-      insert: (fila: unknown) => {
-        insertado.push(fila);
+    from: (tabla: string) => {
+      // Fase 5: `autorizarSuperadmin` lee `usuarios_panel` por su cuenta --
+      // tabla aparte de 'cotizaciones', que es todo lo que este mock
+      // conocía antes de esta fase.
+      if (tabla === 'usuarios_panel') {
         return {
           select: () => ({
-            // `numero` simula lo que en la base pone el trigger de la
-            // migración 0010 (`obtener_numero_cotizacion`): el insert nunca lo
-            // manda, la fila vuelve con él puesto.
-            single: async () => ({ data: { id: 'cot-1', numero: 'COT-2026-0001', ...(fila as object) }, error: null }),
+            eq: () => ({
+              maybeSingle: async () => resultadoUsuarioPanel,
+            }),
           }),
         };
-      },
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () => resultadoFilaVieja,
+      }
+      return {
+        insert: (fila: unknown) => {
+          insertado.push(fila);
+          return {
+            select: () => ({
+              // `numero` simula lo que en la base pone el trigger de la
+              // migración 0010 (`obtener_numero_cotizacion`): el insert nunca lo
+              // manda, la fila vuelve con él puesto.
+              single: async () => ({ data: { id: 'cot-1', numero: 'COT-2026-0001', ...(fila as object) }, error: null }),
+            }),
+          };
+        },
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => resultadoFilaVieja,
+          }),
         }),
-      }),
-      // `.eq()` y `.in()` devuelven el mismo nodo encadenable, "thenable" vía
-      // `.then()` -- así `await update(...).eq(...)` (lo que ya hacían
-      // /reenviar y el update final de esta ruta) sigue funcionando igual
-      // que antes, y `await update(...).eq(...).in(...)` (lo nuevo, para
-      // marcar la vieja como reemplazada, con la guarda atómica de estado)
-      // también resuelve, sin tener que duplicar el mock.
-      update: (cambios: unknown) => {
-        actualizados.push(cambios);
-        const nodo = {
-          eq: (columna: string, valor: string) => {
-            filtrosUpdate.push(['eq', columna, String(valor)]);
-            return nodo;
-          },
-          in: (columna: string, valores: readonly string[]) => {
-            filtrosUpdate.push(['in', columna, valores.join(',')]);
-            return nodo;
-          },
-          then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
-            Promise.resolve({ error: errorAlActualizar }).then(resolve, reject),
-        };
-        return nodo;
-      },
-    }),
+        // `.eq()` y `.in()` devuelven el mismo nodo encadenable, "thenable" vía
+        // `.then()` -- así `await update(...).eq(...)` (lo que ya hacían
+        // /reenviar y el update final de esta ruta) sigue funcionando igual
+        // que antes, y `await update(...).eq(...).in(...)` (lo nuevo, para
+        // marcar la vieja como reemplazada, con la guarda atómica de estado)
+        // también resuelve, sin tener que duplicar el mock.
+        update: (cambios: unknown) => {
+          actualizados.push(cambios);
+          const nodo = {
+            eq: (columna: string, valor: string) => {
+              filtrosUpdate.push(['eq', columna, String(valor)]);
+              return nodo;
+            },
+            in: (columna: string, valores: readonly string[]) => {
+              filtrosUpdate.push(['in', columna, valores.join(',')]);
+              return nodo;
+            },
+            then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
+              Promise.resolve({ error: errorAlActualizar }).then(resolve, reject),
+          };
+          return nodo;
+        },
+      };
+    },
   }),
 }));
 
@@ -110,6 +146,7 @@ const configAgente = (await import('@/lib/agente/config')).config;
 const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
 const { guardarPdf, enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
+const { avisarSolicitudAprobacion } = await import('@/lib/cotizador/aprobacion');
 const { emitirSesion } = await import('@/lib/sesion');
 
 function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
@@ -120,10 +157,21 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   });
 }
 
+const ID_SESION_VENDEDOR = 'aaaaaaaa-0000-4000-8000-000000000001';
+const ID_SESION_SUPERADMIN = 'aaaaaaaa-0000-4000-8000-000000000002';
+
 // Fase 3: la clave compartida ya no autentica. Esta ruta escribe: exige
 // cookie de sesión Y el token anti-CSRF derivado de ella.
 function peticionAutenticada(cuerpo: unknown) {
-  const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', 'aaaaaaaa-0000-4000-8000-000000000001');
+  const { cookie, csrf } = emitirSesion('Guillermo Rojas', 'vendedor', ID_SESION_VENDEDOR);
+  return peticion(cuerpo, { cookie: cookie.split(';')[0], 'x-csrf-token': csrf });
+}
+
+// Fase 5: mismo helper, pero con una cookie que dice "superadmin" -- sólo
+// para las pruebas que necesitan comprobar que la ruta NO le cree a esto
+// (ver `resultadoUsuarioPanel`, que es lo que de verdad decide).
+function peticionAutenticadaComoSuperadmin(cuerpo: unknown) {
+  const { cookie, csrf } = emitirSesion('Ana Solano', 'superadmin', ID_SESION_SUPERADMIN);
   return peticion(cuerpo, { cookie: cookie.split(';')[0], 'x-csrf-token': csrf });
 }
 
@@ -153,7 +201,10 @@ describe('POST /api/cotizacion', () => {
     filtrosUpdate.length = 0;
     errorAlActualizar = null;
     resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0001', contact_id: 'contacto-viejo' }, error: null };
+    resultadoUsuarioPanel = { data: { id: ID_SESION_VENDEDOR, rol: 'vendedor', activo: true }, error: null };
     process.env.LUXE_SESION_SECRETO = 'secreta';
+    vi.mocked(avisarSolicitudAprobacion).mockClear();
+    vi.mocked(avisarSolicitudAprobacion).mockResolvedValue({ ok: true, resendId: 're_sol' });
     vi.mocked(crearEstimate).mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' });
     // `mockClear` (no `mockReset`): borra el historial de llamadas de la
     // prueba anterior sin perder el `mockResolvedValue` por defecto de cada
@@ -887,6 +938,168 @@ describe('POST /api/cotizacion', () => {
         'fila bloqueada',
       );
       consoleError.mockRestore();
+    });
+  });
+
+  // Fase 5 (descuento con aprobación) -- diseño en
+  // docs/superpowers/specs/2026-09-02-descuento-aprobacion-design.md.
+  describe('descuento personalizado con aprobación (fase 5)', () => {
+    const conDescuento = { ...valido, descuentoPersonalizado: { general: 20 } };
+
+    // `crearEstimate` (a diferencia de `enviarCotizacion`/`agregarNota`) NO
+    // se limpia en el `beforeEach` de este archivo -- ver el comentario
+    // grande en la sección "Modificar" sobre por qué (`mock.calls` acumula
+    // las llamadas de TODAS las pruebas anteriores). Este helper mide la
+    // diferencia en vez de comparar contra cero/uno en términos absolutos.
+    function llamadasNuevasACrearEstimate(desde: number): number {
+      return vi.mocked(crearEstimate).mock.calls.length - desde;
+    }
+
+    it('un vendedor real (rol "vendedor" en la base) queda "esperando_aprobacion": nada de cara al hotel', async () => {
+      const llamadasPrevias = vi.mocked(crearEstimate).mock.calls.length;
+      const res = await POST(peticionAutenticada(conDescuento));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo).toMatchObject({ ok: true, estado: 'esperando_aprobacion', aprobacion: { pendiente: true } });
+
+      expect(insertado).toHaveLength(1);
+      const fila = insertado[0] as Record<string, unknown>;
+      expect(fila.estado).toBe('esperando_aprobacion');
+      expect(fila.solicitado_por).toBe('Guillermo Rojas');
+      expect(fila.descuento_personalizado).toEqual({ general: 20 });
+      // Nunca se auto-aprueba a quien no es superadmin.
+      expect(fila).not.toHaveProperty('aprobado_por');
+      expect(fila).not.toHaveProperty('descuento_aprobado');
+
+      // Nada de cara al hotel: ni GoHighLevel, ni PDF, ni correo con el
+      // precio. Sólo un update (cierre de borrador, que acá ni corre) --
+      // en este caso, ninguno.
+      expect(llamadasNuevasACrearEstimate(llamadasPrevias)).toBe(0);
+      expect(dispararWorkflow).not.toHaveBeenCalled();
+      expect(renderizarCotizacion).not.toHaveBeenCalled();
+      expect(enviarCotizacion).not.toHaveBeenCalled();
+      expect(agregarNota).not.toHaveBeenCalled();
+      expect(actualizados).toHaveLength(0);
+    });
+
+    // El mutante que de verdad importa cazar acá: si `requiereAprobacion`
+    // mirara `auth.rol` (la cookie) en vez de releer la base, esta prueba
+    // fallaría -- la cookie dice "superadmin", pero la fila real en
+    // `usuarios_panel` dice "vendedor".
+    it('una cookie que MIENTE "superadmin" no evita la aprobación si la base dice "vendedor"', async () => {
+      resultadoUsuarioPanel = { data: { id: ID_SESION_SUPERADMIN, rol: 'vendedor', activo: true }, error: null };
+      const llamadasPrevias = vi.mocked(crearEstimate).mock.calls.length;
+      const res = await POST(peticionAutenticadaComoSuperadmin(conDescuento));
+      const cuerpo = await res.json();
+      expect(cuerpo.estado).toBe('esperando_aprobacion');
+      expect(llamadasNuevasACrearEstimate(llamadasPrevias)).toBe(0);
+    });
+
+    it('avisa a los superadmin con el cliente, el monto, el descuento pedido y quién lo pidió', async () => {
+      await POST(peticionAutenticada(conDescuento));
+      expect(avisarSolicitudAprobacion).toHaveBeenCalledTimes(1);
+      const [, , params] = vi.mocked(avisarSolicitudAprobacion).mock.calls[0];
+      expect(params).toMatchObject({
+        numero: 'COT-2026-0001',
+        cliente: valido.cliente,
+        descuentoPedido: { general: 20 },
+        solicitadoPor: 'Guillermo Rojas',
+      });
+      expect(params.total).toBeGreaterThan(0);
+    });
+
+    it('si el aviso a los superadmin falla, la cotización igual queda guardada y la respuesta sigue en 200', async () => {
+      vi.mocked(avisarSolicitudAprobacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await POST(peticionAutenticada(conDescuento));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo.ok).toBe(true);
+      expect(cuerpo.aprobacion).toMatchObject({ pendiente: true, avisoEnviado: false });
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('no salió'),
+        'dominio no verificado',
+      );
+      consoleError.mockRestore();
+    });
+
+    it('guarda contact_id en la fila pendiente, para que la aprobación (días después) no lo pierda', async () => {
+      await POST(peticionAutenticada({ ...conDescuento, contactId: 'contacto-del-vendedor' }));
+      const fila = insertado[0] as Record<string, unknown>;
+      expect(fila.contact_id).toBe('contacto-del-vendedor');
+    });
+
+    it('cierra igual el borrador del agente aunque la cotización quede esperando aprobación', async () => {
+      await POST(peticionAutenticada({ ...conDescuento, borradorId: 'borrador-9' }));
+      expect(actualizados).toHaveLength(1);
+      expect(actualizados[0]).toMatchObject({ estado: 'convertida' });
+    });
+
+    it('el cálculo usa el descuento pedido, no la escala automática', async () => {
+      const res = await POST(peticionAutenticada(conDescuento));
+      const cuerpo = await res.json();
+      // 16 unidades caerían en 10% de escala (ver la prueba de más arriba,
+      // "devuelve el cálculo y guarda la fila") -- acá tiene que ganar el
+      // 20% pedido.
+      expect(cuerpo.cotizacion.lineas[0].descuentoPct).toBe(20);
+      expect(cuerpo.cotizacion.lineas[0].personalizado).toBe(true);
+    });
+
+    it('sin descuentoPersonalizado en el cuerpo, nunca llama a avisarSolicitudAprobacion ni relee usuarios_panel', async () => {
+      const res = await POST(peticionAutenticada(valido));
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo).not.toHaveProperty('aprobacion');
+      expect(avisarSolicitudAprobacion).not.toHaveBeenCalled();
+    });
+
+    describe('un superadmin de verdad no se pide permiso a sí mismo', () => {
+      beforeEach(() => {
+        resultadoUsuarioPanel = { data: { id: ID_SESION_SUPERADMIN, rol: 'superadmin', activo: true }, error: null };
+      });
+
+      it('sale directo: Estimate, PDF y correo corren en la misma petición', async () => {
+        const llamadasPrevias = vi.mocked(crearEstimate).mock.calls.length;
+        const res = await POST(peticionAutenticadaComoSuperadmin(conDescuento));
+        expect(res.status).toBe(200);
+        const cuerpo = await res.json();
+        expect(cuerpo.estado).not.toBe('esperando_aprobacion');
+        expect(cuerpo.aprobacion).toMatchObject({ pendiente: false, autoAprobada: true });
+        expect(llamadasNuevasACrearEstimate(llamadasPrevias)).toBe(1);
+        expect(enviarCotizacion).toHaveBeenCalledTimes(1);
+        expect(avisarSolicitudAprobacion).not.toHaveBeenCalled();
+      });
+
+      it('la fila queda con aprobado_por, resuelto_at y descuento_aprobado -- él mismo, para que la trazabilidad no tenga huecos', async () => {
+        await POST(peticionAutenticadaComoSuperadmin(conDescuento));
+        const fila = insertado[0] as Record<string, unknown>;
+        expect(fila.solicitado_por).toBe('Ana Solano');
+        expect(fila.aprobado_por).toBe('Ana Solano');
+        expect(fila.resuelto_at).toBeTruthy();
+        expect(fila.descuento_aprobado).toEqual({ general: 20 });
+        expect(fila.estado).toBe('borrador'); // el estado normal de nacimiento, no 'esperando_aprobacion'
+      });
+
+      // El mutante que importa: si el código confiara en `auth.rol` (la
+      // cookie) en vez de releer la base, esta prueba fallaría -- la
+      // cookie dice "vendedor", la base dice "superadmin".
+      it('una cookie que dice "vendedor" no bloquea a quien la base dice que SÍ es superadmin', async () => {
+        const llamadasPrevias = vi.mocked(crearEstimate).mock.calls.length;
+        const { cookie, csrf } = emitirSesion('Ana Solano', 'vendedor', ID_SESION_SUPERADMIN);
+        const res = await POST(peticion(conDescuento, { cookie: cookie.split(';')[0], 'x-csrf-token': csrf }));
+        const cuerpo = await res.json();
+        expect(cuerpo.estado).not.toBe('esperando_aprobacion');
+        expect(llamadasNuevasACrearEstimate(llamadasPrevias)).toBe(1);
+      });
+    });
+
+    it('un superadmin DESACTIVADO en la base sigue necesitando aprobación', async () => {
+      resultadoUsuarioPanel = { data: { id: ID_SESION_SUPERADMIN, rol: 'superadmin', activo: false }, error: null };
+      const llamadasPrevias = vi.mocked(crearEstimate).mock.calls.length;
+      const res = await POST(peticionAutenticadaComoSuperadmin(conDescuento));
+      const cuerpo = await res.json();
+      expect(cuerpo.estado).toBe('esperando_aprobacion');
+      expect(llamadasNuevasACrearEstimate(llamadasPrevias)).toBe(0);
     });
   });
 });

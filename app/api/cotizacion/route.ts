@@ -3,13 +3,10 @@ import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { cotizacionSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
-import { crearEstimate, notaDeCotizacion } from '@/lib/cotizador/ghl';
-import { agregarNota, dispararWorkflow } from '@/lib/agente/acciones';
-import { config as configAgente } from '@/lib/agente/config';
-import { renderizarCotizacion } from '@/lib/cotizador/documento';
-import { guardarPdf, enlaceFirmado } from '@/lib/cotizador/almacen';
-import { enviarCotizacion } from '@/lib/cotizador/correo';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { autorizarSuperadmin } from '@/lib/cotizador/equipo';
+import { enviarCotizacionAlHotel, ESTADOS_MODIFICABLES } from '@/lib/cotizador/enviar';
+import { avisarSolicitudAprobacion } from '@/lib/cotizador/aprobacion';
 
 export const runtime = 'nodejs';
 
@@ -24,42 +21,15 @@ export const runtime = 'nodejs';
 // `ESTADOS_CIERRE_INICIAL`) y `/reenviar` también (no tiene `pdf_ruta`). Un
 // huérfano sin salida. Mismo criterio que app/api/ghl/webhook/route.ts, que
 // enfrenta el mismo problema con una cadena de llamadas de red parecida.
+//
+// Fase 5 (descuento con aprobación): cuando la cotización queda
+// 'esperando_aprobacion' esta ruta corta mucho antes de llegar a nada de
+// esto (ni GoHighLevel, ni PDF, ni correo al cliente) -- ese camino es
+// rápido. El camino largo que este límite protege sigue siendo el mismo de
+// siempre: crear y enviar directo, y (fase 5) aprobar una que esperaba, en
+// app/api/cotizacion/aprobar/route.ts, que declara el mismo `maxDuration`
+// por el mismo motivo.
 export const maxDuration = 60;
-
-// Mismo valor que `DIAS_VIGENCIA` en lib/cotizador/ghl.ts (no exportado de
-// ahí, se duplica acá por la misma razón que las notas de documento.tsx/
-// correo.ts): cuántos días queda vigente el precio cotizado. El PDF y el
-// correo tienen que decir la misma fecha que el Estimate de GoHighLevel.
-const DIAS_VIGENCIA = 30;
-
-// "Modificar" (migración 0016): sobre qué estados de la cotización VIEJA se
-// puede pedir un reemplazo. Se decidió acotarlo a 'creada' y 'enviada' --
-// las dos formas de "hay un precio en pie que el cliente puede estar
-// mirando ahora mismo":
-//
-//   - 'error' queda AFUERA: ahí nunca le llegó nada válido al cliente, no
-//     hay ningún precio vigente que reemplazar. Para eso está "Duplicar",
-//     que arma una cotización nueva sin ningún vínculo con la que falló.
-//   - 'ganada' y 'perdida' quedan AFUERA: son negocios ya cerrados.
-//     Convertir esa fila en 'reemplazada' le borraría el dato a las
-//     métricas de ganado/perdido (lib/cotizador/metricas.ts, que las
-//     cuenta por `cerrada_at`) sin que el resultado del negocio haya
-//     cambiado de verdad. Si el vendedor quiere retomar el contacto con un
-//     precio nuevo, es un trato aparte -- otra vez "Duplicar", no
-//     "Modificar".
-//   - 'reemplazada' (por definición) queda AFUERA: una cotización ya
-//     reemplazada no se puede volver a modificar -- encadenar reemplazos
-//     sobre una fila que ya no es la vigente es, como mínimo, confuso, y
-//     el rastro real ya vive en la fila que SÍ la reemplazó.
-//   - 'borrador'/'convertida' quedan AFUERA: no son cotizaciones enviadas
-//     de verdad (mismo motivo por el que /cerrar tampoco las acepta).
-//
-// Se usa dos veces en esta ruta: para validar `reemplazaId` al entrar, y
-// como guarda atómica del `update` final que marca la vieja como
-// reemplazada (evita una carrera: que el estado de la vieja haya cambiado
-// -- alguien la cerró en otra pestaña -- en el rato entre esa validación y
-// el envío real, unos segundos más tarde).
-const ESTADOS_MODIFICABLES: readonly string[] = ['creada', 'enviada'];
 
 export async function POST(request: Request) {
   let crudo: unknown;
@@ -96,6 +66,7 @@ export async function POST(request: Request) {
     cotizacion = calcular(datos.lineas, CATALOGO, {
       tasaIva: datos.tasaIva,
       bordadoEspecial: datos.bordadoEspecial,
+      descuentoPersonalizado: datos.descuentoPersonalizado,
     });
   } catch (err) {
     return NextResponse.json(
@@ -103,6 +74,23 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  // Fase 5 (descuento con aprobación): `auth.rol` sale de la cookie y NO
+  // AUTORIZA NADA -- es un dato viejo desde el momento en que se firmó la
+  // sesión, hasta 30 días (ver lib/autenticacion-cotizador.ts). Sólo se
+  // relee la base cuando de verdad hace falta decidir algo con eso: cuando
+  // la cotización trae un descuento personalizado. Mismo patrón que las
+  // cuatro rutas de app/api/equipo/* con `autorizarSuperadmin`
+  // (lib/cotizador/equipo.ts) -- se reutiliza esa misma función en vez de
+  // reimplementar la relectura acá.
+  let autorizacionSuperadmin: { ok: true; id: string } | { ok: false } = { ok: false };
+  if (datos.descuentoPersonalizado) {
+    autorizacionSuperadmin = await autorizarSuperadmin(auth.id, supabaseAdmin());
+  }
+  // Toda cotización con descuento personalizado pasa por aprobación (diseño:
+  // "sin umbral"), salvo que quien la arma YA sea superadmin (diseño: "un
+  // superadmin no se pide permiso a sí mismo").
+  const requiereAprobacion = Boolean(datos.descuentoPersonalizado) && !autorizacionSuperadmin.ok;
 
   // "Modificar": se relee la cotización vieja ACÁ, fresca -- en vez de
   // confiar en lo que mandó el navegador (que ya trae `numero`/
@@ -137,6 +125,13 @@ export async function POST(request: Request) {
     filaReemplazada = filaVieja;
   }
 
+  // Se calcula ACÁ, antes del insert -- no depende de la fila recién creada,
+  // sólo de lo que mandó el vendedor y de la relectura de arriba. Fase 5: si
+  // la cotización queda esperando aprobación, este es el único momento en
+  // que este dato está a mano -- la aprobación real puede llegar días
+  // después, en otra petición, sin `datos.contactId` disponible.
+  const contactIdEntrada = datos.contactId ?? filaReemplazada?.contact_id ?? undefined;
+
   // Primero la base, después GoHighLevel (Tarea 7). Si el CRM falla, la
   // cotización sigue existiendo y es recuperable; al revés, el cliente tendría
   // una cotización que Luxe no registró.
@@ -152,7 +147,10 @@ export async function POST(request: Request) {
       // "Origen" (Métricas #6) le decía al vendedor que el agente no aporta
       // nada, aunque toda la cotización viniera de él.
       origen: datos.borradorId ? 'agente' : 'humano',
-      estado: 'borrador',
+      // Fase 5: 'esperando_aprobacion' cuando el descuento personalizado
+      // necesita el visto bueno de un superadmin; si no, 'borrador' de
+      // siempre -- el resto de la ruta la lleva a 'enviada'/'error'.
+      estado: requiereAprobacion ? 'esperando_aprobacion' : 'borrador',
       // Quién la armó. Se guarda el nombre y no el id del usuario a propósito:
       // dentro de un año esta fila tiene que seguir diciendo quién la hizo
       // aunque esa persona se haya dado de baja.
@@ -176,6 +174,32 @@ export async function POST(request: Request) {
       // de `filaReemplazada` (la relectura de arriba), nunca de lo que
       // mandó el cliente -- ver el comentario grande junto a esa consulta.
       ...(datos.reemplazaId ? { reemplaza_a: datos.reemplazaId, reemplaza_a_numero: filaReemplazada!.numero } : {}),
+      // Fase 5 (descuento con aprobación): columnas de la migración 0017.
+      ...(datos.descuentoPersonalizado
+        ? {
+            descuento_personalizado: datos.descuentoPersonalizado,
+            solicitado_por: auth.vendedor,
+            ...(requiereAprobacion
+              ? {
+                  // La cotización queda congelada esperando -- guardarlo
+                  // ACÁ es la única forma de que no se pierda: el `update`
+                  // final que lo fija de verdad (dentro de
+                  // `enviarCotizacionAlHotel`) sólo corre cuando la
+                  // cotización sale de verdad, y para una que queda
+                  // esperando eso puede ser días después, en otra petición
+                  // que ya no tiene `datos.contactId` a mano.
+                  contact_id: contactIdEntrada ?? null,
+                }
+              : {
+                  // Diseño: "un superadmin no se pide permiso a sí mismo --
+                  // igual queda registrado quién lo aprobó, él mismo, para
+                  // que la trazabilidad no tenga huecos."
+                  aprobado_por: auth.vendedor,
+                  resuelto_at: new Date().toISOString(),
+                  descuento_aprobado: datos.descuentoPersonalizado,
+                }),
+          }
+        : {}),
     })
     .select()
     .single();
@@ -187,13 +211,14 @@ export async function POST(request: Request) {
 
   // Ronda de correcciones 2 (hallazgo I1): si esta cotización nació de un
   // borrador que dejó el agente de IA, esa fila hay que cerrarla ya —
-  // independiente de cómo le vaya a GoHighLevel más abajo. La cotización
-  // real (esta que se acaba de guardar) ya existe: dejar el borrador en
-  // 'borrador' para siempre es lo que hoy nunca vacía la cola del vendedor
-  // y, peor, bloquea `registrarIntencion` (lib/cotizador/borrador.ts) para
-  // este contacto de por vida, porque esa función corta si ya hay un
-  // 'borrador' abierto suyo. Best-effort: un fallo acá se registra pero no
-  // debe tumbar la respuesta, la cotización ya está a salvo.
+  // independiente de cómo le vaya a GoHighLevel más abajo (o, fase 5, de si
+  // ésta queda esperando aprobación: la cotización REAL ya existe, sólo que
+  // todavía no puede salir). Dejar el borrador en 'borrador' para siempre es
+  // lo que hoy nunca vacía la cola del vendedor y, peor, bloquea
+  // `registrarIntencion` (lib/cotizador/borrador.ts) para este contacto de
+  // por vida, porque esa función corta si ya hay un 'borrador' abierto
+  // suyo. Best-effort: un fallo acá se registra pero no debe tumbar la
+  // respuesta, la cotización ya está a salvo.
   if (datos.borradorId) {
     const { error: errorBorrador } = await supabaseAdmin()
       .from('cotizaciones')
@@ -204,287 +229,66 @@ export async function POST(request: Request) {
     }
   }
 
-  // GoHighLevel primero (Tarea 7), fuera del camino crítico del envío real
-  // al cliente. Ronda de correcciones 1 (Tarea 5): antes esta llamada corría
-  // DESPUÉS de mandar el correo — hasta cuatro peticiones HTTP a GoHighLevel,
-  // sin `AbortSignal` ni timeout propio, entre "el hotel ya tiene el PDF" y
-  // "la fila quedó registrada". Si `crearEstimate` se colgaba y la función
-  // expiraba (la ruta no declara `maxDuration`), el único `update` de abajo
-  // nunca corría: la fila se quedaba en 'borrador', sin `pdf_ruta` ni
-  // `resend_id`, candidata a que algún reintento futuro reenviara al hotel
-  // una cotización que ya recibió. Moviendo GoHighLevel antes, un colgado
-  // ahí ya no puede tumbar el registro de un correo que sí salió.
-  // "Modificar": si el vendedor no mandó un `contactId` propio, se reutiliza
-  // el de la cotización que se está reemplazando -- es el punto central del
-  // encargo ("reutilizando toda la info del contacto que ya estaba con esa
-  // cotización"), para que GoHighLevel nunca dé de alta un contacto nuevo
-  // para un hotel que ya existe ahí. `datos.contactId` sigue teniendo
-  // prioridad si de algún modo viniera (mismo criterio de siempre: lo que
-  // manda el vendedor no se pisa sin necesidad).
-  const contactIdEntrada = datos.contactId ?? filaReemplazada?.contact_id ?? undefined;
-
-  const ghl = await crearEstimate(
-    { cotizacion, cliente: datos.cliente, contactId: contactIdEntrada },
-    {
-      apiKey: process.env.LUXE_GHL_API_KEY ?? '',
-      locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
-    },
-  );
-
-  // El contactId se guarda aunque GoHighLevel haya fallado después: si el
-  // contacto se llegó a resolver (recibido del vendedor, del reemplazo, o
-  // recién creado por `crearEstimate`), es un dato gratis que ya tenemos en
-  // la mano y que de otro modo se pierde sin dejar rastro en la fila.
-  const contactId = ghl.contactId ?? contactIdEntrada ?? null;
-
-  // Workflow "Cotización nueva" (config.WORKFLOW_COTIZACION_NUEVA): avisa por
-  // dentro en cuanto la cotización queda registrada. Sólo tiene sentido con un
-  // contacto al que meter en el workflow — sin `contactId` no hay a quién
-  // avisar. Fire-and-forget, mismo criterio que el resto del enriquecimiento
-  // de GoHighLevel de esta ruta: la cotización ya existe, el PDF (más abajo)
-  // puede que ya se haya generado y el correo puede que ya haya salido —
-  // perder este aviso es molesto, perder la cotización es grave. Se registra
-  // en consola y se sigue; no tumba la respuesta ni el resto de la ruta.
-  //
-  // `dispararWorkflow` (lib/agente/acciones.ts) mete al contacto directo en
-  // el workflow vía `POST /contacts/{id}/workflow/{workflowId}` y SE SALTA
-  // cualquier trigger configurado en la interfaz de GoHighLevel — no hace
-  // falta (ni conviene) configurar ahí, además, un trigger para "cotización
-  // nueva", o el aviso saldría duplicado.
-  //
-  // Se declara afuera del `if` (igual que `notaError` más abajo) porque este
-  // error también se suma a `erroresGhl`/`ghl_error`: sin eso, un fallo acá
-  // sólo quedaba en los registros de Vercel — que nadie mira — y la vista de
-  // cotizaciones fallidas, hecha justo para que los problemas con
-  // GoHighLevel se vean, nunca se enteraba de que el aviso interno no salió.
-  let errorWorkflowCotizacion: string | undefined;
-  if (contactId) {
-    errorWorkflowCotizacion = await dispararWorkflow(
-      contactId,
-      configAgente.WORKFLOW_COTIZACION_NUEVA,
-      { apiKey: process.env.LUXE_GHL_API_KEY ?? '' },
+  // Fase 5 (descuento con aprobación): la cotización queda congelada,
+  // esperando. Nada de cara al hotel -- ni Estimate, ni PDF, ni correo con
+  // el precio; eso sólo pasa cuando se aprueba (app/api/cotizacion/aprobar/route.ts,
+  // que corre exactamente el mismo `enviarCotizacionAlHotel` de más abajo).
+  // Lo único que sale de acá es el aviso a los superadmin -- mejor
+  // esfuerzo, mismo criterio que `correo_error` en el resto de esta ruta:
+  // un fallo del correo no tumba la operación, la cotización ya quedó
+  // guardada y visible en el panel (diseño: "la pantalla es la fuente de
+  // verdad").
+  if (requiereAprobacion) {
+    const avisoCorreo = await avisarSolicitudAprobacion(
+      supabaseAdmin(),
+      { apiKey: process.env.RESEND_API_KEY ?? '', remitente: process.env.LUXE_CORREO_REMITENTE ?? '' },
+      {
+        numero: data.numero,
+        cliente: datos.cliente,
+        total: cotizacion.total,
+        descuentoPedido: datos.descuentoPersonalizado!,
+        solicitadoPor: auth.vendedor,
+      },
     );
-    if (errorWorkflowCotizacion) {
+    if (!avisoCorreo.ok) {
       console.error(
-        '[cotizador] No se pudo disparar el workflow de cotización nueva en GoHighLevel.',
-        errorWorkflowCotizacion,
+        '[cotizador] La cotización quedó esperando aprobación, pero el aviso a los superadmin no salió.',
+        avisoCorreo.error,
       );
     }
+
+    return NextResponse.json({
+      ok: true,
+      id: data.id,
+      numero: data.numero,
+      cotizacion,
+      estado: 'esperando_aprobacion',
+      aprobacion: { pendiente: true, avisoEnviado: avisoCorreo.ok },
+    });
   }
 
-  // El `numero` no lo asigna este código: lo pone un trigger en la base
-  // (migración 0010, `cotizaciones_asignar_numero` / `obtener_numero_cotizacion`)
-  // al momento del insert, correlativo por año ("COT-2026-0001", "-0002"…).
-  // El insert de arriba ya hizo `.select().single()`, así que `data.numero`
-  // vuelve con el valor puesto, sin una consulta extra. No se deriva del
-  // `id`: un UUID en el documento que recibe un hotel no es un número de
-  // cotización.
+  // Camino directo: sin descuento personalizado, o quien la arma ya es
+  // superadmin. Misma cadena de siempre (Estimate/Opportunity, workflow,
+  // PDF, correo, nota), extraída a lib/cotizador/enviar.ts porque
+  // app/api/cotizacion/aprobar/route.ts (fase 5) también la necesita.
   const numero: string = data.numero;
-
-  const emitida = new Date();
-  const vence = new Date(emitida);
-  vence.setDate(vence.getDate() + DIAS_VIGENCIA);
-
-  // Enriquecimiento (Tarea 5): la fila ya existe desde el insert de arriba,
-  // así que nada de lo que sigue puede perderla — a lo peor queda marcada
-  // 'error' y recuperable a mano. `renderizarCotizacion` es la única pieza
-  // nueva que sí puede lanzar (guardarPdf/enlaceFirmado/enviarCotizacion
-  // nunca lo hacen), por eso va envuelta en try/catch.
-  let pdfBuffer: Buffer | null = null;
-  try {
-    pdfBuffer = await renderizarCotizacion({ numero, cotizacion, cliente: datos.cliente, emitida, vence });
-  } catch (err) {
-    console.error(
-      '[cotizador] No se pudo generar el PDF de la cotización.',
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-
-  let pdfRuta: string | null = null;
-  // Enlace firmado del PDF, para el correo y (más abajo) para la nota de
-  // GoHighLevel. Se queda vacío si no se llegó a firmar o nunca se guardó.
-  let enlacePdf = '';
-  // Regla que no se negocia: si no hay PDF, no se manda un correo que diga
-  // "le adjunto la cotización" sin adjunto — eso es peor que no mandar nada.
-  let correoResultado: { ok: true; resendId: string } | { ok: false; error: string } = {
-    ok: false,
-    error: 'No se generó el PDF: no se intentó enviar el correo.',
-  };
-
-  if (pdfBuffer) {
-    const guardado = await guardarPdf({ id: data.id, numero, pdf: pdfBuffer }, supabaseAdmin());
-    if (!guardado.ok) {
-      console.error('[cotizador] No se pudo guardar el PDF en el almacenamiento.', guardado.error);
-      correoResultado = { ok: false, error: guardado.error };
-    } else {
-      pdfRuta = guardado.ruta;
-      const firmado = await enlaceFirmado(guardado.ruta, supabaseAdmin());
-      if (!firmado.ok) {
-        console.error('[cotizador] No se pudo firmar el enlace del PDF.', firmado.error);
-      }
-      // El adjunto es lo que de verdad importa; sin enlace firmado el correo
-      // igual sale, solo que `cuerpoHtml` (lib/cotizador/correo.ts) omite el
-      // párrafo del enlace en vez de mandar uno vacío.
-      enlacePdf = firmado.ok ? firmado.url : '';
-      correoResultado = await enviarCotizacion(
-        {
-          numero,
-          cliente: datos.cliente,
-          total: cotizacion.total,
-          vence,
-          pdf: pdfBuffer,
-          enlace: enlacePdf,
-        },
-        {
-          apiKey: process.env.RESEND_API_KEY ?? '',
-          remitente: process.env.LUXE_CORREO_REMITENTE ?? '',
-        },
-      );
-    }
-  }
-
-  // Tarea 12 — la nota en el contacto de GoHighLevel: el correo con el PDF
-  // sale por Resend, por fuera del CRM, así que sin esto la conversación del
-  // contacto no muestra nada y el equipo comercial no tiene forma de saber
-  // que a este hotel ya se le cotizó. Sólo se agrega cuando el correo salió
-  // de verdad (si no salió, no hay nada que trazar) y hay un contacto al que
-  // anotarle algo.
-  //
-  // Ronda de correcciones 1: los dos posibles fallos de acá abajo NO son lo
-  // mismo y se registran distinto.
-  //
-  // - `notaDeCotizacion` es pura, local y síncrona: NUNCA debería lanzar. Si
-  //   lo hace, es un bug de este código (no un fallo de GoHighLevel), y se
-  //   registra como tal — con la palabra "BUG" — para que no se confunda con
-  //   una caída real de la API. No se junta a `ghl_error`: no tiene nada que
-  //   ver con GoHighLevel.
-  // - `agregarNota` (lib/agente/acciones.ts) ya nunca lanza por diseño:
-  //   siempre resuelve, devolviendo el error como valor. Ese error sí es un
-  //   fallo tolerable ("GoHighLevel está caído") y se junta al `ghl_error`
-  //   de más abajo, junto al resto de lo que le pasó a GoHighLevel con esta
-  //   cotización.
-  //
-  // Ninguno de los dos casos invalida la cotización — el correo ya llegó al
-  // hotel.
-  let notaError: string | undefined;
-  if (correoResultado.ok && contactId) {
-    let textoNota: string | undefined;
-    try {
-      textoNota = notaDeCotizacion({ numero, total: cotizacion.total, vence, enlace: enlacePdf });
-    } catch (err) {
-      console.error(
-        '[cotizador] BUG: no se pudo construir el texto de la nota de la cotización.',
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    if (textoNota) {
-      notaError = await agregarNota(contactId, textoNota, { apiKey: process.env.LUXE_GHL_API_KEY ?? '' });
-      if (notaError) {
-        console.error('[cotizador] No se pudo agregar la nota de la cotización en GoHighLevel.', notaError);
-      }
-    }
-  }
-
-  // El registro ya existe pase lo que pase. Un solo update junta cómo le fue
-  // a GoHighLevel (Tarea 7) y cómo le fue al envío real al cliente (PDF +
-  // correo, Tarea 5). El `estado` sigue al correo, no a GoHighLevel:
-  // restricción global del plan — "ningún fallo de GoHighLevel invalida una
-  // cotización que ya salió al cliente". 'enviada' ahora es real: antes
-  // (rondas de correcciones 1 y 2) se quedaba en 'creada' porque
-  // `crearEstimate` nunca llama al envío de GoHighLevel; el envío real es
-  // este correo con el PDF de Luxe adjunto.
-  // Junta el error de la Opportunity/Estimate (si lo hubo), el del workflow
-  // de "cotización nueva" (si lo hubo) y el de la nota (si lo hubo): las tres
-  // cosas son "algo le pasó a GoHighLevel con esta cotización" y comparten la
-  // misma columna. Ninguna de las tres baja el `estado` — ver el comentario
-  // grande de arriba sobre por qué el estado sigue al correo, no a
-  // GoHighLevel.
-  const erroresGhl = [
-    ghl.ok ? ghl.opportunityError : ghl.error,
-    errorWorkflowCotizacion,
-    notaError,
-  ].filter((e): e is string => Boolean(e));
-  const ghlError = erroresGhl.length > 0 ? erroresGhl.join(' | ') : null;
-
-  const { error: errorActualizacion } = await supabaseAdmin()
-    .from('cotizaciones')
-    .update({
-      // `updated_at` va explícito: la columna tiene `default now()` pero no
-      // hay trigger, así que sin esto se quedaría siempre igual a
-      // `created_at` y la auditoría diría que la cotización nunca cambió de
-      // estado.
-      updated_at: new Date().toISOString(),
-      contact_id: contactId,
-      estado: correoResultado.ok ? 'enviada' : 'error',
-      ...(ghl.ok ? { ghl_estimate_id: ghl.estimateId, ghl_error: ghlError } : { ghl_error: ghlError }),
-      ...(pdfRuta ? { pdf_ruta: pdfRuta } : {}),
-      ...(correoResultado.ok
-        ? { enviado_at: new Date().toISOString(), resend_id: correoResultado.resendId, correo_error: null }
-        // Ronda de correcciones final (hallazgo importante): el diseño
-        // promete "las que fallaron, con su error" (ver la vista de
-        // fallidas) — pero el error del correo nunca se guardaba en ningún
-        // lado. `correoResultado.error` cubre las tres formas de fallar de
-        // arriba: sin PDF (falló `renderizarCotizacion`), sin guardar (falló
-        // `guardarPdf`) y sin enviar (falló `enviarCotizacion` — p. ej. sin
-        // RESEND_API_KEY configurada, el caso de hoy).
-        : { correo_error: correoResultado.error }),
-    })
-    .eq('id', data.id);
-
-  if (errorActualizacion) {
-    // El Estimate (y la Opportunity), el PDF y el correo ya se gestionaron
-    // en este punto — esto no invalida ese resultado. Pero si esto falla en
-    // silencio, la fila queda parada en 'borrador' sin nada de lo de arriba
-    // pese a que sí existe: el mismo huérfano que "primero Supabase" evita,
-    // corrido un paso más adelante. Se registra para que sea recuperable a
-    // mano.
-    console.error(
-      '[cotizador] El envío se procesó pero no se pudo actualizar la fila.',
-      errorActualizacion.message,
-    );
-  }
-
-  // "Modificar": la cotización vieja se marca 'reemplazada' recién ACÁ --
-  // después de confirmar que la nueva salió de verdad
-  // (`correoResultado.ok`) -- nunca antes. El punto más delicado del
-  // encargo: si se marcara la vieja antes (o sin condición) y el envío de
-  // la nueva fallara, el hotel se quedaría sin NINGUNA cotización vigente.
-  // Con esta guarda, si el correo falla (estado 'error' arriba), este
-  // bloque ni se ejecuta: la vieja queda exactamente como estaba, todavía
-  // vigente, y el vendedor puede reintentar (Reenviar, si el PDF sí se
-  // generó, o Modificar de nuevo). Best-effort igual que el cierre del
-  // borrador más arriba: la cotización nueva ya está a salvo pase lo que
-  // pase acá, así que un fallo se registra y no tumba la respuesta. El
-  // `.in('estado', ESTADOS_MODIFICABLES)` es la misma guarda atómica que ya
-  // valida `reemplazaId` al entrar, repetida acá contra una carrera: que el
-  // estado de la vieja haya cambiado en el rato (varios segundos, con PDF y
-  // correo de por medio) entre esa validación y este punto.
-  if (datos.reemplazaId && correoResultado.ok) {
-    const { error: errorReemplazo } = await supabaseAdmin()
-      .from('cotizaciones')
-      .update({
-        updated_at: new Date().toISOString(),
-        estado: 'reemplazada',
-        reemplazada_por: data.id,
-        reemplazada_por_numero: numero,
-      })
-      .eq('id', datos.reemplazaId)
-      .in('estado', ESTADOS_MODIFICABLES);
-    if (errorReemplazo) {
-      console.error(
-        '[cotizador] La cotización nueva salió, pero no se pudo marcar la vieja como reemplazada.',
-        errorReemplazo.message,
-      );
-    }
-  }
+  const resultadoEnvio = await enviarCotizacionAlHotel({
+    id: data.id,
+    numero,
+    cotizacion,
+    cliente: datos.cliente,
+    contactIdEntrada,
+    reemplazaId: datos.reemplazaId ?? null,
+  });
 
   return NextResponse.json({
     ok: true,
     id: data.id,
     numero,
     cotizacion,
-    ghl: ghl.ok ? { estimateId: ghl.estimateId } : { error: ghl.error },
-    pdf: pdfRuta ? { ruta: pdfRuta } : null,
-    correo: correoResultado.ok ? { resendId: correoResultado.resendId } : { error: correoResultado.error },
+    ghl: resultadoEnvio.ghl,
+    pdf: resultadoEnvio.pdf,
+    correo: resultadoEnvio.correo,
+    ...(datos.descuentoPersonalizado ? { aprobacion: { pendiente: false, autoAprobada: true } } : {}),
   });
 }
