@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { DescuentoPersonalizado, LineaEntrada } from '@/lib/cotizador/tipos';
 import type { PrefillCotizacion } from './Panel';
@@ -658,6 +658,46 @@ export function VistaListado({
     }
   }
 
+  // Hallazgo del dueño (no del brief original): hacer clic en la fila del
+  // listado abre el PDF, igual que "Ver PDF" en el menú de tres puntos --
+  // hoy hay que abrir ese menú a propósito para llegar ahí. `manejarClicFila`
+  // es el atajo, adjunto al <tr> (ver más abajo), NUNCA reemplaza al ítem
+  // "Ver PDF" del menú, que se queda igual.
+  //
+  // Por qué el guard de acá y no un tabIndex+onKeyDown en el <tr>: un
+  // `<tr onClick>` sin más no es accesible por sí solo -- ni Tab lo enfoca
+  // ni Enter lo dispara, un lector de pantalla no lo anuncia como algo
+  // activable. Pero ponerle tabIndex/onKeyDown/role="button" al <tr>
+  // TAMPOCO es la solución: le pisa el rol implícito de fila de tabla, y un
+  // lector de pantalla en modo tabla deja de anunciarlo como fila (pierde
+  // "fila 3 de 12" y la asociación con sus celdas) a cambio de un botón mal
+  // hecho. Por eso el atajo de clic de acá es sólo para mouse/touch, y la
+  // vía accesible es doble: el nombre del cliente (primera celda, más
+  // abajo) es un <button> real -- foco y Enter/Espacio nativos, con
+  // aria-label describiendo la acción -- y "Ver PDF" en el menú de tres
+  // puntos, que ya era accesible y no se tocó.
+  //
+  // El guard: cualquier control interactivo propio de la fila (el botón de
+  // tres puntos, el <button> del nombre, el input/botones del motivo de
+  // pérdida) maneja su propio clic -- el atajo no debe pisarlo. Ojo, el
+  // menú desplegado (role="menu"/"menuitem") SÍ hace falta cubrirlo acá
+  // aunque se pinte en un portal a `document.body` (ver `MenuAcciones`),
+  // fuera del <tr> en el DOM: React hace burbujeo de eventos según el
+  // ÁRBOL DE REACT, no el árbol del DOM (documentado así en React), y
+  // `MenuAcciones` sigue siendo hijo de este <tr> en ese árbol -- un clic
+  // en "Marcar como perdida" SÍ llega hasta acá. Verificado a mano
+  // sacando `button`/`[role="menuitem"]` del selector: sin ellos, la
+  // prueba "elegir Marcar como perdida en el menú no abre además el PDF"
+  // (tests/panel-listado-ui.test.tsx) se pone en rojo. Como cada ítem del
+  // menú es un `<button role="menuitem">` (o un `<a>`), `closest()` los
+  // atrapa igual por el propio selector, sin necesidad de distinguir
+  // "portal" de "no portal".
+  function manejarClicFila(e: ReactMouseEvent<HTMLTableRowElement>, fila: FilaListado) {
+    const objetivo = e.target as HTMLElement;
+    if (objetivo.closest('button, a, input, [role="menuitem"]')) return;
+    void verPdf(fila);
+  }
+
   async function reenviar(id: string) {
     setProcesandoId(id);
     try {
@@ -895,14 +935,34 @@ export function VistaListado({
                 const monto = numeroDe(fila.totales?.total);
                 const mensaje = mensajesFila[fila.id];
                 const enProceso = procesandoId === fila.id;
+                // Sin PDF, o con una acción de esta fila ya en curso, el
+                // atajo de clic no aplica -- ni el <tr> lleva `onClick` ni
+                // el nombre se pinta como botón, para que una fila que no
+                // es clicable tampoco lo aparente (ni cursor de mano, ni
+                // resaltado al pasar el mouse).
+                const filaClicable = Boolean(fila.pdf_ruta) && !enProceso;
 
                 return (
                   <tr
                     key={fila.id}
-                    className={proximaAVencer ? 'bg-amber-50' : undefined}
+                    className={[proximaAVencer ? 'bg-amber-50' : '', filaClicable ? 'cursor-pointer hover:bg-[var(--carta-fill)]/60' : '']
+                      .filter(Boolean)
+                      .join(' ') || undefined}
+                    onClick={filaClicable ? (e) => manejarClicFila(e, fila) : undefined}
                   >
                     <td className="px-3 py-3 align-top">
-                      <p className="whitespace-nowrap text-navy">{nombre}</p>
+                      {filaClicable ? (
+                        <button
+                          type="button"
+                          onClick={() => void verPdf(fila)}
+                          aria-label={`Ver PDF de la cotización de ${nombre}`}
+                          className="whitespace-nowrap text-left text-navy underline-offset-2 hover:underline focus-visible:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
+                        >
+                          {nombre}
+                        </button>
+                      ) : (
+                        <p className="whitespace-nowrap text-navy">{nombre}</p>
+                      )}
                       {empresa && <p className="whitespace-nowrap text-xs text-teal">{empresa}</p>}
                     </td>
                     {/* Hallazgo del dueño: a esta columna le sobraba tan

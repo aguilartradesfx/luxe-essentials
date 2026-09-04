@@ -648,6 +648,180 @@ describe('VistaListado', () => {
     });
   });
 
+  // Hallazgo del dueño (no del brief original): hacer clic en la fila abre
+  // el PDF -- hoy hay que abrir el menú de tres puntos y elegir "Ver PDF".
+  // El atajo tiene que abrir lo mismo, no disparar con nada interactivo de
+  // la fila, no hacer nada sin PDF guardado, y quedar accesible por
+  // teclado -- ver `manejarClicFila` en VistaListado.tsx para la decisión
+  // de diseño completa.
+  describe('clic en la fila abre el PDF', () => {
+    it('un clic en una celda no interactiva de la fila abre el PDF, igual que "Ver PDF"', async () => {
+      mockFetch({ pdfUrl: 'https://firmada/cot-1.pdf' });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      // La celda de "Vendedor" -- texto plano, sin ningún control adentro.
+      const celdaVendedor = within(fila).getByText('Guillermo Rojas');
+      await usuario.click(celdaVendedor);
+
+      await waitFor(() => {
+        expect(abrir).toHaveBeenCalledWith('https://firmada/cot-1.pdf', '_blank', 'noopener,noreferrer');
+      });
+    });
+
+    it('un clic en el botón de tres puntos abre el menú, no el PDF', async () => {
+      const { llamadas } = mockFetch({ pdfUrl: 'https://firmada/cot-1.pdf' });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      await usuario.click(within(fila).getByRole('button', { name: /más acciones/i }));
+
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+      expect(abrir).not.toHaveBeenCalled();
+      expect(llamadas.some((l) => l.url.endsWith('/api/cotizacion/pdf'))).toBe(false);
+    });
+
+    // El desastre concreto que este criterio evita: elegir "Marcar como
+    // perdida" no puede además previsualizar el PDF. Aunque el menú se
+    // pinta en un portal a `document.body` (fuera del <tr> en el DOM), el
+    // clic SÍ llega al `onClick` del <tr> -- React burbujea eventos según
+    // el árbol de React, no el del DOM, y `MenuAcciones` sigue siendo hijo
+    // del <tr> ahí. Lo que evita el disparo doble es el guard de
+    // `manejarClicFila` (cada ítem del menú es un `<button role="menuitem">`
+    // o un `<a>`, y el guard los excluye) -- prueba verificada a mano: sin
+    // ese guard, esta prueba se pone en rojo (ver el comentario de
+    // `manejarClicFila` en VistaListado.tsx).
+    it('elegir "Marcar como perdida" en el menú no abre además el PDF', async () => {
+      const { llamadas } = mockFetch({ pdfUrl: 'https://firmada/cot-1.pdf' });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      await abrirMenu(usuario, fila);
+      await usuario.click(screen.getByRole('menuitem', { name: /marcar como perdida/i }));
+
+      // Se abrió el formulario de motivo (efecto real del botón)...
+      expect(within(fila).getByLabelText(/motivo de la pérdida/i)).toBeInTheDocument();
+      // ...pero nada de PDF.
+      expect(abrir).not.toHaveBeenCalled();
+      expect(llamadas.some((l) => l.url.endsWith('/api/cotizacion/pdf'))).toBe(false);
+    });
+
+    it('sin pdf_ruta, un clic en la fila no hace nada', async () => {
+      const { llamadas } = mockFetch({ filas: [{ ...FILA_ABIERTA, pdf_ruta: null }] });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      // Sin PDF, el nombre tampoco se pinta como botón -- que la fila no
+      // aparente ser clicable si no lo es.
+      expect(screen.queryByRole('button', { name: /ver pdf de la cotización/i })).not.toBeInTheDocument();
+      await usuario.click(screen.getByText('Guillermo Rojas'));
+
+      expect(abrir).not.toHaveBeenCalled();
+      expect(llamadas.some((l) => l.url.endsWith('/api/cotizacion/pdf'))).toBe(false);
+    });
+
+    // Accesibilidad: el atajo real para teclado/lector de pantalla es el
+    // nombre del cliente, un <button> de verdad -- Tab lo alcanza, Enter lo
+    // dispara (semántica nativa, sin `onKeyDown` a mano), y trae un
+    // `aria-label` que lo anuncia con su propósito completo, no solo
+    // "Ana Pérez".
+    it('el nombre del cliente es un botón real, alcanzable con Tab y activable con Enter', async () => {
+      mockFetch({ pdfUrl: 'https://firmada/cot-1.pdf' });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const boton = screen.getByRole('button', { name: /ver pdf de la cotización de ana pérez/i });
+      boton.focus();
+      expect(boton).toHaveFocus();
+      await usuario.keyboard('{Enter}');
+
+      await waitFor(() => {
+        expect(abrir).toHaveBeenCalledWith('https://firmada/cot-1.pdf', '_blank', 'noopener,noreferrer');
+      });
+    });
+
+    // Guard contra el bug más tonto de esta implementación: el botón del
+    // nombre vive DENTRO del <tr> que también tiene su propio `onClick` --
+    // sin el guard de `manejarClicFila` (que descarta el clic si el
+    // objetivo es un `button`), un solo clic ahí dispararía `verPdf` dos
+    // veces (dos fetch, dos pestañas).
+    it('un clic en el nombre del cliente pide el PDF una sola vez, no dos', async () => {
+      const { llamadas } = mockFetch({ pdfUrl: 'https://firmada/cot-1.pdf' });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const boton = screen.getByRole('button', { name: /ver pdf de la cotización de ana pérez/i });
+      await usuario.click(boton);
+
+      await waitFor(() => {
+        expect(abrir).toHaveBeenCalledTimes(1);
+      });
+      expect(llamadas.filter((l) => l.url.endsWith('/api/cotizacion/pdf'))).toHaveLength(1);
+    });
+
+    // Mismo criterio que ya usa "Ver PDF" en el menú (`disabled: enProceso`):
+    // mientras el primer pedido de esta fila sigue en el aire, el atajo de
+    // clic no debe agregar un segundo. `procesandoId` es compartido por
+    // toda la pantalla ("una fila a la vez", ver su comentario más arriba
+    // en VistaListado.tsx), así que ya viene calculado -- acá sólo se
+    // comprueba que también apaga el atajo de clic, no sólo el menú.
+    it('mientras el PDF de la fila sigue pendiente, un segundo clic no agrega otro pedido', async () => {
+      let resolverPdf: (respuesta: Response) => void = () => {};
+      const promesaPdf = new Promise<Response>((resolve) => {
+        resolverPdf = resolve;
+      });
+      const llamadasPdf: unknown[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith('/api/cotizacion/listado')) {
+          return new Response(
+            JSON.stringify({ ok: true, cotizaciones: [FILA_ABIERTA], locationId: LOCATION_ID }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith('/api/cotizacion/pdf')) {
+          llamadasPdf.push(url);
+          return promesaPdf;
+        }
+        throw new Error(`Fetch no simulado en la prueba: ${url}`);
+      });
+      const abrir = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+      const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+      const celdaVendedor = within(fila).getByText('Guillermo Rojas');
+
+      await usuario.click(celdaVendedor);
+      // Con el pedido todavía pendiente, el atajo se apaga -- el nombre
+      // deja de ser un botón (vuelve a texto plano).
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: /ver pdf de la cotización/i })).not.toBeInTheDocument(),
+      );
+      await usuario.click(celdaVendedor);
+
+      resolverPdf(new Response(JSON.stringify({ ok: true, url: 'https://firmada/una-vez' }), { status: 200 }));
+      await waitFor(() => expect(abrir).toHaveBeenCalledTimes(1));
+      expect(llamadasPdf).toHaveLength(1);
+    });
+  });
+
   // Ronda de correcciones final (hallazgo importante): el diseño promete
   // "las que fallaron, con su error" — antes la vista de fallidas mostraba
   // una píldora roja que decía "Error" y nada más, aunque `ghl_error` y
@@ -1044,11 +1218,18 @@ describe('VistaListado', () => {
     });
 
     // Hallazgo del dueño (ronda de correcciones): la fila ya no tiene NINGÚN
-    // botón suelto -- "Ganada"/"Perdida" se mudaron adentro del menú, junto
-    // con el resto ("Modificar" sigue apareciendo porque `FILA_ABIERTA`
-    // está en 'enviada', dentro de ESTADOS_MODIFICABLES). Van primero en la
-    // lista -- son la decisión más frecuente.
-    it('el menú lista las siete acciones, con "Marcar como ganada"/"Marcar como perdida" primero, y la fila no tiene ningún botón suelto', async () => {
+    // botón suelto de "Ganada"/"Perdida" -- se mudaron adentro del menú,
+    // junto con el resto ("Modificar" sigue apareciendo porque
+    // `FILA_ABIERTA` está en 'enviada', dentro de ESTADOS_MODIFICABLES).
+    // Van primero en la lista -- son la decisión más frecuente.
+    //
+    // Hallazgo posterior (clic en la fila abre el PDF): la fila SÍ suma un
+    // segundo botón -- el nombre del cliente, atajo accesible con el mismo
+    // efecto que "Ver PDF" (ver el comentario de `manejarClicFila` en
+    // VistaListado.tsx). Dos botones en total, nombrados explícitamente acá
+    // para que un tercero que se cuele (p. ej. "Ganada"/"Perdida" sueltos
+    // de nuevo) siga poniendo esta prueba en rojo.
+    it('el menú lista las siete acciones, con "Marcar como ganada"/"Marcar como perdida" primero, y la fila solo tiene el botón de tres puntos y el atajo del nombre', async () => {
       mockFetch();
       const usuario = userEvent.setup();
       renderVista();
@@ -1056,10 +1237,13 @@ describe('VistaListado', () => {
       await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
       const fila = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
       // Ni "Ganada"/"Perdida" ni ningún otro botón viven sueltos en la fila
-      // -- el único control ahí es el de tres puntos que abre el menú.
+      // -- los únicos controles ahí son el de tres puntos que abre el menú
+      // y el atajo (con nombre accesible) para ver el PDF desde el nombre.
       expect(within(fila).queryByRole('button', { name: /^ganada$/i })).not.toBeInTheDocument();
       expect(within(fila).queryByRole('button', { name: /^perdida$/i })).not.toBeInTheDocument();
-      expect(within(fila).getAllByRole('button')).toHaveLength(1);
+      expect(within(fila).getByRole('button', { name: /más acciones/i })).toBeInTheDocument();
+      expect(within(fila).getByRole('button', { name: /ver pdf de la cotización de ana pérez/i })).toBeInTheDocument();
+      expect(within(fila).getAllByRole('button')).toHaveLength(2);
 
       await abrirMenu(usuario, fila);
       const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
