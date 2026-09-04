@@ -30,9 +30,11 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: 'Content-Security-Policy',
-            // Sólo GoHighLevel puede embeber el panel. Nunca '*': eso
-            // dejaría que cualquier sitio lo embeba con la sesión del
-            // vendedor dentro.
+            // Sólo GoHighLevel (y la marca blanca del dueño) puede embeber
+            // el panel. Nunca '*' ni un comodín amplio: cada entrada de acá
+            // abajo es una autorización concreta para embeber el panel con
+            // la sesión del vendedor adentro, así que va la lista mínima
+            // que hace falta, no una de más.
             //
             // `app.gohighlevel.com`/`*.gohighlevel.com` y
             // `*.leadconnectorhq.com` son los dominios estándar de
@@ -43,8 +45,16 @@ const nextConfig: NextConfig = {
             // (subdominio propio de la agencia, no de GoHighLevel), ese
             // dominio hay que agregarlo acá o el panel se ve en blanco
             // dentro del menu link.
+            //
+            // `app.bralto.io` es la marca blanca de GoHighLevel que paga el
+            // dueño: es el dominio real por el que su equipo entra al CRM
+            // hoy, así que sin esta entrada el navegador se niega a pintar
+            // el panel ahí adentro (pantalla en blanco, sin aviso, porque
+            // desde dentro del iframe bloqueado no hay forma de avisar
+            // nada). Dominio exacto, no comodín: no hace falta cubrir
+            // subdominios que este cliente no usa.
             value:
-              "frame-ancestors 'self' https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com https://app.msgsndr.com https://*.msgsndr.com",
+              "frame-ancestors 'self' https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com https://app.msgsndr.com https://*.msgsndr.com https://app.bralto.io",
           },
         ],
       },
