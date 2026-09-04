@@ -279,6 +279,27 @@ describe('POST /api/cotizacion/listado', () => {
     expect(cuerpo.locationId).toBe('location-de-prueba');
   });
 
+  // El dueño paga la marca blanca de GoHighLevel (dominio propio,
+  // `app.bralto.io`): el enlace "Ver en Bralto" tiene que poder apuntar ahí
+  // sin tocar código, con `LUXE_GHL_DOMINIO`. Si la variable falta, cae en
+  // `app.gohighlevel.com` -- el dominio de siempre -- para que nada se
+  // rompa.
+  it('incluye crmDominio con el default de GoHighLevel si LUXE_GHL_DOMINIO no está puesta', async () => {
+    delete process.env.LUXE_GHL_DOMINIO;
+    resultadoLista = { data: [filaListado], error: null };
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
+    const cuerpo = await res.json();
+    expect(cuerpo.crmDominio).toBe('app.gohighlevel.com');
+  });
+
+  it('usa LUXE_GHL_DOMINIO para crmDominio cuando está puesta (marca blanca del dueño)', async () => {
+    process.env.LUXE_GHL_DOMINIO = 'app.bralto.io';
+    resultadoLista = { data: [filaListado], error: null };
+    const res = await postListado(conSesion('http://localhost/api/cotizacion/listado', {}));
+    const cuerpo = await res.json();
+    expect(cuerpo.crmDominio).toBe('app.bralto.io');
+  });
+
   it('nunca pide más de 200 filas, aunque se pida un límite mayor', async () => {
     resultadoLista = { data: [], error: null };
     await postListado(conSesion('http://localhost/api/cotizacion/listado', { limite: 500 }));

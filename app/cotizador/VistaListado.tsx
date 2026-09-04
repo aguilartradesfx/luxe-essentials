@@ -504,6 +504,13 @@ export function VistaListado({
   // var público quedaría embebido en el bundle de cliente para siempre,
   // aunque Luxe cambiara de cuenta de GoHighLevel.
   const [locationId, setLocationId] = useState('');
+  // Mismo criterio que `locationId`, mismo origen (la respuesta de
+  // `/api/cotizacion/listado`, nunca un env var público): el dominio con el
+  // que se arma "Ver en Bralto". El valor inicial (antes de que la primera
+  // carga responda) coincide con el default del servidor cuando la
+  // variable de entorno no está puesta -- así el primer render nunca queda
+  // con un enlace roto ni a medio armar.
+  const [crmDominio, setCrmDominio] = useState('app.gohighlevel.com');
 
   // Fila en la que se está por confirmar "Perdida": el motivo se pide antes
   // de mandar nada al servidor (Paso 1 del brief).
@@ -550,6 +557,7 @@ export function VistaListado({
       }
       setCotizaciones((datos.cotizaciones ?? []) as FilaListado[]);
       if (typeof datos.locationId === 'string') setLocationId(datos.locationId);
+      if (typeof datos.crmDominio === 'string' && datos.crmDominio) setCrmDominio(datos.crmDominio);
     } catch {
       if (!estaCancelado()) {
         setError('Fallo de red.');
@@ -1093,7 +1101,7 @@ export function VistaListado({
                                   {
                                     tipo: 'enlace' as const,
                                     etiqueta: 'Ver en Bralto',
-                                    href: `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${fila.contact_id}`,
+                                    href: `https://${crmDominio}/v2/location/${locationId}/contacts/detail/${fila.contact_id}`,
                                   },
                                 ]
                               : []),

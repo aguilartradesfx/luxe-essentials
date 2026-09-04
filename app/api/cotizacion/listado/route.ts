@@ -88,9 +88,18 @@ export async function POST(request: Request) {
   // permitido leer sin que un env var termine expuesto en el bundle de
   // cliente. Mismo env var que ya usan las rutas que hablan con GoHighLevel
   // (app/api/cotizacion/route.ts, app/api/ghl/webhook/route.ts).
+  //
+  // `crmDominio` sigue el mismo criterio: el dueño paga la marca blanca de
+  // GoHighLevel (dominio propio, `app.bralto.io`), así que el enlace "Ver
+  // en Bralto" no puede llevar `app.gohighlevel.com` incrustado en el
+  // código — si el dueño cambia de marca blanca, o hay que apuntar a otro
+  // entorno, tiene que alcanzar con un cambio de variable en Vercel. Por
+  // defecto queda `app.gohighlevel.com` (el dominio de siempre) para que
+  // nada se rompa si la variable falta.
   return NextResponse.json({
     ok: true,
     cotizaciones: data ?? [],
     locationId: process.env.LUXE_GHL_LOCATION_ID ?? '',
+    crmDominio: process.env.LUXE_GHL_DOMINIO || 'app.gohighlevel.com',
   });
 }

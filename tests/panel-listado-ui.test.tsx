@@ -99,6 +99,12 @@ type OpcionesFetch = {
   pdfUrl?: string;
   pdfStatus?: number;
   pdfError?: string;
+  // Dominio con el que el servidor arma "Ver en Bralto" (ver
+  // app/api/cotizacion/listado/route.ts, `LUXE_GHL_DOMINIO`). Sin esto, el
+  // mock ni siquiera manda el campo -- así las pruebas que no lo necesitan
+  // ejercitan el mismo camino "la respuesta no trae `crmDominio`" que un
+  // backend viejo o una `LUXE_GHL_DOMINIO` vacía producirían de verdad.
+  crmDominio?: string;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -114,9 +120,15 @@ function mockFetch(opciones: OpcionesFetch = {}) {
       }
       const todas = opciones.filas ?? [FILA_ABIERTA, FILA_POR_VENCER, FILA_GANADA];
       const filtradas = cuerpo.estado ? todas.filter((f) => (f as { estado: string }).estado === cuerpo.estado) : todas;
-      return new Response(JSON.stringify({ ok: true, cotizaciones: filtradas, locationId: LOCATION_ID }), {
-        status: 200,
-      });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          cotizaciones: filtradas,
+          locationId: LOCATION_ID,
+          ...(opciones.crmDominio ? { crmDominio: opciones.crmDominio } : {}),
+        }),
+        { status: 200 },
+      );
     }
 
     if (url.endsWith('/api/cotizacion/cerrar')) {
@@ -745,9 +757,12 @@ describe('VistaListado', () => {
   });
 
   // El dueño paga la marca blanca de GoHighLevel: en pantalla el CRM se
-  // llama "Bralto" -- el enlace sigue apuntando al dominio real de
-  // GoHighLevel (eso no cambia, es el proveedor de verdad), pero la
-  // etiqueta que lee el vendedor no puede decir "GoHighLevel".
+  // llama "Bralto" -- la etiqueta que lee el vendedor no puede decir
+  // "GoHighLevel". El dominio del enlace lo manda el servidor
+  // (`crmDominio`, ver app/api/cotizacion/listado/route.ts); sin ese campo
+  // en la respuesta (como acá, con `mockFetch()` sin `crmDominio`) el
+  // componente usa el mismo default que el servidor -- `app.gohighlevel.com`
+  // -- nunca un dominio hardcodeado aparte en el propio componente.
   it('hay un enlace a la ficha del contacto en Bralto cuando la fila tiene contact_id', async () => {
     mockFetch();
     const usuario = userEvent.setup();
@@ -767,6 +782,26 @@ describe('VistaListado', () => {
     const filaSinContacto = screen.getByText(/beto ruiz/i).closest('tr') as HTMLElement;
     await abrirMenu(usuario, filaSinContacto);
     expect(screen.queryByRole('menuitem', { name: /bralto/i })).not.toBeInTheDocument();
+  });
+
+  // Hallazgo (tarea del dominio de Bralto): el enlace tiene que seguir al
+  // dominio que manda el servidor, no quedar pegado al default. Esta
+  // prueba es la que se rompe si alguien vuelve a hardcodear
+  // `app.gohighlevel.com` en VistaListado.tsx en vez de leer `crmDominio`
+  // de la respuesta de `/listado`.
+  it('usa el crmDominio que manda el servidor para el enlace a Bralto, cuando viene distinto del default', async () => {
+    mockFetch({ crmDominio: 'app.bralto.io' });
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await waitFor(() => expect(screen.getByText(/ana pérez/i)).toBeInTheDocument());
+    const filaConContacto = screen.getByText(/ana pérez/i).closest('tr') as HTMLElement;
+    await abrirMenu(usuario, filaConContacto);
+    const enlace = screen.getByRole('menuitem', { name: /bralto/i });
+    expect(enlace).toHaveAttribute(
+      'href',
+      `https://app.bralto.io/v2/location/${LOCATION_ID}/contacts/detail/${FILA_ABIERTA.contact_id}`,
+    );
   });
 
   it('sin cotizaciones, un texto neutro', async () => {

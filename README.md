@@ -43,6 +43,7 @@ nombres sin valores; `.env.local` es la copia local y no se versiona.
 | `SUPABASE_SERVICE_ROLE_KEY` | Base de datos, desde el servidor | Del panel de Supabase |
 | `LUXE_GHL_API_KEY` | Leads, cotizaciones y agente en GoHighLevel | Private Integration de GHL |
 | `LUXE_GHL_LOCATION_ID` | Ídem | Del panel de GHL |
+| `LUXE_GHL_DOMINIO` | Dominio con el que arma el enlace "Ver en Bralto" del listado | `app.bralto.io` (la marca blanca del dueño). Si falta, cae en `app.gohighlevel.com` |
 | `LUXE_AGENTE_WEBHOOK_SECRET` | Cabecera `x-luxe-agente-secreto` del webhook | Cualquier secreto largo |
 | `LUXE_ANTHROPIC_API_KEY` | Cerebro del agente | De la consola de Anthropic |
 | `LUXE_OPENAI_API_KEY` | Transcripción de audios del agente | De la consola de OpenAI |
