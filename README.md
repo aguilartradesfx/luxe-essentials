@@ -49,6 +49,7 @@ nombres sin valores; `.env.local` es la copia local y no se versiona.
 | `LUXE_OPENAI_API_KEY` | Transcripción de audios del agente | De la consola de OpenAI |
 | `LUXE_TALLER_CLAVE` | Clave del banco de pruebas `/q7m4` | La que se le da al equipo |
 | `LUXE_SESION_SECRETO` | Firma la cookie de sesión del **panel de cotizaciones** | `openssl rand -hex 32` |
+| `LUXE_BAJA_SECRETO` | Firma el enlace de baja de las campañas de correo (`{{unsubscribe_url}}` en las plantillas) | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Enviar la cotización y las invitaciones del equipo por correo | De la consola de Resend |
 | `LUXE_CORREO_REMITENTE` | Remitente de esos dos correos | `Luxe Essentials <cotizaciones@luxeessentialscr.com>` |
 | `LUXE_CONTACTO_TELEFONO` | Pie del PDF de cotización | `+506 6140 2511` |
@@ -60,6 +61,14 @@ nombres sin valores; `.env.local` es la copia local y no se versiona.
 taller la teclea una persona en un formulario y queda guardada en su navegador, así que quien
 la conozca podría fabricarse una sesión del panel a nombre de cualquiera. Si `LUXE_SESION_SECRETO`
 falta, nadie puede entrar al panel y el log dice `LUXE_SESION_SECRETO no está configurada: no se puede emitir una sesión.`
+
+`LUXE_BAJA_SECRETO` también es **distinta** de `LUXE_SESION_SECRETO`, y por el mismo motivo al
+revés: son dos sistemas con vidas distintas. El enlace de baja de una campaña no caduca (puede
+abrirse meses después) y no hay nada que "cerrar sesión" en él, así que rotar
+`LUXE_SESION_SECRETO` para sacar a alguien del equipo no debe invalidar enlaces de baja ya
+mandados — y rotar `LUXE_BAJA_SECRETO` porque uno se filtró no debe tumbar la sesión de nadie en
+el panel. Si falta, no se puede generar ni validar ningún enlace de baja (ver
+`lib/campanas/baja.ts`).
 
 `SUPABASE_DB_URL` (o `SUPABASE_DATABASE_PASSWORD`) sólo hace falta en la máquina desde la que
 se corren `npm run db:migrate` y `npm run usuarios`: son conexiones directas a Postgres, no
