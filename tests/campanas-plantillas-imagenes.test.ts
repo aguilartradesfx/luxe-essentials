@@ -14,9 +14,9 @@ import { plantillaCargada } from '@/lib/campanas/plantillas';
 // no exhaustivo, sólo lo bastante específico para que un mutante que
 // intercambie dos imágenes entre plantillas, o que vacíe el alt, falle.
 const IMAGEN: Record<'inicial' | 'seguimiento_1' | 'seguimiento_2', { id: string; altContiene: string }> = {
-  inicial: { id: 'corporativo-camisas-pantalones', altContiene: 'uniforme corporativo' },
-  seguimiento_1: { id: 'polos-tejido-plano', altContiene: 'tejido plano' },
-  seguimiento_2: { id: 'planta-confeccion', altContiene: 'confecci&oacute;n' },
+  inicial: { id: 'seccion-uniformes', altContiene: 'uniforme corporativo' },
+  seguimiento_1: { id: 'seccion-telas', altContiene: 'azul marino, blanco y crudo' },
+  seguimiento_2: { id: 'seccion-bordado', altContiene: 'logo sobre tela azul' },
 };
 
 const PLANTILLAS_CON_CTA = ['inicial', 'seguimiento_1', 'seguimiento_2'] as const;

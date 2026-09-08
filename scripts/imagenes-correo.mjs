@@ -9,16 +9,20 @@ import { pathToFileURL } from 'node:url';
 // acepta WebP -- esto sirve al CORREO, y Outlook para Windows no sabe
 // pintar WebP (no se ve una imagen rota: se ve un hueco). La fuente es la
 // MISMA foto ya optimizada en public/images/<id>.webp -- no se vuelve a
-// tocar el original de IMAGENES/ -- y la salida es JPEG, mas chica que el
-// tamano del sitio porque en el correo la imagen va a un ancho de columna
-// fijo (512 px, el ancho de contenido de las cuatro plantillas: 600 menos
-// 44 px de margen a cada lado), no a pantalla completa.
+// tocar el original de IMAGENES-GENERADAS/ -- y la salida es JPEG, mas
+// chica que el tamano del sitio porque en el correo la imagen va a un
+// ancho de columna fijo (512 px, el ancho de contenido de las cuatro
+// plantillas: 600 menos 44 px de margen a cada lado), no a pantalla
+// completa.
 const SRC_DIR = join(process.cwd(), 'public', 'images');
 const OUT_DIR = join(process.cwd(), 'public', 'images', 'correo');
 
-// 512x288 = 16:9. Las tres fuentes elegidas ya vienen en ~2400x135x (el
-// mismo ~16:9 de origen, ver scripts/optimize-images.mjs), asi que el
-// recorte de `cover` es minimo -- no le corta gente ni prenda a ninguna.
+// 512x288 = 16:9. Dos de las tres fuentes ya vienen horizontales en
+// ~2400x1792 (4:3, ver scripts/optimize-images.mjs), asi que el recorte de
+// `cover` final es moderado y `attention` (el area mas "interesante" segun
+// sharp) elige bien sola. La tercera (seccion-uniformes) es vertical y
+// necesita un recorte manual antes de ese paso -- ver `crop` en
+// ASIGNACIONES.
 const WIDTH = 512;
 const HEIGHT = 288;
 const QUALITY = 74;
@@ -26,9 +30,27 @@ const QUALITY = 74;
 // Que imagen le toca a cada plantilla, y por que -- el criterio comercial
 // va en el reporte de la tarea, no aca.
 export const ASIGNACIONES = [
-  { id: 'corporativo-camisas-pantalones', plantilla: 'inicial' },
-  { id: 'polos-tejido-plano', plantilla: 'seguimiento_1' },
-  { id: 'planta-confeccion', plantilla: 'seguimiento_2' },
+  {
+    id: 'seccion-uniformes',
+    plantilla: 'inicial',
+    // seccion-uniformes.png es retrato (1792x2400): las tres prendas
+    // (filipina, camisa, delantal) cuelgan en el tercio inferior, con
+    // pared vacia arriba. Sin recorte previo, `cover` a 512x288 (16:9)
+    // reduciria por ancho y dejaria una franja de ~384 px de alto por
+    // recortar -- position:'attention' podria centrarse en la pared en vez
+    // de en la ropa, y aun acertando, en un correo de 600 px de ancho la
+    // pieza entera mediria unos 800 px de alto: se comeria la primera
+    // pantalla completa.
+    // Recorte manual: 1792x1344 (4:3, la misma proporcion que las otras
+    // dos fuentes), alineado al borde inferior (top=2400-1344=1056) para
+    // quedarse con las tres prendas colgadas y descartar la pared vacia de
+    // arriba. Los valores salen de inspeccionar la imagen a ojo, no de un
+    // calculo generico -- si se regenera el PNG de origen, hay que
+    // revisarlos de nuevo.
+    crop: { left: 0, top: 1056, width: 1792, height: 1344 },
+  },
+  { id: 'seccion-telas', plantilla: 'seguimiento_1' },
+  { id: 'seccion-bordado', plantilla: 'seguimiento_2' },
   // seguimiento_3 (la de cierre) no lleva imagen a proposito, igual que no
   // lleva boton -- ver el comentario en su propio .html.
 ];
@@ -41,7 +63,7 @@ async function main() {
   let antes = 0;
   let despues = 0;
 
-  for (const { id } of ASIGNACIONES) {
+  for (const { id, crop } of ASIGNACIONES) {
     const src = join(SRC_DIR, `${id}.webp`);
     if (!existsSync(src)) {
       console.error(`falta el origen: ${src}`);
@@ -49,7 +71,10 @@ async function main() {
     }
     const out = join(OUT_DIR, `${id}.jpg`);
 
-    await sharp(src)
+    let pipeline = sharp(src);
+    if (crop) pipeline = pipeline.extract(crop);
+
+    await pipeline
       .resize({ width: WIDTH, height: HEIGHT, fit: 'cover', position: 'attention' })
       // El JPEG no tiene canal alfa -- si el WebP de origen trajera
       // transparencia, sharp la volveria negro sin este flatten. Ninguna
