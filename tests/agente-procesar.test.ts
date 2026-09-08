@@ -425,19 +425,29 @@ describe('aviso al equipo (workflow config.WORKFLOW_AVISO_INTERNO, tres casos)',
     expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
   });
 
-  it('caso 2: dispara por WhatsApp cuando el turno capta nombre y correo', async () => {
+  it('caso 2: dispara por WhatsApp cuando el turno capta nombre, correo y producto', async () => {
     generar.mockResolvedValue({
       ok: true,
-      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' } },
+      salida: {
+        respuesta: 'Gracias',
+        datos: {
+          ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com', producto: 'uniformes',
+        },
+      },
     });
     await procesar('c1', deps);
     expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
   });
 
-  it('caso 2: dispara por WhatsApp cuando el turno capta nombre y teléfono, sin correo', async () => {
+  it('caso 2: dispara por WhatsApp cuando el turno capta nombre, teléfono y producto, sin correo', async () => {
     generar.mockResolvedValue({
       ok: true,
-      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-8888' } },
+      salida: {
+        respuesta: 'Gracias',
+        datos: {
+          ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-8888', producto: 'uniformes',
+        },
+      },
     });
     await procesar('c1', deps);
     expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
@@ -447,6 +457,34 @@ describe('aviso al equipo (workflow config.WORKFLOW_AVISO_INTERNO, tres casos)',
     generar.mockResolvedValue({
       ok: true,
       salida: { respuesta: '¿Me confirmás tu correo o teléfono?', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar' } },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('no dispara sin nombre, aunque haya teléfono y producto', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: {
+        respuesta: '¿Con quién tengo el gusto?',
+        datos: { ...DATOS_VACIOS, telefono: '8888-8888', producto: 'uniformes' },
+      },
+    });
+    await procesar('c1', deps);
+    expect(dispararWorkflow).not.toHaveBeenCalled();
+  });
+
+  // El "hola" de cualquier contacto: hay nombre y teléfono (WhatsApp siempre
+  // trae el número desde el que escriben) pero la persona todavía no dijo qué
+  // quiere. Sin `producto`, no hay intención real que reportarle a nadie
+  // todavía.
+  it('no dispara con nombre y teléfono si el cliente todavía no dijo qué producto quiere', async () => {
+    generar.mockResolvedValue({
+      ok: true,
+      salida: {
+        respuesta: '¡Hola! ¿En qué te podemos ayudar?',
+        datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-8888' },
+      },
     });
     await procesar('c1', deps);
     expect(dispararWorkflow).not.toHaveBeenCalled();
@@ -473,23 +511,30 @@ describe('aviso al equipo (workflow config.WORKFLOW_AVISO_INTERNO, tres casos)',
   });
 });
 
-// Hallazgo 4 de la revisión final: el criterio del caso 2 no puede mirar
-// `datos` a secas, porque desde que el modelo recibe la ficha del CRM
-// (`leerContacto`) puede copiarla a `datos` como si el cliente la hubiera
-// dictado — el prompt le pide confirmarla, pero no lo exige. Con 3.340
-// contactos importados con la ficha ya completa, eso disparaba el aviso en
-// el primer "hola". El criterio ahora compara contra la ficha: sólo cuenta
-// si la conversación aportó algo que la ficha no tenía.
-describe('caso 2 no depende de que el modelo copie la ficha (hallazgo 4)', () => {
-  it('NO dispara cuando los "datos" del turno son exactamente lo que ya traía la ficha del CRM', async () => {
+// Hallazgo María José (producción, contacto NaTh3KjbaaT2MaVMegku): el
+// criterio anterior del caso 2 exigía que nombre/correo/teléfono fueran
+// "nuevos" frente a la ficha del CRM, para no disparar el aviso en el primer
+// "hola" de los 3.340 contactos importados. Pero un contacto de WhatsApp
+// SIEMPRE trae su teléfono en la ficha desde antes de escribir (es el número
+// desde el que manda el mensaje) — así que ese criterio también descartaba
+// para siempre a una clienta que sí dijo que quería uniformes de cocina y
+// confirmó su nombre, sólo porque ni el nombre ni el teléfono eran "nuevos".
+// El criterio ahora no mira si el dato es nuevo: mira si hay intención real
+// (`producto`, que nunca viene precargado de la ficha) y cómo contactar a la
+// persona (nombre + correo o teléfono, vengan de donde vengan).
+describe('caso 2 exige intención real, no que el dato sea "nuevo" frente a la ficha (hallazgo María José)', () => {
+  // El "hola" de un contacto de la base importada: la ficha ya trae nombre y
+  // teléfono, el turno los confirma, pero la persona no dijo qué quiere
+  // todavía. No hay intención real que reportar.
+  it('NO dispara cuando nombre y teléfono ya estaban en la ficha y el cliente aún no dijo qué producto quiere', async () => {
     leerContacto.mockResolvedValue({
-      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: 'ale@x.com', telefono: null,
+      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: null, telefono: '8888-0000',
     });
     generar.mockResolvedValue({
       ok: true,
       salida: {
         respuesta: '¡Hola!',
-        datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' },
+        datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-0000' },
       },
     });
     const r = await procesar('c1', deps);
@@ -497,36 +542,49 @@ describe('caso 2 no depende de que el modelo copie la ficha (hallazgo 4)', () =>
     expect(dispararWorkflow).not.toHaveBeenCalled();
   });
 
-  it('sí dispara cuando el cliente aporta un dato que la ficha NO traía, aunque el resto coincida con la ficha', async () => {
+  // Caso de regresión exacto de producción: la ficha de María José ya traía
+  // nombre y teléfono (llegó por WhatsApp). Ella confirmó el nombre y dijo
+  // que sí quería uniformes para sus chef. Con el criterio viejo esto nunca
+  // disparaba el aviso -ni el nombre ni el teléfono eran "nuevos"-, y nadie
+  // en Luxe se enteraba de una clienta real. Con el criterio nuevo sí
+  // dispara, porque el turno capturó `producto`.
+  it('dispara cuando nombre y teléfono ya estaban en la ficha, pero el cliente dice qué producto quiere (caso María José)', async () => {
     leerContacto.mockResolvedValue({
-      ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: null, telefono: null,
+      ok: true, etiquetas: [], nombre: 'María José Gamboa', email: null, telefono: '8888-1234',
     });
     generar.mockResolvedValue({
       ok: true,
       salida: {
-        respuesta: 'Gracias',
-        datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', telefono: '8888-8888' },
+        respuesta: 'Perfecto, María José. ¿A qué correo te enviamos la información?',
+        datos: {
+          ...DATOS_VACIOS, nombre: 'María José Gamboa', telefono: '8888-1234', producto: 'uniformes',
+        },
       },
     });
     await procesar('c1', deps);
     expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
   });
 
-  // Un contacto que no está en la base importada (ficha vacía) sigue
-  // funcionando exactamente como antes: cualquier dato que capte el turno es
-  // por definición nuevo frente a una ficha vacía.
-  it('sigue disparando para un contacto sin ficha previa (comportamiento sin cambios)', async () => {
+  // Un contacto sin ficha previa (no está en la base importada) sigue
+  // funcionando igual: nombre + contacto + producto disparan el aviso, venga
+  // de donde venga el dato.
+  it('sigue disparando para un contacto sin ficha previa que da nombre, correo y producto', async () => {
     generar.mockResolvedValue({
       ok: true,
-      salida: { respuesta: 'Gracias', datos: { ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com' } },
+      salida: {
+        respuesta: 'Gracias',
+        datos: {
+          ...DATOS_VACIOS, nombre: 'Alejandro Aguilar', email: 'ale@x.com', producto: 'hogar',
+        },
+      },
     });
     await procesar('c1', deps);
     expect(dispararWorkflow).toHaveBeenCalledWith('c1', config.WORKFLOW_AVISO_INTERNO, expect.anything());
   });
 
   // Aun sin caso 2, el caso 3 sigue siendo la red: si el contacto de la base
-  // importada se agota de turnos sin aportar nada nuevo, igual avisa.
-  it('el contacto de la base importada que no aporta nada nuevo igual avisa al agotarse (caso 3)', async () => {
+  // importada se agota de turnos sin decir nunca qué quiere, igual avisa.
+  it('el contacto de la base importada que nunca dice qué quiere igual avisa al agotarse (caso 3)', async () => {
     leerOCrear.mockResolvedValue({ ...FILA_NUEVA, turnos: config.TOPE_TURNOS - 1 });
     leerContacto.mockResolvedValue({
       ok: true, etiquetas: [], nombre: 'Alejandro Aguilar', email: 'ale@x.com', telefono: null,

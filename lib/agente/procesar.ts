@@ -5,7 +5,6 @@ import { prepararMedios } from '@/lib/agente/medios';
 import { generar } from '@/lib/agente/cerebro';
 import {
   enviarMensaje, actualizarContacto, agregarNota, dispararWorkflow, resumenParaNota, leerContacto,
-  type FichaContacto,
 } from '@/lib/agente/acciones';
 import {
   leerOCrear, tomarMensaje, guardar, fusionarDatos, type Db, type Fila, type Datos,
@@ -31,8 +30,9 @@ export type DepsProcesar = {
 // El equipo se entera del contacto en cuanto ocurre cualquiera de tres casos
 // — todos disparan el mismo workflow, config.WORKFLOW_AVISO_INTERNO:
 //   1. el contacto responde por correo electrónico,
-//   2. el turno captó un lead cualificado -nombre y además correo o
-//      teléfono- por cualquier canal (WhatsApp, SMS, Instagram, Facebook...),
+//   2. el turno captó un lead cualificado -nombre, contacto (correo o
+//      teléfono) Y el producto que le interesa- por cualquier canal
+//      (WhatsApp, SMS, Instagram, Facebook...),
 //   3. se agotaron los turnos (`agotado`) sin haber logrado ninguno de los
 //      dos anteriores.
 // El caso 2 es el que debería dispararse en casi toda conversación que llega
@@ -44,30 +44,33 @@ export type DepsProcesar = {
 // `notificado_at` sigue siendo la guarda de una sola vez por contacto: una
 // vez avisado, no se vuelve a avisar aunque después se cumpla otro caso.
 //
-// El caso 2 (`leadCualificado`) NO puede mirar `datos.nombre`/`email`/
-// `telefono` a secas: desde que el cerebro recibe la ficha del CRM
-// (`fichaCRM` en cerebro.ts) y el prompt le pide CONFIRMAR lo que esa ficha
-// ya trae, `datos` puede llegar con esos tres campos llenos sin que el
-// cliente haya escrito una sola palabra de vuelta — el prompt pide la
-// confirmación, pero ni la exige ni la prohíbe copiar de una, así que si el
-// modelo copia sin esperar confirmación, un contacto de la base importada
-// (3.340 fichas ya completas) dispara el aviso en su primer "hola". Por eso
-// se compara contra `ficha` (lo que el CRM YA tenía antes de este turno) y
-// sólo cuenta como cualificado si la conversación aportó algo que la ficha
-// no tenía — determinista, en código, sin depender de qué decida copiar el
-// modelo: si el cliente sólo confirma datos que la ficha ya traía completos,
-// esto no dispara el caso 2, pero sí lo sigue cubriendo el caso 3 (agotado)
-// si la conversación se apaga sin que el cliente aporte nada nuevo.
-function huboDatoNuevoDelCliente(datos: Datos, ficha: FichaContacto): boolean {
-  return datos.nombre !== ficha.nombre || datos.email !== ficha.email || datos.telefono !== ficha.telefono;
-}
-
-function debeAvisar(
-  fila: Fila, datos: Datos, agotado: boolean, esCorreoRespuesta: boolean, ficha: FichaContacto,
-): boolean {
+// El caso 2 (`leadCualificado`) NO puede mirar sólo "nombre + contacto": eso
+// se probó (comparando contra la ficha del CRM para exigir que el dato fuera
+// "nuevo") y se llevó por delante un caso real. Un contacto de WhatsApp
+// SIEMPRE trae su teléfono en la ficha del CRM desde antes de escribir una
+// sola palabra —es el número desde el que manda el mensaje—, así que exigir
+// que el teléfono fuera "nuevo" frente a la ficha lo descartaba siempre, sin
+// importar qué tan real fuera la intención de compra. Pasó en producción con
+// el contacto NaTh3KjbaaT2MaVMegku: la clienta confirmó su nombre (ya estaba
+// en la ficha) y dijo que sí quería uniformes de cocina — nadie en Luxe se
+// enteró, porque ni el nombre ni el teléfono eran "nuevos".
+//
+// La señal correcta no es si el dato es nuevo: es si la conversación mostró
+// intención real y hay cómo contactar a la persona. `producto` es esa señal
+// de intención, determinista y a prueba de que el modelo copie de más:
+// a diferencia de nombre/correo/teléfono, `producto` NUNCA viene precargado
+// desde la ficha del CRM (`fichaCRM` en cerebro.ts sólo trae esos tres
+// campos) — sólo se llena cuando el cliente, en esta conversación o en una
+// anterior, dijo qué le interesa. Que el turno haya llegado a `producto` no
+// nulo es imposible sin que alguien de carne y hueso lo haya dicho. Por eso
+// el caso 2 exige nombre + (correo o teléfono, vengan de la ficha o de la
+// conversación) + producto: contactabilidad más intención real, sin
+// depender de si cada dato es "nuevo". Caso de regresión en
+// tests/agente-procesar.test.ts, describe 'hallazgo María José'.
+function debeAvisar(fila: Fila, datos: Datos, agotado: boolean, esCorreoRespuesta: boolean): boolean {
   if (fila.notificado_at) return false;
   const leadCualificado = Boolean(datos.nombre) && Boolean(datos.email || datos.telefono)
-    && huboDatoNuevoDelCliente(datos, ficha);
+    && Boolean(datos.producto);
   return esCorreoRespuesta || leadCualificado || agotado;
 }
 
@@ -246,7 +249,7 @@ export async function procesar(
       ? 'agotado'
       : 'activo';
 
-  const avisar = debeAvisar(fila, datos, estado === 'agotado', esCorreoRespuesta, contacto);
+  const avisar = debeAvisar(fila, datos, estado === 'agotado', esCorreoRespuesta);
 
   // El aviso al equipo se dispara ANTES de estampar `notificado_at`, y sólo se
   // estampa si salió bien. Al revés —estampar y luego disparar— un 500 pasajero

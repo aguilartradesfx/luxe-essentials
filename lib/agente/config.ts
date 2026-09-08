@@ -119,8 +119,8 @@ export const config = {
   // dispara, por eso esta constante no se llama igual. Los tres casos
   // (`debeAvisar` en procesar.ts):
   //   1. el contacto responde por correo electrónico,
-  //   2. el turno captó un lead cualificado -nombre y además correo o
-  //      teléfono- por cualquier canal,
+  //   2. el turno captó un lead cualificado -nombre, contacto (correo o
+  //      teléfono) Y el producto que le interesa- por cualquier canal,
   //   3. se agotaron los turnos (`estado === 'agotado'`) sin haber logrado
   //      ninguno de los dos anteriores.
   //
