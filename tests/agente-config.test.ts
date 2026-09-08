@@ -10,8 +10,8 @@ describe('config del agente', () => {
     expect(config.WORKFLOW_COTIZACION_NUEVA).toBe('abfe1f24-e993-4963-ae8e-658142e8aa47');
   });
 
-  it('topa las respuestas automáticas en 12', () => {
-    expect(config.TOPE_TURNOS).toBe(12);
+  it('topa las respuestas automáticas en 25', () => {
+    expect(config.TOPE_TURNOS).toBe(25);
   });
 
   it('expone la clave del campo personalizado de la persona de contacto', () => {
@@ -89,6 +89,46 @@ describe('config del agente', () => {
     it('dice que un dato que el cliente confirma cuenta como captado', () => {
       const p = config.PROMPT_SISTEMA.toLowerCase();
       expect(p).toContain('si el cliente confirma un dato de la ficha');
+    });
+
+    // No se puede probar de forma determinista que el modelo vaya a dejar de
+    // insistir cuando el cliente lo ignora — eso lo decide el LLM turno a
+    // turno. Lo que sí se puede anclar es que la INSTRUCCIÓN de confirmar una
+    // sola vez y no insistir está en el prompt.
+    it('pide confirmar el nombre de la ficha una sola vez, sin insistir si no le contestan eso', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('una sola vez');
+      expect(p).toContain('no se lo vuelvas a preguntar');
+    });
+  });
+
+  // No se puede probar de forma determinista que el modelo vaya a priorizar
+  // bien sus preguntas turno a turno — eso lo decide el LLM. Lo que sí se
+  // puede anclar es que la INSTRUCCIÓN de prioridad está en el prompt: que
+  // cantidad y detalle de producto van antes que insistir en el nombre.
+  describe('prioridad de lo que se pregunta', () => {
+    it('dice que la cantidad y el detalle del producto son lo prioritario, por encima del nombre', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('cantidad');
+      expect(p).toContain('antes que insistir en el nombre');
+    });
+  });
+
+  // No se puede probar de forma determinista que el modelo nunca se le vaya
+  // a escapar la palabra "pedido" — eso lo decide el LLM turno a turno. Lo
+  // que sí se puede anclar es que la PROHIBICIÓN explícita está en el
+  // prompt, con las palabras concretas que no puede usar y la explicación de
+  // por qué (no hay pedido: se le pasa la necesidad a un asesor).
+  describe('nunca habla como si hubiera un pedido en curso', () => {
+    it('prohíbe explícitamente decir "pedido", "orden" o "confirmamos"', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('nunca decís "pedido", "orden", "confirmamos"');
+    });
+
+    it('explica que no existe ningún pedido ni cotización, y que el agente no cotiza', () => {
+      const p = config.PROMPT_SISTEMA.toLowerCase();
+      expect(p).toContain('no existe ningún pedido ni cotización todavía');
+      expect(p).toContain('vos no cotizás, ese camino no existe');
     });
   });
 
