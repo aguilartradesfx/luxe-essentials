@@ -583,7 +583,31 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
         </p>
       )}
 
-      {/* Las trece pestañas de zona */}
+      {/* Zona comercial: antes trece pestañas -- trece no entran en ningún
+          ancho razonable, y menos todavía junto a la tabla de contactos, que
+          ya necesita su propio espacio. Pasa a un desplegable de una zona a
+          la vez.
+
+          El conteo de contactos NO se esconde dentro del desplegable
+          cerrado (ahí sólo se vería abriéndolo, y ni siquiera entonces se
+          vería cuál está elegida sin buscarla en la lista): se repite,
+          siempre visible, al lado -- ver el `<span aria-live>` de abajo.
+          Cada `<option>` también lleva su propio conteo, para poder
+          comparar zonas antes de elegir una.
+
+          Ojo con la selección al cambiar de zona: los contactos elegidos en
+          una zona no significan nada en otra -- son personas distintas, y
+          "cambié de zona pero la selección de la anterior seguía marcada"
+          es la forma más fácil de mandarle una campaña a la gente
+          equivocada. La más segura de las dos salidas es descartarla de
+          entrada, así que `elegirZona` (más abajo en este archivo) sigue
+          vaciando `seleccion` en cada cambio -- ya lo hacía con las
+          pestañas, y el desplegable llama a la misma función, así que el
+          comportamiento no cambió, sólo el control que lo dispara. Prueba
+          que lo ancla: "cambiar de zona descarta la selección anterior…"
+          en tests/vista-campanas-ui.test.tsx -- verificada por mutación
+          (a mano): comentar el `setSeleccion({ modo: 'ninguna' })` de
+          `elegirZona` pone esa prueba en rojo. */}
       <div>
         <h2 className="font-display text-sm text-navy">Zona comercial</h2>
         {errorZonas && (
@@ -591,28 +615,37 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
             {errorZonas}
           </p>
         )}
-        <div role="tablist" aria-label="Zona comercial" className="mt-2 flex flex-wrap gap-2">
-          {ZONAS_COMERCIALES.map((zona) => {
-            const conteo = zonas?.find((z) => z.zona === zona);
-            const activa = zona === zonaActiva;
-            return (
-              <button
-                key={zona}
-                type="button"
-                role="tab"
-                aria-selected={activa}
-                onClick={() => elegirZona(zona)}
-                className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                  activa
-                    ? 'border-navy bg-navy text-beige'
-                    : 'border-[var(--carta-border)] text-navy hover:bg-[var(--carta-fill)]'
-                }`}
-              >
-                {zona}
-                {cargandoZonas && !conteo ? ' (…)' : conteo ? ` (${conteo.conCorreo}/${conteo.total})` : ''}
-              </button>
-            );
-          })}
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <label htmlFor="campanas-zona" className="flex items-center gap-2 text-xs text-teal">
+            Elegir zona
+            <select
+              id="campanas-zona"
+              value={zonaActiva}
+              onChange={(e) => elegirZona(e.target.value as ZonaComercial)}
+              className="rounded-lg border border-[var(--carta-border)] bg-white px-2 py-1.5 text-sm text-navy"
+            >
+              {ZONAS_COMERCIALES.map((zona) => {
+                const conteo = zonas?.find((z) => z.zona === zona);
+                return (
+                  <option key={zona} value={zona}>
+                    {zona}
+                    {cargandoZonas && !conteo ? ' (…)' : conteo ? ` (${conteo.conCorreo}/${conteo.total})` : ''}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          {/* El conteo de la zona ELEGIDA, siempre a la vista -- no sólo
+              dentro de la opción del desplegable, que sólo se ve al
+              abrirlo. */}
+          <span className="text-xs text-teal" aria-live="polite">
+            {(() => {
+              const conteoActivo = zonas?.find((z) => z.zona === zonaActiva);
+              if (cargandoZonas && !conteoActivo) return 'Cargando conteo…';
+              if (!conteoActivo) return null;
+              return `${conteoActivo.conCorreo} de ${conteoActivo.total} contactos de esta zona tienen correo.`;
+            })()}
+          </span>
         </div>
       </div>
 

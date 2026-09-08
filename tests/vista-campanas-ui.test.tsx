@@ -157,13 +157,24 @@ describe('VistaCampanas', () => {
     vi.restoreAllMocks();
   });
 
-  it('dibuja las 13 pestañas de zona con su conteo', async () => {
+  it('dibuja las 13 zonas como opciones de un desplegable, con su conteo', async () => {
     mockFetchCampanas();
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
 
-    expect(await screen.findByRole('tab', { name: /GAM Oeste \(28\/30\)/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Guanacaste Interior \(27\/27\)/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^Revisión manual/ })).toBeInTheDocument();
+    const select = screen.getByLabelText(/elegir zona/i);
+    expect(await within(select).findByRole('option', { name: /GAM Oeste \(28\/30\)/ })).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: /Guanacaste Interior \(27\/27\)/ })).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: /^Revisión manual/ })).toBeInTheDocument();
+  });
+
+  it('el conteo de la zona elegida queda visible fuera del desplegable, no sólo dentro de él', async () => {
+    // Pedido explícito: "conservando el conteo de contactos de cada una a
+    // la vista al elegir" -- dentro de un <select> cerrado no se ve nada,
+    // así que tiene que repetirse afuera.
+    mockFetchCampanas();
+    render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+
+    expect(await screen.findByText(/28 de 30 contactos de esta zona tienen correo/i)).toBeInTheDocument();
   });
 
   it('a quien no tiene correo se lo ve pero su casilla está deshabilitada', async () => {
@@ -172,7 +183,7 @@ describe('VistaCampanas', () => {
 
     // Contacto 28 (índice 28, el primero sin correo) está en la página 2 --
     // se navega ahí.
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
     await usuario.click(await screen.findByRole('button', { name: /siguiente/i }));
 
@@ -186,7 +197,7 @@ describe('VistaCampanas', () => {
   it('selección: "esta página" y "toda la zona" dan cantidades DISTINTAS y visibles', async () => {
     mockFetchCampanas();
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
 
     const botonPagina = await screen.findByRole('button', { name: /seleccionar esta página \(20\)/i });
@@ -203,7 +214,7 @@ describe('VistaCampanas', () => {
   it('con "toda la zona" seleccionada, las casillas individuales quedan marcadas y deshabilitadas (no se puede recortar en silencio)', async () => {
     mockFetchCampanas();
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
     await usuario.click(await screen.findByRole('button', { name: /seleccionar toda la zona/i }));
 
@@ -221,7 +232,7 @@ describe('VistaCampanas', () => {
     let cuerpoRecibido: any = null;
     mockFetchCampanas({ onCrear: (c) => (cuerpoRecibido = c) });
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
 
     await usuario.click(await screen.findByRole('button', { name: /seleccionar esta página \(20\)/i }));
@@ -239,7 +250,7 @@ describe('VistaCampanas', () => {
     let cuerpoRecibido: any = null;
     mockFetchCampanas({ onCrear: (c) => (cuerpoRecibido = c) });
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
 
     await usuario.click(await screen.findByRole('button', { name: /seleccionar toda la zona/i }));
@@ -254,7 +265,7 @@ describe('VistaCampanas', () => {
   it('el botón de confirmar queda deshabilitado hasta escribir la palabra exacta', async () => {
     mockFetchCampanas();
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
 
     await usuario.click(await screen.findByRole('button', { name: /seleccionar esta página \(20\)/i }));
@@ -275,7 +286,7 @@ describe('VistaCampanas', () => {
   it('sin seleccionar a nadie, el botón de enviar queda deshabilitado', async () => {
     mockFetchCampanas();
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     expect(screen.getByRole('button', { name: /enviar a 0 destinatarios/i })).toBeDisabled();
   });
 
@@ -287,7 +298,7 @@ describe('VistaCampanas', () => {
       ],
     });
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    await screen.findByRole('tab', { name: /GAM Oeste/ });
+    await screen.findByRole('option', { name: /GAM Oeste/ });
     const usuario = userEvent.setup();
 
     await usuario.click(await screen.findByRole('button', { name: /seleccionar toda la zona/i }));
@@ -326,6 +337,54 @@ describe('VistaCampanas', () => {
     await waitFor(() => {
       expect(screen.getByText(/la campaña terminó de enviarse/i)).toBeInTheDocument();
     });
+  });
+
+  // Pedido expreso del dueño: "cambiar de zona con una selección de
+  // destinatarios ya hecha es una forma fácil de mandarle una campaña a la
+  // zona equivocada". La salida elegida es descartar la selección al
+  // cambiar de zona -- esta prueba lo ancla desde los dos modos posibles
+  // ('manual', con "esta página", y 'zona', con "toda la zona"), y desde
+  // los dos lugares donde la selección se nota: el botón "Enviar a N
+  // destinatarios" y las casillas de la tabla.
+  //
+  // Verificado por mutación (a mano): comentando la línea
+  // `setSeleccion({ modo: 'ninguna' })` dentro de `elegirZona`
+  // (VistaCampanas.tsx) las dos aserciones de "enviar a 0 destinatarios"
+  // de abajo pasan a fallar (el botón se queda leyendo "20"/"28"
+  // destinatarios) -- confirmado y revertido antes de dejar esta prueba en
+  // verde.
+  it('cambiar de zona descarta la selección anterior (ni "esta página" ni "toda la zona" sobreviven)', async () => {
+    mockFetchCampanas();
+    render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    const usuario = userEvent.setup();
+    const select = screen.getByLabelText(/elegir zona/i);
+
+    // Caso 1: selección manual ("esta página").
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    await usuario.click(await screen.findByRole('button', { name: /seleccionar esta página \(20\)/i }));
+    expect(await screen.findByRole('button', { name: /enviar a 20 destinatarios/i })).toBeInTheDocument();
+
+    await usuario.selectOptions(select, 'GAM Centro');
+    expect(await screen.findByRole('button', { name: /enviar a 0 destinatarios/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /enviar a 20 destinatarios/i })).not.toBeInTheDocument();
+    // Sin selección, tampoco debe quedar el botón de "Quitar selección".
+    expect(screen.queryByRole('button', { name: /quitar selección/i })).not.toBeInTheDocument();
+
+    // Caso 2: selección de "toda la zona" -- el modo que además marca y
+    // deshabilita las casillas; si sobreviviera al cambio de zona sería el
+    // más peligroso de los dos (manda a TODOS los contactos con correo).
+    // (El mock de /api/campanas/contactos, `contactosDeZona`, devuelve la
+    // misma forma para cualquier zona -- 28 con correo de 30 -- así que
+    // "toda la zona" vuelve a dar 28 en GAM Centro, igual que en GAM Oeste.)
+    await usuario.click(await screen.findByRole('button', { name: /seleccionar toda la zona \(28\)/i }));
+    expect(await screen.findByRole('button', { name: /enviar a 28 destinatarios/i })).toBeInTheDocument();
+
+    await usuario.selectOptions(select, 'GAM Oeste');
+    expect(await screen.findByRole('button', { name: /enviar a 0 destinatarios/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /enviar a 28 destinatarios/i })).not.toBeInTheDocument();
+    // Y las casillas de la nueva zona no llegan marcadas de arrastre.
+    const casillas = await screen.findAllByRole('checkbox');
+    for (const c of casillas) expect(c).not.toBeChecked();
   });
 
   it('un 401 a mitad de trabajo llama a onSesionInvalida', async () => {
