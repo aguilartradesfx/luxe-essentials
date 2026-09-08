@@ -48,6 +48,20 @@ export type PrefillCotizacion = {
 
 type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones' | 'campanas';
 
+// Rótulo visible de cada sección -- vive acá, fuera del componente, porque
+// tanto la lista de la barra lateral como el rótulo "Sección: …" del modo
+// angosto (ver el comentario grande junto al `<nav>`, más abajo) necesitan
+// el mismo texto para la misma sección, y no hay que arriesgarse a que un
+// cambio futuro actualice uno de los dos lugares y se olvide del otro.
+const ETIQUETAS_SECCION: Record<Pestana, string> = {
+  crear: 'Crear',
+  cotizaciones: 'Cotizaciones',
+  metricas: 'Métricas',
+  equipo: 'Equipo',
+  aprobaciones: 'Aprobaciones',
+  campanas: 'Campañas',
+};
+
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
 // React: solo lo entrega la respuesta de `/api/cotizacion/entrar` (y, desde
 // la ronda de correcciones 1, también `/api/cotizacion/catalogo` cuando la
@@ -124,6 +138,11 @@ export default function Panel() {
   // lo entreguen, igual que `vendedor`.
   const [rol, setRol] = useState<Rol | null>(null);
   const [pestana, setPestana] = useState<Pestana>('crear');
+  // Barra lateral: por debajo de `md` es un menú desplegable en vez de una
+  // columna fija (ver el comentario grande junto al `<nav>`, más abajo, para
+  // el porqué). `false` de entrada -- arranca cerrado, igual que cualquier
+  // menú de este tipo.
+  const [menuSeccionesAbierto, setMenuSeccionesAbierto] = useState(false);
   // Tarea 10 ("Duplicar"): lo que precarga en `VistaCrear`. `VistaListado`
   // no decide nada más — arma el dato y lo manda para acá; `Panel` decide
   // qué hacer con él (cambiar a la pestaña "Crear"). Ronda de correcciones
@@ -203,6 +222,20 @@ export default function Panel() {
       cancelado = true;
     };
   }, []);
+
+  // Menú de secciones (modo angosto): Escape lo cierra, igual que cualquier
+  // desplegable -- sin esto, la única forma de cerrarlo sin mouse sería
+  // tabular hasta encontrar de nuevo el botón que lo abrió. El listener sólo
+  // vive mientras el menú está abierto: no hace falta escuchar Escape en
+  // ningún otro momento.
+  useEffect(() => {
+    if (!menuSeccionesAbierto) return;
+    function alEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') setMenuSeccionesAbierto(false);
+    }
+    document.addEventListener('keydown', alEscape);
+    return () => document.removeEventListener('keydown', alEscape);
+  }, [menuSeccionesAbierto]);
 
   // Cambia el usuario y la clave por una cookie de sesión más un token
   // anti-CSRF (`/api/cotizacion/entrar`, Tarea 6), y de paso trae el
@@ -450,11 +483,40 @@ export default function Panel() {
             )}
           </header>
 
-          {/* Tres pestañas (Tarea 9): solo "Crear" tiene contenido hoy —lo que ya
-              existía en Cotizador.tsx—. "Cotizaciones" y "Métricas" quedan como
-              marcadores; se llenan en las próximas dos tareas.
+          {/* De pestañas horizontales a barra lateral (pedido del dueño).
+              Decisión de ancho angosto -- por qué importa acá especialmente:
+              este panel vive embebido en un iframe de Bralto/GoHighLevel, así
+              que el ancho de ESTE documento es el ancho real disponible, no
+              hay margen "de sobra" que dar por sentado, y suele ser angosto.
+              Una barra lateral FIJA, presente siempre, le resta ancho
+              permanente a la tabla de "Cotizaciones" (que ya tiene su propio
+              desplazamiento lateral -- `min-w-[880px]`, ver VistaListado.tsx):
+              en un iframe angosto eso empeora justo lo que ya estaba
+              ajustado.
 
-              Tarea 6: se suma "Equipo", pero SOLO en esta lista si `rol` es
+              Se consideraron dos salidas para el ancho angosto: (a) recoger
+              la barra a solo íconos, o (b) convertirla en un menú desplegable
+              que no reserva ancho mientras está cerrado. Se eligió (b): con
+              seis secciones y etiquetas de dos palabras ("Cotizaciones",
+              "Aprobaciones", "Campañas"), un set de íconos propio habría
+              hecho falta -- sin librerías nuevas, eso es dibujar y mantener
+              seis símbolos a mano, con el riesgo real de que alguno no se
+              entienda sin el texto al lado (¿cuál ícono es "Equipo" y cuál
+              "Aprobaciones"?). El menú no inventa ningún símbolo: en angosto
+              ocupa una sola fila compacta (el botón de abajo, más el nombre
+              de la sección activa) y sólo se despliega -- ENCIMA del
+              contenido, nunca empujándolo -- cuando se abre; en ancho normal
+              la misma barra queda fija y visible como una columna, sin
+              ningún toggle de por medio.
+
+              El corte entre los dos modos es en `md` (768px), el breakpoint
+              de Tailwind: por debajo, desplegable; de ahí para arriba,
+              columna fija. Como este documento ES el iframe -- no hay un
+              contenedor más angosto por debajo del viewport --, un
+              breakpoint de ancho de VIEWPORT mide exactamente lo que hace
+              falta acá; no hace falta `@container`.
+
+              Tarea 6: "Equipo" sólo se agrega a la lista si `rol` es
               'superadmin' — es decir, sólo se DIBUJA el botón. Esto es
               cosmético, no una protección: quien manipule el estado de React
               de este componente (o llame a las rutas directo) no gana nada,
@@ -464,7 +526,7 @@ export default function Panel() {
               confían en este `rol`, que sale de la cookie y puede estar
               desactualizado hasta 30 días (ver el comentario de `establecerSesion`,
               arriba). Ocultar el botón es sólo para no ofrecerle a un
-              vendedor una pestaña que el servidor le va a rechazar con 403
+              vendedor una sección que el servidor le va a rechazar con 403
               de todas formas.
 
               Fase 5 (descuento con aprobación): "Aprobaciones" se suma con el
@@ -480,96 +542,132 @@ export default function Panel() {
               quien no es superadmin de verdad ahora mismo (la decisión de
               por qué está explicada en app/api/campanas/zonas/route.ts).
               Ocultar el botón es sólo para no ofrecerle a un vendedor una
-              pestaña que el servidor le va a rechazar de todas formas. */}
-          <nav className="mt-4 flex gap-4 border-b border-[var(--carta-border)]" aria-label="Secciones del panel">
-            {(
-              [
-                ['crear', 'Crear'],
-                ['cotizaciones', 'Cotizaciones'],
-                ['metricas', 'Métricas'],
-                ...(rol === 'superadmin'
-                  ? ([
-                      ['equipo', 'Equipo'],
-                      ['aprobaciones', 'Aprobaciones'],
-                      ['campanas', 'Campañas'],
-                    ] as [Pestana, string][])
-                  : []),
-              ] as [Pestana, string][]
-            ).map(([valor, etiqueta]) => (
+              sección que el servidor le va a rechazar de todas formas. */}
+          <div className="relative mt-4 md:flex md:items-start md:gap-6">
+            {/* Sólo por debajo de `md`: el botón que abre/cierra el menú, y
+                el nombre de la sección activa siempre a la vista -- así se
+                sabe en qué sección se está aun con el menú cerrado. */}
+            <div className="mb-3 flex items-center justify-between gap-3 border-b border-[var(--carta-border)] pb-3 md:hidden">
               <button
-                key={valor}
                 type="button"
-                onClick={() => setPestana(valor)}
-                aria-current={pestana === valor}
-                className={`-mb-px border-b-2 px-1 pb-2 text-sm font-medium ${
-                  pestana === valor ? 'border-navy text-navy' : 'border-transparent text-teal hover:text-navy'
-                }`}
+                aria-expanded={menuSeccionesAbierto}
+                aria-controls="panel-secciones-nav"
+                onClick={() => setMenuSeccionesAbierto((v) => !v)}
+                className="flex items-center gap-2 rounded-lg border border-[var(--carta-border)] px-3 py-1.5 text-sm font-medium text-navy hover:bg-[var(--carta-fill)]"
               >
-                {etiqueta}
+                <span aria-hidden="true">☰</span>
+                Secciones
               </button>
-            ))}
-          </nav>
-
-          <div className="mt-6">
-            {/* Ronda de correcciones 1 (hallazgo importante): `VistaCrear`
-                YA NO se desmonta al salir de esta pestaña. Antes vivía
-                detrás de `{pestana === 'crear' && (...)}`, igual que las
-                otras dos — pero esta es la única de las tres que puede
-                tener trabajo del vendedor a medio hacer (cliente tecleado,
-                líneas elegidas) que nada persiste en ningún lado. Con esa
-                pestaña unmontando el componente, saltar a "Cotizaciones" a
-                mirar algo y volver perdía todo, exactamente lo que la Tarea
-                9 evitó para el caso de la sesión vencida — solo que ahí sí
-                se resolvió. Ahora se renderiza siempre (mientras `dentro`
-                sea `true`) y solo se OCULTA con `hidden` cuando no es la
-                pestaña activa: `hidden` es `display: none` nativo, saca el
-                contenido del árbol de accesibilidad y de la tabulación por
-                sí solo, sin necesitar `aria-hidden`/`inert` aparte. Las
-                otras dos pestañas siguen desmontándose: no tienen estado
-                que valga la pena preservar, y así no siguen pidiendo datos
-                de fondo mientras el vendedor está en otra pestaña. */}
-            <div hidden={pestana !== 'crear'}>
-              <VistaCrear
-                skus={skus}
-                obtenerCsrf={obtenerCsrf}
-                onSesionInvalida={onSesionInvalida}
-                plantilla={plantilla}
-                onPlantillaConsumida={onPlantillaConsumida}
-                rol={rol}
-              />
+              <span className="text-xs text-teal">
+                Sección: <span className="font-medium text-navy">{ETIQUETAS_SECCION[pestana]}</span>
+              </span>
             </div>
-            {pestana === 'cotizaciones' && (
-              <VistaListado
-                obtenerCsrf={obtenerCsrf}
-                onSesionInvalida={onSesionInvalida}
-                onDuplicar={onDuplicar}
-                filtroInicial={filtroListadoInicial}
-                onFiltroInicialConsumido={() => setFiltroListadoInicial('')}
+
+            {/* Telón para cerrar el menú al tocar fuera de él -- sólo existe
+                (y sólo importa) por debajo de `md`, mientras está abierto. */}
+            {menuSeccionesAbierto && (
+              <div
+                className="fixed inset-0 z-30 md:hidden"
+                onClick={() => setMenuSeccionesAbierto(false)}
               />
             )}
-            {pestana === 'metricas' && (
-              <VistaMetricas onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />
-            )}
-            {/* Tarea 6: mismo `rol === 'superadmin'` de la pestaña, no sólo
-                `pestana === 'equipo'` — sin este segundo chequeo, un
-                vendedor que estuvo en esta pestaña como superadmin en una
-                sesión previa (mismo tab del navegador, sesión reautenticada
-                con una cuenta distinta luego de "Salir") vería el contenido
-                un instante, aunque las rutas igual lo rechacen con 403 al
-                primer fetch. De nuevo: cosmético, no protección — ver el
-                comentario junto a la pestaña. */}
-            {pestana === 'equipo' && rol === 'superadmin' && (
-              <VistaEquipo obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
-            )}
-            {/* Fase 5: mismo doble chequeo que "Equipo", mismo motivo -- ver
-                el comentario junto a la pestaña. */}
-            {pestana === 'aprobaciones' && rol === 'superadmin' && (
-              <VistaAprobaciones obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
-            )}
-            {/* Mismo doble chequeo que "Equipo"/"Aprobaciones", mismo motivo. */}
-            {pestana === 'campanas' && rol === 'superadmin' && (
-              <VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
-            )}
+
+            <nav
+              id="panel-secciones-nav"
+              aria-label="Secciones del panel"
+              className={`${menuSeccionesAbierto ? 'flex' : 'hidden'} absolute left-0 top-full z-40 mt-1 w-56 flex-col gap-1 rounded-xl border border-[var(--carta-border)] bg-white p-2 shadow-lg md:static md:z-auto md:mt-0 md:flex md:w-44 md:shrink-0 md:flex-col md:border-0 md:bg-transparent md:p-0 md:shadow-none`}
+            >
+              <ul className="flex flex-col gap-1">
+                {(
+                  [
+                    'crear',
+                    'cotizaciones',
+                    'metricas',
+                    ...(rol === 'superadmin' ? (['equipo', 'aprobaciones', 'campanas'] as Pestana[]) : []),
+                  ] as Pestana[]
+                ).map((valor) => (
+                  <li key={valor}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPestana(valor);
+                        setMenuSeccionesAbierto(false);
+                      }}
+                      aria-current={pestana === valor}
+                      className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-medium ${
+                        pestana === valor
+                          ? 'bg-navy text-beige'
+                          : 'text-teal hover:bg-[var(--carta-fill)] hover:text-navy'
+                      }`}
+                    >
+                      {ETIQUETAS_SECCION[valor]}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+
+            <div className="mt-6 md:mt-0 md:min-w-0 md:flex-1">
+              {/* Ronda de correcciones 1 (hallazgo importante): `VistaCrear`
+                  YA NO se desmonta al salir de esta pestaña. Antes vivía
+                  detrás de `{pestana === 'crear' && (...)}`, igual que las
+                  otras dos — pero esta es la única de las tres que puede
+                  tener trabajo del vendedor a medio hacer (cliente tecleado,
+                  líneas elegidas) que nada persiste en ningún lado. Con esa
+                  pestaña unmontando el componente, saltar a "Cotizaciones" a
+                  mirar algo y volver perdía todo, exactamente lo que la Tarea
+                  9 evitó para el caso de la sesión vencida — solo que ahí sí
+                  se resolvió. Ahora se renderiza siempre (mientras `dentro`
+                  sea `true`) y solo se OCULTA con `hidden` cuando no es la
+                  pestaña activa: `hidden` es `display: none` nativo, saca el
+                  contenido del árbol de accesibilidad y de la tabulación por
+                  sí solo, sin necesitar `aria-hidden`/`inert` aparte. Las
+                  otras dos pestañas siguen desmontándose: no tienen estado
+                  que valga la pena preservar, y así no siguen pidiendo datos
+                  de fondo mientras el vendedor está en otra pestaña. */}
+              <div hidden={pestana !== 'crear'}>
+                <VistaCrear
+                  skus={skus}
+                  obtenerCsrf={obtenerCsrf}
+                  onSesionInvalida={onSesionInvalida}
+                  plantilla={plantilla}
+                  onPlantillaConsumida={onPlantillaConsumida}
+                  rol={rol}
+                />
+              </div>
+              {pestana === 'cotizaciones' && (
+                <VistaListado
+                  obtenerCsrf={obtenerCsrf}
+                  onSesionInvalida={onSesionInvalida}
+                  onDuplicar={onDuplicar}
+                  filtroInicial={filtroListadoInicial}
+                  onFiltroInicialConsumido={() => setFiltroListadoInicial('')}
+                />
+              )}
+              {pestana === 'metricas' && (
+                <VistaMetricas onSesionInvalida={onSesionInvalida} onVerFallidas={onVerFallidas} />
+              )}
+              {/* Tarea 6: mismo `rol === 'superadmin'` de la pestaña, no sólo
+                  `pestana === 'equipo'` — sin este segundo chequeo, un
+                  vendedor que estuvo en esta pestaña como superadmin en una
+                  sesión previa (mismo tab del navegador, sesión reautenticada
+                  con una cuenta distinta luego de "Salir") vería el contenido
+                  un instante, aunque las rutas igual lo rechacen con 403 al
+                  primer fetch. De nuevo: cosmético, no protección — ver el
+                  comentario junto a la pestaña. */}
+              {pestana === 'equipo' && rol === 'superadmin' && (
+                <VistaEquipo obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+              )}
+              {/* Fase 5: mismo doble chequeo que "Equipo", mismo motivo -- ver
+                  el comentario junto a la pestaña. */}
+              {pestana === 'aprobaciones' && rol === 'superadmin' && (
+                <VistaAprobaciones obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+              )}
+              {/* Mismo doble chequeo que "Equipo"/"Aprobaciones", mismo motivo. */}
+              {pestana === 'campanas' && rol === 'superadmin' && (
+                <VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+              )}
+            </div>
           </div>
         </main>
       )}
