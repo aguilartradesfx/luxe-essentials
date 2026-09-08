@@ -25,6 +25,24 @@ campaña.
 esa plantilla dice explícitamente que no se quiere insistir, y un botón justo después
 contradiría ese mensaje. Ver el comentario en el propio archivo.
 
+## Imagen de producto
+
+`inicial.html`, `seguimiento_1.html` y `seguimiento_2.html` llevan también, justo antes de los
+botones, una imagen de producto elegida para reforzar el texto de esa plantilla puntual (no
+decorativa). `seguimiento_3.html` tampoco lleva imagen — mismo motivo que no lleva botón.
+
+Las imágenes son JPEG, no WebP como las del sitio (`public/images/*.webp`): Outlook para
+Windows no pinta WebP — no se ve una imagen rota, se ve un hueco — y los destinatarios de estas
+campañas son sobre todo empresas, justo donde más Outlook hay. Viven en
+`public/images/correo/<id>.jpg`, las genera `scripts/imagenes-correo.mjs` (mismo patrón que
+`scripts/optimize-images.mjs`, a partir del `.webp` ya optimizado del sitio, no del original) y
+`.vercelignore` tiene una excepción explícita para que ese `*.jpg` sí suba al despliegue pese a
+la regla genérica que bloquea el resto de los `.jpg` del repo.
+
+Cada `<img>` declara `width`/`height` como atributo (no sólo en el estilo, para que el espacio
+quede reservado aunque el cliente bloquee imágenes), un `alt` específico, y la celda que lo
+envuelve tiene un `bgcolor` de respaldo. Nunca imagen de fondo — Outlook la ignora.
+
 Si agregás o cambiás algo en este bloque: la firma de estilo que usa `lib/campanas/edicion.ts`
 para reconocer un párrafo editable es `<p style="margin:0 0 Npx 0;font-family:Arial,Helvetica,
 sans-serif;font-size:16px;line-height:1.65;color:#26292E;">` — no la reutilices en un `<td>` ni

@@ -30,6 +30,14 @@ propuesta-hero/
 *.pdf
 *.jpg
 
+# --- Excepcion al *.jpg de arriba: los JPEG de producto que usan las
+# plantillas de campaña (lib/campanas/plantillas/, scripts/imagenes-correo.mjs).
+# Van en JPEG -- no WebP -- porque Outlook para Windows no pinta WebP (se ve
+# un hueco, no una imagen rota), y las plantillas los cargan por URL absoluta
+# a este mismo dominio: si no suben al despliegue, el correo ya enviado a
+# clientes reales queda con huecos donde debería haber producto.
+!public/images/correo/*.jpg
+
 # --- Andamiaje de desarrollo: no forma parte del sitio. ---
 .superpowers/
 docs/
