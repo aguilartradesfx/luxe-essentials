@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import { PantallaClave } from './PantallaClave';
 import { VistaAprobaciones } from './VistaAprobaciones';
+import { VistaCampanas } from './VistaCampanas';
 import { VistaCrear } from './VistaCrear';
 import { VistaEquipo } from './VistaEquipo';
 import { VistaListado } from './VistaListado';
@@ -45,7 +46,7 @@ export type PrefillCotizacion = {
   contactId?: string;
 };
 
-type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones';
+type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones' | 'campanas';
 
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
 // React: solo lo entrega la respuesta de `/api/cotizacion/entrar` (y, desde
@@ -471,7 +472,15 @@ export default function Panel() {
               de app/api/cotizacion/{pendientes,aprobar,rechazar}/route.ts
               releen la fila de quien pide con `autorizarSuperadmin`, igual
               que /api/equipo/*, y devuelven 403 a quien no es superadmin de
-              verdad ahora mismo. */}
+              verdad ahora mismo.
+
+              Bandeja de campañas (parte 2): "Campañas" se suma con el MISMO
+              criterio otra vez -- las siete rutas de app/api/campanas/*
+              releen la fila con `autorizarSuperadmin` y devuelven 403 a
+              quien no es superadmin de verdad ahora mismo (la decisión de
+              por qué está explicada en app/api/campanas/zonas/route.ts).
+              Ocultar el botón es sólo para no ofrecerle a un vendedor una
+              pestaña que el servidor le va a rechazar de todas formas. */}
           <nav className="mt-4 flex gap-4 border-b border-[var(--carta-border)]" aria-label="Secciones del panel">
             {(
               [
@@ -482,6 +491,7 @@ export default function Panel() {
                   ? ([
                       ['equipo', 'Equipo'],
                       ['aprobaciones', 'Aprobaciones'],
+                      ['campanas', 'Campañas'],
                     ] as [Pestana, string][])
                   : []),
               ] as [Pestana, string][]
@@ -555,6 +565,10 @@ export default function Panel() {
                 el comentario junto a la pestaña. */}
             {pestana === 'aprobaciones' && rol === 'superadmin' && (
               <VistaAprobaciones obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+            )}
+            {/* Mismo doble chequeo que "Equipo"/"Aprobaciones", mismo motivo. */}
+            {pestana === 'campanas' && rol === 'superadmin' && (
+              <VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
             )}
           </div>
         </main>

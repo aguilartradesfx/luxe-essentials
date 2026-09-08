@@ -50,8 +50,8 @@ nombres sin valores; `.env.local` es la copia local y no se versiona.
 | `LUXE_TALLER_CLAVE` | Clave del banco de pruebas `/q7m4` | La que se le da al equipo |
 | `LUXE_SESION_SECRETO` | Firma la cookie de sesión del **panel de cotizaciones** | `openssl rand -hex 32` |
 | `LUXE_BAJA_SECRETO` | Firma el enlace de baja de las campañas de correo (`{{unsubscribe_url}}` en las plantillas) | `openssl rand -hex 32` |
-| `RESEND_API_KEY` | Enviar la cotización y las invitaciones del equipo por correo | De la consola de Resend |
-| `LUXE_CORREO_REMITENTE` | Remitente de esos dos correos | `Luxe Essentials <cotizaciones@luxeessentialscr.com>` |
+| `RESEND_API_KEY` | Enviar la cotización, las invitaciones del equipo y las campañas por correo | De la consola de Resend |
+| `LUXE_CORREO_REMITENTE` | Remitente de esos tres correos | `Luxe Essentials <cotizaciones@luxeessentialscr.com>` |
 | `LUXE_CONTACTO_TELEFONO` | Pie del PDF de cotización | `+506 6140 2511` |
 | `LUXE_CONTACTO_CORREO` | Ídem | `info@luxeessentialscr.com` |
 | `LUXE_CONTACTO_SITIO` | Ídem | `luxeessentialscr.com` |
