@@ -57,14 +57,35 @@ export async function dentroDelLimite(db: Db, ip: string, ahora: Date = new Date
   return data === true;
 }
 
-// La IP tal como la ve Vercel: `x-forwarded-for` lleva, de izquierda a
-// derecha, el cliente original y despues cada proxy que reenvió la
-// peticion -- el primer valor es el que importa. Sin la cabecera (cliente
-// que no la manda, entorno local) se agrupan todas esas peticiones bajo
-// un mismo cubo fijo en vez de saltarse el limite -- fail-closed para el
-// caso raro, no fail-open.
+// De que cabecera sale la IP, y por que el orden importa.
+//
+// `x-forwarded-for` es la cabecera clasica, pero la manda el CLIENTE y
+// los proxies le van agregando valores por la izquierda. Si Vercel le
+// AGREGA la IP real en vez de reemplazar la cabecera entera, entonces
+// tomar el primer valor es tomar exactamente lo que el atacante escribio:
+// manda `x-forwarded-for: <IP al azar>` en cada peticion, cae en un cubo
+// distinto cada vez, y el limite no limita nada. Es la forma clasica de
+// saltarse un limite por IP.
+//
+// Por eso se piden primero las dos cabeceras que pone la propia red de
+// Vercel y que NO se pueden falsificar desde afuera -- Vercel descarta
+// las `x-vercel-*` que vengan del cliente antes de que la funcion las
+// vea. `x-forwarded-for` queda de ultimo recurso, para que esto tambien
+// funcione detras de otro proxy o en local.
+//
+// No se comprobo cual de las tres manda Vercel en esta cuenta: el orden
+// esta puesto para que la respuesta correcta gane sin importar cual sea.
 export function ipDeLaPeticion(request: Request): string {
-  const crudo = request.headers.get('x-forwarded-for');
-  if (!crudo) return 'ip-desconocida';
-  return crudo.split(',')[0]!.trim() || 'ip-desconocida';
+  for (const cabecera of ['x-vercel-forwarded-for', 'x-real-ip', 'x-forwarded-for']) {
+    const crudo = request.headers.get(cabecera);
+    if (!crudo) continue;
+    // Cualquiera de las tres puede traer una lista; el primer valor es el
+    // cliente original y los siguientes son los proxies que reenviaron.
+    const primera = crudo.split(',')[0]!.trim();
+    if (primera) return primera;
+  }
+  // Sin ninguna de las tres (cliente que no las manda, entorno local) se
+  // agrupan todas esas peticiones bajo un mismo cubo fijo en vez de
+  // saltarse el limite -- fail-closed para el caso raro, no fail-open.
+  return 'ip-desconocida';
 }

@@ -119,4 +119,41 @@ describe('ipDeLaPeticion', () => {
     const req = new Request('http://da-igual');
     expect(ipDeLaPeticion(req)).toBe('ip-desconocida');
   });
+
+  // El punto entero de este orden: `x-forwarded-for` la escribe el cliente.
+  // Si se leyera primero, un script que manda una IP inventada distinta en
+  // cada petición cae en un cubo distinto cada vez y el límite no limita
+  // nada. Las dos cabeceras `x-vercel-*`/`x-real-ip` las pone la red de
+  // Vercel y no se pueden falsificar desde afuera.
+  it('prefiere x-vercel-forwarded-for a un x-forwarded-for falsificado', () => {
+    const req = new Request('http://da-igual', {
+      headers: {
+        'x-forwarded-for': '198.51.100.99',
+        'x-vercel-forwarded-for': '203.0.113.7',
+      },
+    });
+    expect(ipDeLaPeticion(req)).toBe('203.0.113.7');
+  });
+
+  it('prefiere x-real-ip a un x-forwarded-for falsificado', () => {
+    const req = new Request('http://da-igual', {
+      headers: {
+        'x-forwarded-for': '198.51.100.99',
+        'x-real-ip': '203.0.113.7',
+      },
+    });
+    expect(ipDeLaPeticion(req)).toBe('203.0.113.7');
+  });
+
+  it('cae a x-forwarded-for cuando Vercel no puso ninguna de las suyas', () => {
+    const req = new Request('http://da-igual', { headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' } });
+    expect(ipDeLaPeticion(req)).toBe('203.0.113.7');
+  });
+
+  it('salta una cabecera vacía en vez de devolver cadena vacía como IP', () => {
+    const req = new Request('http://da-igual', {
+      headers: { 'x-vercel-forwarded-for': '   ', 'x-real-ip': '203.0.113.7' },
+    });
+    expect(ipDeLaPeticion(req)).toBe('203.0.113.7');
+  });
 });
