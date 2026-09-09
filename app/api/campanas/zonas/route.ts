@@ -6,6 +6,14 @@ import { ZONAS_COMERCIALES, contactosPorZona, conCorreo } from '@/lib/campanas/c
 
 export const runtime = 'nodejs';
 
+// Menor m4 (revisión final): lanza trece paginaciones en paralelo contra
+// GoHighLevel -- unas 47 peticiones HTTP cada vez que alguien abre la
+// pantalla de campañas. Sin `maxDuration` se corta con el límite por
+// defecto y la pantalla no dibuja NINGUNA zona, con lo que la bandeja
+// entera parece rota. Mismo valor y mismo criterio que el resto de las
+// rutas pesadas del proyecto.
+export const maxDuration = 60;
+
 // Bandeja de campañas (parte 2): las trece pestañas de zona, con su
 // conteo. Toda `app/api/campanas/*` -- ésta incluida -- exige superadmin de
 // verdad, releído de la base con `autorizarSuperadmin`, con el MISMO

@@ -16,6 +16,16 @@ import {
 
 export const runtime = 'nodejs';
 
+// Menor m4 (revisión final): ésta es, junto con `/zonas`, la ruta pesada de
+// `app/api/campanas/*` que quedaba sin declarar `maxDuration` -- mismo
+// criterio que `app/api/cotizacion/route.ts` y que `enviar`. Pagina una zona
+// entera contra GoHighLevel, lee la tabla de bajas e inserta hasta 3.340
+// filas de destinatarios. Cortada a mitad del upsert queda una campaña con
+// la lista INCOMPLETA y el navegador sin `campanaId`: se recupera desde
+// Historial, pero mandaría a menos gente de la que quien la creó cree, sin
+// que nada en pantalla lo diga.
+export const maxDuration = 60;
+
 // `seleccion` es el candado central de esta ruta -- ver el comentario
 // grande, más abajo, sobre por qué NUNCA se confía en la lista de
 // destinatarios que manda el navegador.
