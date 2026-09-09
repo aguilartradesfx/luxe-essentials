@@ -278,6 +278,50 @@ describe('listarPendientes', () => {
       expect(r.cotizaciones.map((c) => c.id)).toEqual(['vieja', 'nueva']);
     }
   });
+
+  // I3 (revision-final-2.md): el aviso que le permite al superadmin
+  // enterarse, ANTES de aprobar, de que la lista de precios cambió desde
+  // que se pidió el descuento -- para poder decidir con esa información
+  // (aprobar con el precio congelado, tal como se pidió, o rechazar para
+  // que el vendedor la rehaga contra la lista nueva).
+  describe('precioListaDesactualizado', () => {
+    it('es false cuando el precio congelado en la fila coincide con el catálogo de hoy', async () => {
+      const r = await listarPendientes(supabaseAdmin());
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cotizaciones[0].precioListaDesactualizado).toBe(false);
+    });
+
+    it('es true cuando el precio congelado ya no coincide con el catálogo de hoy (se regeneró mientras esperaba)', async () => {
+      const skuReal = CATALOGO.find((s) => s.id === 'set-600-king')!;
+      (cotizaciones[0].lineas[0] as Record<string, unknown>).precioLista = skuReal.precioLista + 1000;
+      const r = await listarPendientes(supabaseAdmin());
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cotizaciones[0].precioListaDesactualizado).toBe(true);
+    });
+
+    // Verificación por mutación: sin esta prueba, invertir la condición
+    // (`===` en vez de `!==`) en `precioListaDesactualizado` pasaría la
+    // prueba de arriba igual de "roja a verde" por casualidad, pero
+    // ninguna de las dos por sí sola prueba las DOS ramas.
+    it('un SKU descontinuado (ya no existe en el catálogo de hoy) también cuenta como desactualizado', async () => {
+      (cotizaciones[0].lineas[0] as Record<string, unknown>).skuId = 'sku-fantasma-descontinuado';
+      const r = await listarPendientes(supabaseAdmin());
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cotizaciones[0].precioListaDesactualizado).toBe(true);
+    });
+
+    it('con varias líneas, basta con que UNA tenga el precio desactualizado', async () => {
+      cotizaciones[0] = filaPendienteBase({
+        lineas: [
+          ...(cotizaciones[0].lineas as Array<Record<string, unknown>>),
+          { skuId: 'sku-fantasma-otro', cantidad: 1, precioLista: 999, grupo: 'uniformes', nombre: 'Fantasma' },
+        ],
+      });
+      const r = await listarPendientes(supabaseAdmin());
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cotizaciones[0].precioListaDesactualizado).toBe(true);
+    });
+  });
 });
 
 describe('aprobar', () => {
@@ -353,6 +397,55 @@ describe('aprobar', () => {
     const esperado12 = cotizacionConDescuento(12);
     expect(totalEnPdf).toBe(esperado12.total);
     expect(fila.totales.total).not.toBe(cotizacionConDescuento(20).total);
+  });
+
+  // I3 (revision-final-2.md), el hallazgo central de esta ronda: antes de
+  // este arreglo, `aprobar()` recalculaba con `CATALOGO` -- el catálogo de
+  // HOY -- así que si la lista de precios se regeneraba y desplegaba
+  // mientras la solicitud esperaba (días, no segundos: la forma normal de
+  // este flujo), el PDF salía con precios que el superadmin nunca vio en
+  // pantalla. Esta prueba simula justo eso: el precio que quedó CONGELADO
+  // en `lineas` (el que el superadmin miró) es distinto del que tiene
+  // `CATALOGO` ahora mismo -- y aprobar "tal cual", SIN tocar el
+  // porcentaje, tiene que usar el congelado.
+  //
+  // Verificación por mutación: si alguien vuelve a pasar `CATALOGO` en vez
+  // de `catalogoCongelado(fila.lineas)` dentro de `aprobar()`, el total que
+  // queda en la fila (y el que recibe `crearEstimate`/`renderizarCotizacion`)
+  // pasa a coincidir con `cotizacionConDescuento(20)` (calculada con el
+  // catálogo de HOY) en vez de con `cotizacionConPrecioViejo` -- las dos
+  // aserciones de abajo, que anclan contra el valor viejo Y contra que NO
+  // sea el de hoy, se ponen en rojo.
+  it('I3: aprueba "tal cual" con el precio CONGELADO en la fila, no con el catálogo de hoy (que cambió mientras esperaba)', async () => {
+    const skuReal = CATALOGO.find((s) => s.id === 'set-600-king')!;
+    const catalogoViejo = CATALOGO.map((s) => (s.id === skuReal.id ? { ...s, precioLista: s.precioLista + 1000 } : s));
+    const cotizacionConPrecioViejo = calcular(ENTRADAS_BASE, catalogoViejo, { descuentoPersonalizado: { general: 20 } });
+
+    cotizaciones[0].lineas = cotizacionConPrecioViejo.lineas as unknown as Array<Record<string, unknown>>;
+    cotizaciones[0].totales = {
+      subtotal: cotizacionConPrecioViejo.subtotal,
+      ahorro: cotizacionConPrecioViejo.ahorro,
+      tasaIva: cotizacionConPrecioViejo.tasaIva,
+      iva: cotizacionConPrecioViejo.iva,
+      total: cotizacionConPrecioViejo.total,
+      bordadoEspecial: cotizacionConPrecioViejo.bordadoEspecial,
+    };
+
+    const r = await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano' });
+    expect(r).toMatchObject({ ok: true, estadoFinal: 'enviada', cambioPorcentaje: false });
+
+    const fila = cotizaciones[0];
+    expect(fila.totales.total).toBe(cotizacionConPrecioViejo.total);
+    // Nunca el de hoy -- si `aprobar()` hubiera usado `CATALOGO`, éste sería
+    // el resultado (precio de hoy, 1000 menos por unidad que el congelado).
+    expect(fila.totales.total).not.toBe(cotizacionConDescuento(20).total);
+
+    // Y el PDF/Estimate que de verdad salió al hotel coincide con la fila
+    // -- ninguno de los dos "vio" el precio de hoy.
+    const [paramsPdf] = vi.mocked(renderizarCotizacion).mock.calls[0];
+    expect(paramsPdf.cotizacion.total).toBe(cotizacionConPrecioViejo.total);
+    const [paramsEstimate] = vi.mocked(crearEstimate).mock.calls[0];
+    expect(paramsEstimate.cotizacion.total).toBe(cotizacionConPrecioViejo.total);
   });
 
   // El otro lado del mismo hallazgo: si el correo falla (pero el PDF y la

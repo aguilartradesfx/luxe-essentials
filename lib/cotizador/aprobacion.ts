@@ -13,7 +13,7 @@ import { CATALOGO } from '@/lib/cotizador/catalogo';
 import { enviarCotizacionAlHotel } from '@/lib/cotizador/enviar';
 import { enviarSolicitudAprobacion, enviarResolucionAprobacion } from '@/lib/cotizador/correo-aprobacion';
 import type { DepsCorreo, ResultadoCorreo } from '@/lib/cotizador/correo';
-import type { DescuentoPersonalizado } from '@/lib/cotizador/tipos';
+import type { DescuentoPersonalizado, GrupoDescuento, Sku } from '@/lib/cotizador/tipos';
 
 // Mismo tipo laxo que `Db` en lib/cotizador/equipo.ts: permite probar la
 // lógica sin un cliente real de Supabase. No necesita `rpc` -- a diferencia
@@ -64,6 +64,63 @@ export function descuentosIguales(a: DescuentoPersonalizado, b: DescuentoPersona
   return clavesA.every((clave, i) => clave === clavesB[i] && fa[clave] === fb[clave]);
 }
 
+// I3 (revision-final-2.md): antes bastaba `skuId`/`cantidad` porque
+// `aprobar()` recalculaba contra `CATALOGO` (el catálogo de HOY). Ahora la
+// fila es la ÚNICA fuente del precio (ver `catalogoCongelado`, más abajo),
+// así que esta línea tiene que llevar todo lo que `calcular`
+// (lib/cotizador/calcular.ts) ya guardó en el insert -- las mismas piezas
+// de `Sku` de las que depende el cálculo: `precioLista`, `grupo`, `nombre`
+// y `contenido`. No `familia`/`linea`: `calcular` nunca los lee, y
+// `LineaCalculada` (lo que de verdad queda en la columna) tampoco los trae.
+type LineaFilaGuardada = {
+  skuId: string;
+  cantidad: number;
+  precioLista: number;
+  grupo: GrupoDescuento;
+  nombre: string;
+  contenido?: string[];
+};
+
+// I3 (revision-final-2.md): reconstruye el catálogo tal como estaba cuando
+// se guardó la fila -- el mismo precio que el superadmin miró en la
+// tarjeta de /pendientes -- a partir de lo que YA quedó escrito en
+// `lineas`. Nunca contra `CATALOGO` (el de HOY): la lista de precios puede
+// regenerarse y desplegarse en los días que una solicitud pasa esperando,
+// y `aprobar()` no puede dejar que ese cambio se cuele en silencio en un
+// PDF que el superadmin nunca vio.
+//
+// `linea`/`familia` van con un valor fijo -- no participan del cálculo
+// (`calcular` sólo lee `id`, `grupo`, `precioLista`, `nombre`, `contenido`)
+// así que alcanza con satisfacer el tipo `Sku`; no se filtran a ningún
+// lado, porque `LineaCalculada` (lo que `calcular` devuelve) no los lleva.
+function catalogoCongelado(lineas: LineaFilaGuardada[]): Sku[] {
+  return lineas.map((l) => ({
+    id: l.skuId,
+    linea: 'uniformes',
+    grupo: l.grupo,
+    familia: '',
+    nombre: l.nombre,
+    precioLista: l.precioLista,
+    contenido: l.contenido,
+  }));
+}
+
+// I3 (revision-final-2.md): lo que le avisa al superadmin, en la tarjeta,
+// que el precio que está mirando ya no es el de hoy -- antes de que
+// decida. `aprobar()` va a usar SIEMPRE el precio congelado en la fila (ver
+// `catalogoCongelado`), así que esto no cambia lo que se manda al hotel;
+// sólo hace visible que la lista de precios cambió, para que el superadmin
+// pueda decidir con esa información -- aprobar con el precio viejo, tal
+// como se pidió, o rechazar la solicitud para que el vendedor la rehaga
+// contra la lista nueva. Un SKU que ya no existe en el catálogo de hoy
+// (se descontinuó) también cuenta como "desactualizado": no hay ningún
+// precio vigente con el que compararlo, y eso es justo la clase de cambio
+// que el superadmin necesita ver.
+function precioListaDesactualizado(lineas: LineaFilaGuardada[]): boolean {
+  const vigentePorId = new Map(CATALOGO.map((s) => [s.id, s.precioLista]));
+  return lineas.some((l) => vigentePorId.get(l.skuId) !== l.precioLista);
+}
+
 // La fila tal como la necesita este módulo -- ni la forma completa de la
 // tabla (`vendedor`, `pdf_ruta`, etc. no hacen falta acá) ni la recortada de
 // /listado (que a propósito no trae `lineas`, y acá sí hacen falta para
@@ -80,7 +137,7 @@ type FilaPendiente = {
   estado: string;
   numero: string;
   cliente: ClienteCotizacion;
-  lineas: Array<{ skuId: string; cantidad: number }>;
+  lineas: LineaFilaGuardada[];
   totales: { subtotal: number; ahorro: number; tasaIva: number; iva: number; total: number; bordadoEspecial: boolean };
   descuento_personalizado: DescuentoPersonalizado;
   solicitado_por: string | null;
@@ -97,7 +154,7 @@ export type FilaListado = {
   numero: string;
   created_at: string;
   cliente: ClienteCotizacion;
-  lineas: Array<{ skuId: string; cantidad: number }>;
+  lineas: LineaFilaGuardada[];
   totales: { total: number; subtotal: number; iva: number; tasaIva: number; bordadoEspecial: boolean };
   descuento_personalizado: DescuentoPersonalizado;
   solicitado_por: string | null;
@@ -105,6 +162,11 @@ export type FilaListado = {
   contact_id: string | null;
   reemplaza_a: string | null;
   reemplaza_a_numero: string | null;
+  // I3 (revision-final-2.md): true cuando algún `precioLista` congelado en
+  // `lineas` ya no coincide con el del catálogo de hoy (o el SKU se
+  // descontinuó). Calculado en `listarPendientes`, no acá -- ver
+  // `precioListaDesactualizado`.
+  precioListaDesactualizado: boolean;
 };
 
 // La cola completa de lo que espera un superadmin -- todas las filas en
@@ -121,7 +183,17 @@ export async function listarPendientes(
     .order('created_at', { ascending: true });
 
   if (error) return { ok: false, error: error.message };
-  return { ok: true, cotizaciones: (data ?? []) as FilaListado[] };
+
+  // I3 (revision-final-2.md): se calcula acá, no en `aprobar()` -- el
+  // superadmin tiene que verlo ANTES de decidir, en la tarjeta de
+  // /pendientes, no enterarse después de que ya aprobó.
+  const filas = (data ?? []) as Array<Omit<FilaListado, 'precioListaDesactualizado'>>;
+  const cotizaciones: FilaListado[] = filas.map((f) => ({
+    ...f,
+    precioListaDesactualizado: precioListaDesactualizado(f.lineas),
+  }));
+
+  return { ok: true, cotizaciones };
 }
 
 // Busca el correo de una persona del equipo por su NOMBRE -- el mismo dato
@@ -263,11 +335,22 @@ export async function aprobar(
   const descuentoFinal = params.nuevoDescuento ?? fila.descuento_personalizado;
   const cambioPorcentaje = !descuentosIguales(descuentoFinal, fila.descuento_personalizado);
 
+  // I3 (revision-final-2.md): `catalogoCongelado(fila.lineas)`, NUNCA
+  // `CATALOGO` -- ver el comentario grande junto a esa función. Antes de
+  // este arreglo, acá iba `CATALOGO` (el catálogo de HOY): si la lista de
+  // precios se regeneraba y desplegaba mientras la solicitud esperaba
+  // (días, no segundos -- el uso normal de este flujo), el PDF y el
+  // Estimate de GoHighLevel salían con precios que el superadmin nunca vio
+  // en la tarjeta que aprobó, y como el PORCENTAJE no había cambiado, el
+  // correo de resolución igual decía "se aprobó tal cual lo pediste" --
+  // nadie se enteraba. Ahora el precio que ve el superadmin en /pendientes
+  // (`fila.totales.total`, calculado con estos mismos `lineas` en el
+  // insert) es el mismo que sale al hotel, cambie el porcentaje o no.
   let cotizacion;
   try {
     cotizacion = calcular(
       fila.lineas.map((l) => ({ skuId: l.skuId, cantidad: l.cantidad })),
-      CATALOGO,
+      catalogoCongelado(fila.lineas),
       {
         tasaIva: fila.totales.tasaIva,
         bordadoEspecial: fila.totales.bordadoEspecial,

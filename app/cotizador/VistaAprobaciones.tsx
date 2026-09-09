@@ -33,6 +33,13 @@ type FilaPendiente = {
   totales: { total?: number; tasaIva?: number; bordadoEspecial?: boolean };
   descuento_personalizado: DescuentoPersonalizado;
   solicitado_por: string | null;
+  // I3 (revision-final-2.md): true cuando algún precio de la fila ya no
+  // coincide con el catálogo de hoy -- `aprobar()` va a usar SIEMPRE el
+  // precio congelado acá (nunca el de hoy), así que esto no cambia lo que
+  // se manda al hotel; sólo avisa ANTES de que el superadmin decida, para
+  // que pueda aprobar sabiendo que el precio es el viejo, o rechazar para
+  // que el vendedor la rehaga contra la lista nueva.
+  precioListaDesactualizado: boolean;
 };
 
 type Mensaje = { tipo: 'ok' | 'error'; texto: string };
@@ -427,6 +434,33 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
                 <p className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-800">
                   Descuento pedido: {formatearDescuentoPersonalizado(fila.descuento_personalizado)}
                 </p>
+
+                {/* I3 (revision-final-2.md): la lista de precios pudo
+                    regenerarse y desplegarse mientras esta solicitud
+                    esperaba -- días, no segundos, es lo normal acá. Aprobar
+                    (con o sin cambiar el porcentaje) va a usar SIEMPRE el
+                    precio que se ve arriba, congelado desde que se pidió --
+                    nunca el de hoy. Este aviso es lo único que le permite al
+                    superadmin enterarse de que la lista cambió ANTES de
+                    decidir: aprobar con el precio viejo tal cual, o rechazar
+                    para que el vendedor la rehaga contra la lista nueva.
+                    Sin `role="alert"` a propósito, igual que el aviso de
+                    "descuento pedido" de arriba: éste es persistente (dura
+                    tanto como la fila siga pendiente), no una reacción a un
+                    clic -- los otros tres `role="alert"` de esta pantalla
+                    (avisoGlobal, el mensaje por fila, y "vas a aprobar X% en
+                    vez de Y%") sí lo son, y varias pruebas usan
+                    `getByRole('alert')` sin scope esperando encontrar uno
+                    solo. */}
+                {fila.precioListaDesactualizado && (
+                  <p
+                    data-testid={`precio-desactualizado-${fila.id}`}
+                    className="mt-2 rounded-lg bg-orange-50 px-3 py-2 text-xs font-medium text-orange-800"
+                  >
+                    La lista de precios cambió desde que se pidió este descuento. Aprobar (tal cual o con
+                    otro porcentaje) va a usar el precio de arriba, el de cuando se pidió -- no el de hoy.
+                  </p>
+                )}
 
                 {!editando && !rechazando && (
                   <div className="mt-3 flex flex-wrap gap-2">

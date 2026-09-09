@@ -205,6 +205,46 @@ describe('VistaAprobaciones', () => {
     expect(screen.getByText(/descuento pedido: toallas 10%, batas 5%/i)).toBeInTheDocument();
   });
 
+  // I3 (revision-final-2.md): la tarjeta tiene que avisar, ANTES de que el
+  // superadmin decida, cuando el precio congelado en la fila ya no coincide
+  // con el catálogo de hoy -- el servidor calcula `precioListaDesactualizado`
+  // (lib/cotizador/aprobacion.ts), esta pantalla sólo lo pinta.
+  it('avisa cuando la lista de precios cambió desde que se pidió el descuento (precioListaDesactualizado)', async () => {
+    mockFetch({ pendientes: [{ ...FILA_GENERAL, precioListaDesactualizado: true }] });
+    renderVista();
+
+    expect(await screen.findByText(/ana pérez/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/la lista de precios cambió desde que se pidió este descuento/i),
+    ).toBeInTheDocument();
+  });
+
+  // El otro lado: sin el aviso, no se pinta nada -- el camino normal (la
+  // inmensa mayoría de las aprobaciones) no debe mostrar una advertencia que
+  // no aplica.
+  it('no avisa nada cuando el precio sigue siendo el mismo que el catálogo de hoy', async () => {
+    mockFetch({ pendientes: [{ ...FILA_GENERAL, precioListaDesactualizado: false }] });
+    renderVista();
+
+    expect(await screen.findByText(/ana pérez/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/la lista de precios cambió desde que se pidió este descuento/i),
+    ).not.toBeInTheDocument();
+  });
+
+  // El aviso es persistente (no usa role="alert"), a propósito: no debe
+  // interferir con `getByRole('alert')` sin scope, que otra prueba de este
+  // archivo usa esperando encontrar exactamente uno (el de "vas a aprobar
+  // X% en vez de Y%"). Se ancla acá para que un cambio futuro que le agregue
+  // `role="alert"` al aviso de precio lo note.
+  it('el aviso de precio desactualizado no usa role="alert" (no compite con el aviso de cambio de porcentaje)', async () => {
+    mockFetch({ pendientes: [{ ...FILA_GENERAL, precioListaDesactualizado: true }] });
+    renderVista();
+
+    await screen.findByText(/la lista de precios cambió desde que se pidió este descuento/i);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('aprobar tal cual manda /aprobar sin descuentoPersonalizado', async () => {
     const fetchEspiado = mockFetch({ pendientes: [FILA_GENERAL] });
     const usuario = userEvent.setup();

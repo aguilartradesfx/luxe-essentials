@@ -232,6 +232,26 @@ describe('POST /api/cotizacion/pendientes', () => {
     const res = await postPendientes(peticion({}, { cookie }));
     expect(res.status).toBe(200);
   });
+
+  // I3 (revision-final-2.md): esta ruta es la que de verdad llega al
+  // navegador -- se ancla acá, a nivel HTTP, que `precioListaDesactualizado`
+  // no se pierde entre `listarPendientes` (lib/cotizador/aprobacion.ts) y la
+  // respuesta JSON.
+  it('trae precioListaDesactualizado en cada fila, en false cuando el precio congelado coincide con el catálogo de hoy', async () => {
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postPendientes(peticion({}, { cookie, 'x-csrf-token': csrf }));
+    const cuerpo = await res.json();
+    expect(cuerpo.cotizaciones[0].precioListaDesactualizado).toBe(false);
+  });
+
+  it('lo trae en true cuando el precio congelado ya no coincide con el catálogo de hoy', async () => {
+    (cotizaciones[0].lineas as Array<Record<string, unknown>>)[0].precioLista =
+      ((cotizaciones[0].lineas as Array<Record<string, unknown>>)[0].precioLista as number) + 1000;
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postPendientes(peticion({}, { cookie, 'x-csrf-token': csrf }));
+    const cuerpo = await res.json();
+    expect(cuerpo.cotizaciones[0].precioListaDesactualizado).toBe(true);
+  });
 });
 
 describe('POST /api/cotizacion/aprobar', () => {
