@@ -1,0 +1,19 @@
+-- supabase/migrations/0026_lead_limite_tasa_revocar_anon.sql
+-- Mismo hallazgo que 0024, aplicado a la función que trae 0025
+-- (lead_limite_tasa_incrementar), descubierto al verificarla contra
+-- producción dentro de una transacción revertida: su `proacl` seguía
+-- trayendo `anon=X/postgres,authenticated=X/postgres` después de
+-- `revoke all on function ... from public` -- esa sentencia quita el
+-- permiso del pseudo-rol PUBLIC, no los grants NOMINALES que Supabase le
+-- da de fábrica a `anon`/`authenticated`/`service_role` sobre toda función
+-- nueva en `public` (`alter default privileges ... grant all on functions
+-- to anon, authenticated, service_role`). 0025 repitió, sin saberlo, la
+-- misma sentencia sin efecto que ya traían las cinco funciones que 0024
+-- corrigió -- ver el comentario largo de ese archivo para el detalle
+-- completo, incluida la verificación de que RLS (deny by default, cero
+-- políticas) sigue siendo la razón real por la que esto no era explotable
+-- hoy.
+--
+-- Se corrige en un archivo nuevo, no editando 0025: mismo criterio que
+-- 0024 con 0013 -- las migraciones ya aplicadas no se reescriben.
+revoke execute on function public.lead_limite_tasa_incrementar(text, timestamptz, integer, integer) from anon, authenticated;

@@ -168,4 +168,34 @@ describe('QuoteForm', () => {
     expect(await screen.findByRole('button', { name: copy.formulario.enviando })).toBeDisabled();
     resolver(new Response(JSON.stringify({ ok: true }), { status: 201 }));
   });
+
+  // I9 (revision-final-2.md): el honeypot tiene que existir en el DOM (un
+  // bot que parsea el HTML crudo lo tiene que encontrar) pero quedar fuera
+  // del camino de una persona real -- fuera del orden de tabulación y del
+  // árbol de accesibilidad, y con un `name` que calza con
+  // `lib/validation.ts`/`app/api/lead/route.ts`.
+  it('el campo honeypot existe, está oculto del árbol de accesibilidad y fuera del tabulado', () => {
+    render(<QuoteForm />);
+    const campo = document.querySelector<HTMLInputElement>('input[name="paginaWeb"]');
+    expect(campo).not.toBeNull();
+    expect(campo).toHaveAttribute('tabindex', '-1');
+    expect(campo!.closest('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  // El camino feliz manda el campo vacío -- si alguien le pusiera un
+  // `defaultValue` sin querer, esta prueba lo detecta antes que un bot.
+  it('una persona real que llena el formulario normalmente manda "paginaWeb" vacío', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 201 }));
+    const user = userEvent.setup();
+    render(<QuoteForm />);
+    await llenarMinimo(user);
+    await user.click(screen.getByRole('button', { name: copy.formulario.enviar }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const cuerpo = JSON.parse(init.body as string);
+    expect(cuerpo.paginaWeb).toBe('');
+  });
 });

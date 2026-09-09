@@ -2,11 +2,37 @@ import { NextResponse } from 'next/server';
 import { leadSchema } from '@/lib/validation';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { upsertContact } from '@/lib/ghl';
+import { origenValido } from '@/lib/origen-peticion';
+import { dentroDelLimite, ipDeLaPeticion } from '@/lib/lead-limite-tasa';
 
 export const runtime = 'nodejs';
 
+// I9 (revision-final-2.md): esta ruta es pública a propósito -- es el
+// formulario de la página, sin sesión ni clave que revisar -- pero no
+// tenía NINGÚN control de abuso. Tres capas baratas, sin dependencias
+// nuevas, en el orden en que cuestan menos:
+//
+//   1. Origen: rechaza sólo cuando `Origin` viene Y no calza con el host
+//      de esta misma petición (lib/origen-peticion.ts). Nunca por su
+//      ausencia -- ver el comentario de esa función.
+//   2. Honeypot: si el campo trampa del formulario (invisible para una
+//      persona, `paginaWeb` más abajo -- ver components/QuoteForm.tsx)
+//      llega con contenido, se responde éxito SIN tocar Supabase ni
+//      GoHighLevel -- ni la fila del lead, ni el contador de tasa.
+//   3. Límite de tasa por IP, con respaldo en la base (lib/lead-limite-tasa.ts)
+//      -- nunca en memoria: cada instancia de Vercel tiene la suya.
+//
+// Ninguna de las tres debe romper el envío real: la comprobación de origen
+// sólo actúa cuando el navegador manda `Origin` y no calza, el honeypot
+// nunca lo llena una persona real, y el límite (10 min / 5 por IP) deja
+// pasar cómodo un reintento por un campo mal llenado o varias personas
+// detrás de la IP compartida de un hotel.
 export async function POST(request: Request) {
   try {
+    if (!origenValido(request)) {
+      return NextResponse.json({ ok: false, error: 'No se pudo procesar la solicitud.' }, { status: 403 });
+    }
+
     let crudo: unknown;
     try {
       crudo = await request.json();
@@ -27,7 +53,26 @@ export async function POST(request: Request) {
     }
 
     const lead = parsed.data;
+
+    // Honeypot: ninguna persona real llena este campo -- está fuera de
+    // pantalla, marcado `aria-hidden` y fuera del orden de tabulación en
+    // components/QuoteForm.tsx. Un bot que rellena todo lo que encuentra en
+    // el HTML crudo (sin ejecutar el CSS que lo esconde) lo llena igual. Se
+    // responde EXACTAMENTE como el camino feliz -- ok:true, 201 -- para no
+    // darle a quien lo manda ninguna señal de que fue detectado, y no se
+    // toca ni Supabase ni GoHighLevel ni el contador de tasa.
+    if (lead.paginaWeb && lead.paginaWeb.trim() !== '') {
+      return NextResponse.json({ ok: true }, { status: 201 });
+    }
+
     const db = supabaseAdmin();
+
+    if (!(await dentroDelLimite(db, ipDeLaPeticion(request)))) {
+      return NextResponse.json(
+        { ok: false, error: 'Demasiados intentos. Probá de nuevo en unos minutos.' },
+        { status: 429 },
+      );
+    }
 
     // Primero la base: si GHL falla después, el lead no se pierde.
     const { data: fila, error: errorInsert } = await db

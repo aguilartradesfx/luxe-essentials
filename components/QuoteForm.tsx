@@ -127,6 +127,28 @@ export function QuoteForm() {
   return (
     <form ref={formRef} onSubmit={enviar} noValidate className="grid gap-5 sm:grid-cols-2">
       {/*
+        Honeypot (I9, revision-final-2.md): campo trampa contra bots
+        tontos. `aria-hidden` lo saca del árbol de accesibilidad,
+        `tabIndex={-1}` lo saca del orden de tabulación, y el
+        posicionamiento fuera de pantalla lo esconde de una persona real
+        sin usar `display:none`/`visibility:hidden` -- un scraper simple
+        que sólo mira esas dos propiedades para decidir qué NO llenar
+        seguiría llenando este campo igual. `name="paginaWeb"` calza con
+        `lib/validation.ts`; si llega con contenido, `app/api/lead/route.ts`
+        responde éxito sin tocar Supabase ni GoHighLevel. `autoComplete="off"`
+        evita que un gestor de contraseñas lo autorrellene por error.
+      */}
+      <div
+        aria-hidden="true"
+        style={{ position: 'absolute', left: '-9999px', top: 0, width: '1px', height: '1px', overflow: 'hidden' }}
+      >
+        <label>
+          No completar este campo
+          <input type="text" name="paginaWeb" tabIndex={-1} autoComplete="off" />
+        </label>
+      </div>
+
+      {/*
         El párrafo de error va FUERA del <label>, no dentro: `getByLabelText`
         (y el cálculo de nombre accesible en general) toma como texto de la
         etiqueta todo el contenido de texto del <label> salvo el propio

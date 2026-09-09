@@ -99,6 +99,16 @@ export const leadSchema = z.object({
   cantidad: opcional(80, 'Describe la cantidad en menos palabras.'),
   mensaje: opcional(2000, 'El mensaje es muy largo. Resúmelo un poco.'),
   utm: z.record(z.string(), z.string('Los parámetros UTM deben ser texto.'), { message: 'Los parámetros UTM deben ser texto.' }).optional(),
+  // Honeypot (I9, revision-final-2.md): campo que components/QuoteForm.tsx
+  // esconde de una persona real (fuera de pantalla, aria-hidden, fuera del
+  // orden de tabulación) pero que un formulario HTML normal sigue
+  // exponiendo con un `name` de aspecto legítimo -- un bot que rellena
+  // cada campo que encuentra en el HTML crudo, sin ejecutar el CSS que lo
+  // esconde, lo llena igual. `app/api/lead/route.ts` responde éxito sin
+  // tocar la base ni GoHighLevel cuando esto llega con contenido. Validado
+  // acá igual que cualquier otro campo (con tope de longitud) para no
+  // dejar pasar un payload arbitrario sólo porque nunca se muestra.
+  paginaWeb: opcional(500, 'Dato inválido.'),
 });
 
 export type LeadInput = z.infer<typeof leadSchema>;

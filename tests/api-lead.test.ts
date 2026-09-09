@@ -2,11 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const insert = vi.fn();
 const update = vi.fn();
+const rpc = vi.fn();
 
 // Controlables desde cada prueba: por defecto no fallan.
 let erroActualizar: { message: string } | null = null;
 let erroInsertar: { message: string } | null = null;
 let lanzarAlCrearCliente = false;
+// I9 (revision-final-2.md): por defecto la petición entra dentro del
+// límite de tasa -- las pruebas de abuso, más abajo, lo pisan.
+let permitidoLimite = true;
+let erroLimite: { message: string } | null = null;
 
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => {
@@ -31,6 +36,11 @@ vi.mock('@/lib/supabase/server', () => ({
           return { eq: async () => ({ error: erroActualizar }) };
         },
       }),
+      rpc: async (nombre: string, argumentos: Record<string, unknown>) => {
+        rpc(nombre, argumentos);
+        if (erroLimite) return { data: null, error: erroLimite };
+        return { data: permitidoLimite, error: null };
+      },
     };
   },
 }));
@@ -46,10 +56,10 @@ const cuerpo = {
   linea: 'uniformes',
 };
 
-function peticion(body: unknown) {
+function peticion(body: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/api/lead', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...cabeceras },
     body: JSON.stringify(body),
   });
 }
@@ -57,10 +67,13 @@ function peticion(body: unknown) {
 beforeEach(() => {
   insert.mockClear();
   update.mockClear();
+  rpc.mockClear();
   upsertContact.mockReset();
   erroActualizar = null;
   erroInsertar = null;
   lanzarAlCrearCliente = false;
+  permitidoLimite = true;
+  erroLimite = null;
   process.env.LUXE_GHL_API_KEY = 'llave';
   process.env.LUXE_GHL_LOCATION_ID = 'ubicacion';
 });
@@ -184,5 +197,101 @@ describe('POST /api/lead', () => {
     expect(upsertContact).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
+  });
+
+  // I9 (revision-final-2.md): tres capas de control de abuso, ninguna debe
+  // romper el camino feliz (ya cubierto arriba, sin ninguna cabecera
+  // especial) ni las respuestas de error existentes.
+  describe('honeypot', () => {
+    it('si "paginaWeb" viene con contenido, responde éxito SIN tocar Supabase, GHL ni el límite de tasa', async () => {
+      const res = await POST(peticion({ ...cuerpo, paginaWeb: 'https://spam.example' }));
+
+      expect(res.status).toBe(201);
+      await expect(res.json()).resolves.toEqual({ ok: true });
+      expect(insert).not.toHaveBeenCalled();
+      expect(upsertContact).not.toHaveBeenCalled();
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it('con "paginaWeb" vacío (el caso normal de una persona real) sigue guardando el lead', async () => {
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      const res = await POST(peticion({ ...cuerpo, paginaWeb: '' }));
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+    });
+
+    it('sin "paginaWeb" en el cuerpo (formularios que no lo mandan) sigue guardando el lead', async () => {
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      const res = await POST(peticion(cuerpo));
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+    });
+  });
+
+  describe('comprobación de origen', () => {
+    it('sin cabecera Origin (la mayoría de los clientes de prueba y algunos navegadores viejos) deja pasar', async () => {
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      const res = await POST(peticion(cuerpo));
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+    });
+
+    it('con Origin igual al host de la propia petición, deja pasar', async () => {
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      const res = await POST(
+        peticion(cuerpo, { origin: 'http://localhost', host: 'localhost' }),
+      );
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+    });
+
+    it('con Origin de un sitio distinto, rechaza con 403 y no toca la base', async () => {
+      const res = await POST(
+        peticion(cuerpo, { origin: 'https://sitio-ajeno.example', host: 'localhost' }),
+      );
+      expect(res.status).toBe(403);
+      expect(insert).not.toHaveBeenCalled();
+      expect(rpc).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('límite de tasa', () => {
+    it('dentro del límite, deja pasar y guarda el lead', async () => {
+      permitidoLimite = true;
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      const res = await POST(peticion(cuerpo));
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+    });
+
+    it('fuera del límite, responde 429 y no toca Supabase ni GHL', async () => {
+      permitidoLimite = false;
+      const res = await POST(peticion(cuerpo));
+      expect(res.status).toBe(429);
+      expect(insert).not.toHaveBeenCalled();
+      expect(upsertContact).not.toHaveBeenCalled();
+    });
+
+    it('llama al rpc con la IP de x-forwarded-for', async () => {
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      await POST(peticion(cuerpo, { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' }));
+      expect(rpc).toHaveBeenCalledWith(
+        'lead_limite_tasa_incrementar',
+        expect.objectContaining({ p_ip: '203.0.113.7' }),
+      );
+    });
+
+    it('si la comprobación de la base falla, deja pasar (falla abierto) y sigue guardando el lead', async () => {
+      erroLimite = { message: 'función inexistente' };
+      upsertContact.mockResolvedValue({ ok: true, contactId: 'c1' });
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const res = await POST(peticion(cuerpo));
+
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+
+      consoleErrorSpy.mockRestore();
+    });
   });
 });
