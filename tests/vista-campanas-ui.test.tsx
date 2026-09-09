@@ -33,6 +33,38 @@ function mockFetchPanel(opciones: { rol: 'vendedor' | 'superadmin' }) {
   });
 }
 
+// Combina las rutas de `mockFetchPanel` (lo que `Panel` entero necesita al
+// entrar: catálogo, borradores) con las siete de la bandeja de campañas --
+// para el hallazgo importante de más abajo (punto 3), que necesita `Panel`
+// COMPLETO (para poder cambiar de sección) con "Campañas" ya funcionando.
+function mockFetchPanelConCampanas() {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    if (url.endsWith('/api/cotizacion/catalogo')) {
+      return new Response(
+        JSON.stringify({ ok: true, skus: [], csrf: CSRF_TOKEN, vendedor: 'Ana Solano', rol: 'superadmin' }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith('/api/cotizacion/borradores')) {
+      return new Response(JSON.stringify({ ok: true, borradores: [] }), { status: 200 });
+    }
+    if (url.endsWith('/api/campanas/zonas')) {
+      return new Response(
+        JSON.stringify({ ok: true, zonas: [{ zona: 'GAM Oeste', total: 0, conCorreo: 0 }] }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith('/api/campanas/contactos')) {
+      return new Response(JSON.stringify({ ok: true, contactos: [], total: 0, conCorreo: 0 }), { status: 200 });
+    }
+    if (url.endsWith('/api/campanas/plantillas')) {
+      return new Response(JSON.stringify({ ok: true, plantillas: PLANTILLAS_RESPUESTA }), { status: 200 });
+    }
+    throw new Error(`Fetch no simulado en la prueba: ${url}`);
+  });
+}
+
 describe('Panel — pestaña campañas', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -51,6 +83,54 @@ describe('Panel — pestaña campañas', () => {
     mockFetchPanel({ rol: 'superadmin' });
     render(<Cotizador />);
     expect(await screen.findByRole('button', { name: /^campañas$/i })).toBeInTheDocument();
+  });
+
+  // Hallazgo importante (revisión final, punto 3): `VistaCampanas` se
+  // desmontaba al cambiar de sección -- se perdía el HTML pegado a mano
+  // (nada lo persiste en ningún lado) y el bucle de envío seguía corriendo
+  // invisible. Mismo arreglo que ya tiene "Crear": nunca se desmonta
+  // (mientras el rol siga siendo superadmin), sólo se oculta con `hidden`.
+  // Esta prueba ancla la mitad observable sin mandar ningún correo: el HTML
+  // pegado sobrevive a ir y volver de otra sección. Mata al mutante que
+  // volviera a la condición vieja (`pestana === 'campanas' && ...`): con
+  // ella, el campo aparecería vacío al volver.
+  it('cambiar de sección y volver NO pierde el HTML pegado en "personalizada"', async () => {
+    const fetchImpl = mockFetchPanelConCampanas();
+    render(<Cotizador />);
+
+    await screen.findByRole('button', { name: /^campañas$/i });
+    const usuario = userEvent.setup();
+    await usuario.click(screen.getByRole('button', { name: /^campañas$/i }));
+
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    await usuario.click(screen.getByLabelText(/^html personalizado$/i));
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a><p>Texto pegado a mano</p>' },
+    });
+    expect(screen.getByLabelText(/html del correo/i)).toHaveValue(
+      '<a href="{{unsubscribe_url}}">Baja</a><p>Texto pegado a mano</p>',
+    );
+
+    // Cambiar a otra sección y volver. `hidden` (no un unmount) es
+    // justamente el arreglo: el campo sigue en el árbol, `getByLabelText`
+    // lo sigue encontrando -- lo que cambia es que deja de ser VISIBLE
+    // (`hidden` en el contenedor, `display:none` nativo).
+    await usuario.click(screen.getByRole('button', { name: /^crear$/i }));
+    expect(screen.getByLabelText(/html del correo/i)).not.toBeVisible();
+    await usuario.click(screen.getByRole('button', { name: /^campañas$/i }));
+
+    // El campo sigue con lo que se había pegado -- no se reinició.
+    expect(screen.getByLabelText(/html del correo/i)).toHaveValue(
+      '<a href="{{unsubscribe_url}}">Baja</a><p>Texto pegado a mano</p>',
+    );
+
+    // No se volvió a pedir /zonas -- otra forma de comprobar que el
+    // componente nunca se desmontó (un remount volvería a disparar el
+    // `useEffect` que carga las zonas al montar).
+    const llamadasZonas = fetchImpl.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/campanas/zonas'),
+    );
+    expect(llamadasZonas).toHaveLength(1);
   });
 });
 

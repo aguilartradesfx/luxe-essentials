@@ -671,9 +671,31 @@ export default function Panel() {
               {pestana === 'aprobaciones' && rol === 'superadmin' && (
                 <VistaAprobaciones obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
               )}
-              {/* Mismo doble chequeo que "Equipo"/"Aprobaciones", mismo motivo. */}
-              {pestana === 'campanas' && rol === 'superadmin' && (
-                <VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+              {/* Hallazgo importante (revisión final, punto 3): esta pestaña
+                  SÍ se desmontaba al salir de ella -- igual que
+                  "Equipo"/"Aprobaciones", con el mismo razonamiento de esas
+                  dos ("no tienen estado que valga la pena preservar, y así
+                  no siguen pidiendo datos de fondo"). Esas premisas no
+                  aplican acá: a diferencia de Equipo/Aprobaciones, esta
+                  pestaña SÍ tiene trabajo a medio hacer que nada persiste
+                  (el HTML pegado a mano de la plantilla 'personalizada',
+                  los párrafos editados) -- perderlo al mirar otra pestaña es
+                  exactamente el problema que ya se resolvió para
+                  VistaCrear, arriba, por el mismo motivo. Y peor: esta
+                  pestaña tiene un bucle de envío en curso
+                  (`enviarPorTandas`) que un `unmount` no cancela -- React no
+                  mata una promesa en vuelo, así que desmontar no PARABA el
+                  envío, sólo lo volvía invisible (sus `setState` después de
+                  desmontar simplemente no pintan nada). Mismo arreglo que
+                  VistaCrear: nunca se desmonta mientras `rol` sea
+                  superadmin (si deja de serlo, sí se desmonta -- no hay
+                  nada que preservar para un rol que ya no puede volver
+                  acá), y sólo se OCULTA con `hidden` cuando no es la
+                  pestaña activa. */}
+              {rol === 'superadmin' && (
+                <div hidden={pestana !== 'campanas'}>
+                  <VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+                </div>
               )}
               {/* Mismo doble chequeo, mismo motivo -- ver el comentario grande
                   al principio de VistaHistorialCampanas.tsx para por qué es
