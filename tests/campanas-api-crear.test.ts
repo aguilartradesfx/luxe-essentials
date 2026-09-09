@@ -79,6 +79,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 const { POST: postCrear } = await import('@/app/api/campanas/crear/route');
+const { POST: postPrevisualizar } = await import('@/app/api/campanas/previsualizar/route');
 const { emitirSesion } = await import('@/lib/sesion');
 
 const ID_SUPERADMIN = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -122,6 +123,7 @@ beforeEach(() => {
   process.env.LUXE_SESION_SECRETO = 'secreta';
   process.env.LUXE_GHL_API_KEY = 'llave-ghl';
   process.env.LUXE_GHL_LOCATION_ID = 'loc-1';
+  process.env.LUXE_BAJA_SECRETO = 'secreta-baja';
   usuarios = [
     { id: ID_SUPERADMIN, rol: 'superadmin', activo: true },
     { id: ID_VENDEDOR, rol: 'vendedor', activo: true },
@@ -342,6 +344,146 @@ describe('exclusión de bajas', () => {
     expect(cuerpo.destinatarios).toBe(4);
     expect(cuerpo.excluidosPorBaja).toBe(1);
     expect(enviosInsertados.map((e) => e.correo)).not.toContain('dos@hotel.cr');
+  });
+});
+
+// Punto 3 del encargo ("plantilla personalizada"): HTML pegado a mano en
+// vez de una de las cuatro fijas. La firma de "ya se previsualizó" es real
+// -- se consigue pasando por POST /api/campanas/previsualizar de verdad, no
+// calculándola a mano en la prueba, para que estas pruebas ejerciten
+// EXACTAMENTE el mismo camino que recorre quien usa la pantalla.
+async function previsualizarYFirmar(asunto: string, html: string): Promise<string> {
+  const { cookie, csrf } = sesionSuperadmin();
+  const res = await postPrevisualizar(
+    peticion(
+      { plantilla: 'personalizada', asunto, html, destinatario: { nombreCrm: 'Ana Rodríguez', correo: 'ana@hotel.com' } },
+      { cookie, 'x-csrf-token': csrf },
+    ),
+  );
+  const cuerpo = await res.json();
+  if (!cuerpo.ok) throw new Error(`previsualizar falló en la prueba de crear: ${cuerpo.error}`);
+  return cuerpo.firmaPrevisualizacion as string;
+}
+
+const HTML_PERSONALIZADO_OK = '<p>Buenos días{{nombre}}: somos {{empresa}}.</p><a href="{{unsubscribe_url}}">Baja</a>';
+
+describe('plantilla "personalizada"', () => {
+  it('crea la campaña con el html YA saneado, con los marcadores sin resolver (igual que las cuatro fijas)', async () => {
+    mockGhl();
+    const firma = await previsualizarYFirmar('Asunto personalizado', HTML_PERSONALIZADO_OK);
+    const { cookie, csrf } = sesionSuperadmin();
+
+    const res = await postCrear(
+      peticion(
+        {
+          zona: 'GAM Oeste',
+          seleccion: 'zona',
+          plantilla: 'personalizada',
+          asunto: 'Asunto personalizado',
+          html: HTML_PERSONALIZADO_OK,
+          firmaPrevisualizacion: firma,
+        },
+        { cookie, 'x-csrf-token': csrf },
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.destinatarios).toBe(5);
+    expect(campanasCreadas).toHaveLength(1);
+    expect(campanasCreadas[0].plantilla).toBe('personalizada');
+    expect(campanasCreadas[0].asunto).toBe('Asunto personalizado');
+    expect(campanasCreadas[0].html).toContain('{{nombre}}');
+    expect(campanasCreadas[0].html).toContain('{{unsubscribe_url}}');
+  });
+
+  it('400 sin firmaPrevisualizacion -- nunca se puede crear sin haber previsualizado', async () => {
+    mockGhl();
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postCrear(
+      peticion(
+        {
+          zona: 'GAM Oeste',
+          seleccion: 'zona',
+          plantilla: 'personalizada',
+          asunto: 'Asunto personalizado',
+          html: HTML_PERSONALIZADO_OK,
+        },
+        { cookie, 'x-csrf-token': csrf },
+      ),
+    );
+    expect(res.status).toBe(400);
+    expect(campanasCreadas).toHaveLength(0);
+  });
+
+  // Mata al mutante que comparara la firma sólo contra el asunto, o sólo
+  // contra el html: editar el html DESPUÉS de previsualizar (con la firma
+  // vieja) tiene que seguir rechazándose.
+  it('400 si el html se editó después de previsualizar (la firma queda vieja)', async () => {
+    mockGhl();
+    const firma = await previsualizarYFirmar('Asunto personalizado', HTML_PERSONALIZADO_OK);
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postCrear(
+      peticion(
+        {
+          zona: 'GAM Oeste',
+          seleccion: 'zona',
+          plantilla: 'personalizada',
+          asunto: 'Asunto personalizado',
+          html: HTML_PERSONALIZADO_OK + '<p>Un párrafo agregado después de previsualizar.</p>',
+          firmaPrevisualizacion: firma,
+        },
+        { cookie, 'x-csrf-token': csrf },
+      ),
+    );
+    expect(res.status).toBe(400);
+    expect(campanasCreadas).toHaveLength(0);
+  });
+
+  it('400 si falta el marcador de baja, aunque venga con una firma (que de todas formas no podría ser válida)', async () => {
+    mockGhl();
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postCrear(
+      peticion(
+        {
+          zona: 'GAM Oeste',
+          seleccion: 'zona',
+          plantilla: 'personalizada',
+          asunto: 'Asunto personalizado',
+          html: '<p>Sin enlace de baja.</p>',
+          firmaPrevisualizacion: 'lo-que-sea',
+        },
+        { cookie, 'x-csrf-token': csrf },
+      ),
+    );
+    expect(res.status).toBe(400);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).toContain('{{unsubscribe_url}}');
+    expect(campanasCreadas).toHaveLength(0);
+  });
+
+  it('sanea de nuevo del lado del servidor -- un <script> colado en el html crudo nunca llega a guardarse', async () => {
+    mockGhl();
+    const htmlConScript = HTML_PERSONALIZADO_OK + '<script>alert(1)</script>';
+    const firma = await previsualizarYFirmar('Asunto personalizado', htmlConScript);
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postCrear(
+      peticion(
+        {
+          zona: 'GAM Oeste',
+          seleccion: 'zona',
+          plantilla: 'personalizada',
+          asunto: 'Asunto personalizado',
+          html: htmlConScript,
+          firmaPrevisualizacion: firma,
+        },
+        { cookie, 'x-csrf-token': csrf },
+      ),
+    );
+    expect(res.status).toBe(200);
+    const cuerpo = await res.json();
+    expect(cuerpo.advertenciasHtml.some((a: string) => a.includes('<script>'))).toBe(true);
+    expect(campanasCreadas[0].html).not.toContain('<script');
   });
 });
 

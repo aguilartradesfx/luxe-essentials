@@ -4,10 +4,15 @@ import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { autorizarSuperadmin } from '@/lib/cotizador/equipo';
 import { ZONAS_COMERCIALES, contactosPorZona, conCorreo } from '@/lib/campanas/contactos';
-import { PLANTILLAS, crearCampana } from '@/lib/campanas/envio';
+import { TODAS_LAS_PLANTILLAS, PLANTILLA_PERSONALIZADA, crearCampana } from '@/lib/campanas/envio';
 import { plantillaCargada } from '@/lib/campanas/plantillas';
 import { contarParrafosEditables, aplicarParrafosEditados } from '@/lib/campanas/edicion';
 import { filtrarPermitidosParaCampana } from '@/lib/campanas/exclusiones';
+import {
+  sanitizarHtmlPersonalizado,
+  validarMarcadorBaja,
+  previsualizacionValida,
+} from '@/lib/campanas/plantilla-personalizada';
 
 export const runtime = 'nodejs';
 
@@ -23,8 +28,18 @@ const Entrada = z.object({
   // más abajo -- así que ni falta que haga mandarlo, pero tampoco es un
   // error mandarlo de más.
   contactIds: z.array(z.string().min(1)).optional(),
-  plantilla: z.enum(PLANTILLAS),
-  parrafos: z.array(z.string()),
+  plantilla: z.enum(TODAS_LAS_PLANTILLAS),
+  // Sólo para las cuatro plantillas FIJAS.
+  parrafos: z.array(z.string()).optional(),
+  // Sólo para 'personalizada' -- ver el bloque `if (plantilla === PLANTILLA_PERSONALIZADA)`
+  // más abajo. `firmaPrevisualizacion` es la que exige haber pasado por
+  // POST /api/campanas/previsualizar con este mismo asunto+html antes de
+  // poder crear la campaña -- ver el comentario grande de
+  // `firmarPrevisualizacion` en lib/campanas/plantilla-personalizada.ts.
+  asunto: z.string().optional(),
+  previewText: z.string().optional(),
+  html: z.string().optional(),
+  firmaPrevisualizacion: z.string().optional(),
 });
 
 // Bandeja de campañas (parte 2): crea la campaña. La ruta que sí escribe --
@@ -58,7 +73,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const { zona, seleccion, contactIds, plantilla, parrafos } = parseado.data;
+  const { zona, seleccion, contactIds, plantilla } = parseado.data;
 
   if (seleccion === 'pagina' && (!contactIds || contactIds.length === 0)) {
     return NextResponse.json(
@@ -67,16 +82,69 @@ export async function POST(request: Request) {
     );
   }
 
-  const cargada = plantillaCargada(plantilla);
-  const esperados = contarParrafosEditables(cargada.html);
-  if (parrafos.length !== esperados) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `Esta plantilla tiene ${esperados} párrafo(s) editable(s), pero llegaron ${parrafos.length}.`,
-      },
-      { status: 400 },
-    );
+  // El contenido final del correo -- de una de las cuatro plantillas fijas,
+  // o de 'personalizada' (encargo del dueño, punto 3). Se resuelve ACÁ,
+  // antes de tocar GHL para nada: mismo criterio que ya tenía esta ruta con
+  // el conteo de párrafos ("fallar rápido, antes de gastar una consulta al
+  // CRM"), sólo que ahora la validación de 'personalizada' es la que manda
+  // más -- el marcador de baja obligatorio y la firma de "ya se
+  // previsualizó" (ver lib/campanas/plantilla-personalizada.ts).
+  let asuntoFinal: string;
+  let previewTextFinal: string | undefined;
+  let htmlFinal: string;
+  let advertenciasHtml: string[] = [];
+
+  if (plantilla === PLANTILLA_PERSONALIZADA) {
+    const asunto = (parseado.data.asunto ?? '').trim();
+    const htmlCrudo = parseado.data.html ?? '';
+    if (!asunto) return NextResponse.json({ ok: false, error: 'Falta el asunto.' }, { status: 400 });
+    if (!htmlCrudo.trim()) return NextResponse.json({ ok: false, error: 'Falta el HTML del correo.' }, { status: 400 });
+
+    // Nunca se confía en un html "ya saneado" que mandara el cliente -- se
+    // vuelve a sanear ACÁ, del lado del servidor, sobre el crudo. Es lo que
+    // hace que `previsualizacionValida` (más abajo) sea una comprobación de
+    // verdad y no un campo que alcanzaría con copiar de la respuesta de
+    // /previsualizar.
+    const { html: htmlSaneado, advertencias } = sanitizarHtmlPersonalizado(htmlCrudo);
+    advertenciasHtml = advertencias;
+
+    const validacionBaja = validarMarcadorBaja(htmlSaneado);
+    if (!validacionBaja.ok) {
+      return NextResponse.json({ ok: false, error: validacionBaja.error }, { status: 400 });
+    }
+
+    const firma = parseado.data.firmaPrevisualizacion ?? '';
+    if (!previsualizacionValida(asunto, htmlSaneado, firma)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'Hay que previsualizar el HTML pegado (con este mismo asunto y contenido) antes de poder enviar la campaña. ' +
+            'Si lo editaste después de previsualizarlo, previsualizalo de nuevo.',
+        },
+        { status: 400 },
+      );
+    }
+
+    asuntoFinal = asunto;
+    previewTextFinal = (parseado.data.previewText ?? '').trim() || undefined;
+    htmlFinal = htmlSaneado;
+  } else {
+    const parrafos = parseado.data.parrafos ?? [];
+    const cargada = plantillaCargada(plantilla);
+    const esperados = contarParrafosEditables(cargada.html);
+    if (parrafos.length !== esperados) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Esta plantilla tiene ${esperados} párrafo(s) editable(s), pero llegaron ${parrafos.length}.`,
+        },
+        { status: 400 },
+      );
+    }
+    asuntoFinal = cargada.asunto;
+    previewTextFinal = cargada.previewText;
+    htmlFinal = aplicarParrafosEditados(cargada.html, parrafos);
   }
 
   const deps = {
@@ -140,14 +208,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const html = aplicarParrafosEditados(cargada.html, parrafos);
-
   const resultado = await crearCampana(
     {
       plantilla,
-      asunto: cargada.asunto,
-      previewText: cargada.previewText,
-      html,
+      asunto: asuntoFinal,
+      previewText: previewTextFinal,
+      html: htmlFinal,
       creadoPor: auth.vendedor,
     },
     permitidos,
@@ -167,5 +233,9 @@ export async function POST(request: Request) {
     // visible para que quien creó la campaña sepa que el número final no
     // es el mismo que había en pantalla, y por qué.
     excluidosPorBaja: destinatarios.length - permitidos.length,
+    // Sólo para 'personalizada' -- qué se le quitó al html pegado antes de
+    // guardarlo (ver lib/campanas/plantilla-personalizada.ts). Vacío para
+    // las cuatro plantillas fijas.
+    advertenciasHtml,
   });
 }

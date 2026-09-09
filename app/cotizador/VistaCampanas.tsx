@@ -2,17 +2,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-// La pestaña "Campañas" (bandeja de campañas, parte 2). Sólo la ve un
-// superadmin de VERDAD -- "de verdad" porque, aunque `Panel` sólo dibuja el
-// botón que lleva acá cuando `rol === 'superadmin'` (ver el comentario
-// junto a esa pestaña en Panel.tsx), esa condición es cosmética: las siete
-// rutas de app/api/campanas/* releen la fila de quien hace la petición en
-// la base antes de actuar (`autorizarSuperadmin`, lib/cotizador/equipo.ts)
-// y devuelven 403 si no es superadmin ahora mismo -- mismo criterio, exacto,
-// que VistaEquipo.tsx y VistaAprobaciones.tsx. Este componente no agrega
-// ninguna protección propia: si alguien llega hasta acá sin serlo, el
-// primer fetch le devuelve 403 y esta pantalla lo muestra como cualquier
-// otro error.
+// La pestaña "Campañas" (bandeja de campañas, parte 2): armar y mandar una
+// campaña nueva. Sólo la ve un superadmin de VERDAD -- "de verdad" porque,
+// aunque `Panel` sólo dibuja el botón que lleva acá cuando `rol ===
+// 'superadmin'` (ver el comentario junto a esa pestaña en Panel.tsx), esa
+// condición es cosmética: las rutas de app/api/campanas/* releen la fila de
+// quien hace la petición en la base antes de actuar (`autorizarSuperadmin`,
+// lib/cotizador/equipo.ts) y devuelven 403 si no es superadmin ahora mismo
+// -- mismo criterio, exacto, que VistaEquipo.tsx y VistaAprobaciones.tsx.
+// Este componente no agrega ninguna protección propia: si alguien llega
+// hasta acá sin serlo, el primer fetch le devuelve 403 y esta pantalla lo
+// muestra como cualquier otro error.
 //
 // La decisión de POR QUÉ toda la superficie de campañas -- no sólo enviar
 // -- queda detrás de superadmin está explicada en
@@ -20,6 +20,21 @@ import { useEffect, useMemo, useState } from 'react';
 // Luxe no se deshace, así que se trató con el mismo criterio conservador
 // que ya rige equipo y aprobaciones, no con el criterio (más permisivo) de
 // crear una cotización.
+//
+// EL HISTORIAL YA NO VIVE ACÁ (encargo del dueño, punto 2): antes esta
+// pantalla terminaba en una tabla larga de "campañas anteriores", y arriba
+// de todo un aviso de "hay una campaña sin terminar" que escaneaba TODO el
+// historial. Ahora ese trabajo -- ver qué se mandó, retomar una campaña
+// interrumpida, cancelarla (punto 1) -- vive en su propia pestaña,
+// VistaHistorialCampanas.tsx, con su propia entrada en la barra lateral.
+// Ver el comentario grande al principio de ese archivo para el porqué de
+// separarlas: armar una campaña y revisar lo enviado son dos tareas
+// distintas, en momentos distintos, con la cabeza en cosas distintas -- el
+// mismo criterio que ya separa "Crear" de "Cotizaciones" en este panel.
+// Esta pantalla SÍ sigue mostrando el progreso de la campaña que ELLA
+// MISMA acaba de crear y está mandando en este momento (`campanaEnCurso`,
+// más abajo) -- es la persona que recién apretó "enviar" viendo que
+// funcionó, no una segunda copia de la pantalla de historial.
 
 // Mismo motivo que la duplicación de tipos en VistaEquipo.tsx/VistaAprobaciones.tsx:
 // lib/campanas/* arranca con `import 'server-only'` -- un componente de
@@ -41,14 +56,21 @@ const ZONAS_COMERCIALES = [
 ] as const;
 type ZonaComercial = (typeof ZONAS_COMERCIALES)[number];
 
+// Las cuatro plantillas fijas -- mismo arreglo que `PLANTILLAS` en
+// lib/campanas/envio.ts.
 const PLANTILLAS = ['inicial', 'seguimiento_1', 'seguimiento_2', 'seguimiento_3'] as const;
-type PlantillaCampana = (typeof PLANTILLAS)[number];
+// La quinta opción (encargo del dueño, punto 3): HTML pegado a mano. Mismo
+// valor que `PLANTILLA_PERSONALIZADA` en lib/campanas/envio.ts.
+const PLANTILLA_PERSONALIZADA = 'personalizada' as const;
+const TODAS_LAS_PLANTILLAS = [...PLANTILLAS, PLANTILLA_PERSONALIZADA] as const;
+type PlantillaCampana = (typeof TODAS_LAS_PLANTILLAS)[number];
 
 const ETIQUETAS_PLANTILLA: Record<PlantillaCampana, string> = {
   inicial: 'Correo inicial',
   seguimiento_1: 'Primer seguimiento',
   seguimiento_2: 'Segundo seguimiento',
   seguimiento_3: 'Tercer seguimiento (cierre)',
+  personalizada: 'HTML personalizado',
 };
 
 const TAMANOS_PAGINA = [20, 50, 100] as const;
@@ -60,15 +82,13 @@ type ZonaConteo = { zona: ZonaComercial; total: number; conCorreo: number; error
 
 type PlantillaConParrafos = { plantilla: PlantillaCampana; asunto: string; previewText: string; parrafos: string[] };
 
+// Los tres campos de una campaña 'personalizada' -- lo que
+// POST /api/campanas/previsualizar y POST /api/campanas/crear esperan en
+// vez de `parrafos` cuando `plantillaElegida` es 'personalizada'. Un solo
+// objeto, no tres `useState` sueltos: los tres viajan siempre juntos.
+type CamposPersonalizada = { asunto: string; previewText: string; html: string };
+
 type ProgresoCampana = { total: number; enviados: number; fallidos: number; pendientes: number };
-type FilaCampana = {
-  id: string;
-  plantilla: PlantillaCampana;
-  asunto: string;
-  creadoPor: string;
-  creadoAt: string;
-  progreso: ProgresoCampana;
-};
 
 // La selección es UN modo a la vez, nunca una mezcla -- es justamente lo
 // que hace imposible confundir "esta página" con "toda la zona":
@@ -84,13 +104,6 @@ type Seleccion = { modo: 'ninguna' } | { modo: 'manual'; ids: Set<string> } | { 
 
 type Mensaje = { tipo: 'ok' | 'error' | 'aviso'; texto: string };
 
-function formatearFecha(iso: string): string {
-  const f = new Date(iso);
-  if (Number.isNaN(f.getTime())) return iso;
-  const dos = (n: number) => String(n).padStart(2, '0');
-  return `${dos(f.getDate())}/${dos(f.getMonth() + 1)}/${f.getFullYear()} ${dos(f.getHours())}:${dos(f.getMinutes())}`;
-}
-
 const PALABRA_CONFIRMACION = 'ENVIAR';
 
 type Props = {
@@ -102,40 +115,6 @@ type Props = {
 };
 
 export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
-  // --- Historial de campañas (para "retomar" una interrumpida) ---------
-  const [campanas, setCampanas] = useState<FilaCampana[] | null>(null);
-  const [errorCampanas, setErrorCampanas] = useState('');
-
-  async function cargarCampanas() {
-    setErrorCampanas('');
-    try {
-      const res = await fetch('/api/campanas/listado', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const datos = await res.json();
-      if (!res.ok || !datos.ok) {
-        if (res.status === 401) return onSesionInvalida();
-        setErrorCampanas(datos.error ?? `Error ${res.status}`);
-        return;
-      }
-      setCampanas(datos.campanas as FilaCampana[]);
-    } catch {
-      setErrorCampanas('Fallo de red al consultar el historial de campañas.');
-    }
-  }
-
-  useEffect(() => {
-    void cargarCampanas();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sólo al montar.
-  }, []);
-
-  const campanaInterrumpida = useMemo(
-    () => (campanas ?? []).find((c) => c.progreso.pendientes > 0) ?? null,
-    [campanas],
-  );
-
   // --- Conteo por zona (las trece pestañas) -----------------------------
   const [zonas, setZonas] = useState<ZonaConteo[] | null>(null);
   const [cargandoZonas, setCargandoZonas] = useState(false);
@@ -219,7 +198,10 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
   }, [zonaActiva]);
 
   // Cambiar de zona reinicia página y selección -- una selección de una
-  // zona no tiene ningún sentido en otra.
+  // zona no tiene ningún sentido en otra. Deliberadamente NO toca
+  // `plantillaAbierta` (más abajo): la plantilla elegida y su estado
+  // plegado/desplegado son un eje totalmente aparte de la zona -- ver el
+  // comentario grande junto a esa sección.
   function elegirZona(zona: ZonaComercial) {
     setZonaActiva(zona);
     setPagina(1);
@@ -276,6 +258,53 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
   const [plantillaElegida, setPlantillaElegida] = useState<PlantillaCampana>('inicial');
   const [parrafosEditados, setParrafosEditados] = useState<Partial<Record<PlantillaCampana, string[]>>>({});
 
+  // Punto 4 del encargo: la sección de plantilla, plegada por defecto (cada
+  // párrafo largo, repetido campaña tras campaña, empujaba hacia abajo lo
+  // que de verdad cambia -- la zona, la selección, el botón de enviar).
+  // Un solo booleano para las CINCO opciones -- no uno por plantilla --
+  // porque lo que se pliega/despliega es "el contenido de la que está
+  // elegida ahora", no cinco secciones independientes; los chips de abajo
+  // (siempre visibles, nunca dentro del `<details>`) son justamente lo que
+  // permite cambiar de plantilla SIN desplegar nada.
+  //
+  // Qué NO reinicia este estado, y por qué:
+  //   - Cambiar de ZONA (`elegirZona`, arriba): no lo toca. Son dos ejes
+  //     sin relación -- reiniciarlo sería plegar un párrafo que la persona
+  //     dejó abierto a propósito, sólo porque cambió de pestaña de zona.
+  //   - Cambiar ENTRE las cuatro plantillas fijas: tampoco lo toca. Si
+  //     estaba desplegada, seguir viendo el contenido de la nueva elegida
+  //     es lo esperable (se está comparando/revisando); si estaba plegada,
+  //     seguir plegada también lo es (ya se sabe lo que se está haciendo).
+  //   - Elegir 'personalizada' SÍ la fuerza abierta (el efecto de abajo):
+  //     arranca vacía, con trabajo obligatorio (pegar el html) y un aviso
+  //     del marcador de baja que nadie debería poder pasar por alto sin
+  //     verlo -- esconder eso detrás de un acordeón cerrado sería un mal
+  //     lugar para un requisito así de importante. Nunca fuerza a CERRAR:
+  //     sólo abre.
+  const [plantillaAbierta, setPlantillaAbierta] = useState(false);
+
+  useEffect(() => {
+    if (plantillaElegida === PLANTILLA_PERSONALIZADA) setPlantillaAbierta(true);
+  }, [plantillaElegida]);
+
+  // --- Campos de 'personalizada' (encargo del dueño, punto 3) ------------
+  const [personalizada, setPersonalizada] = useState<CamposPersonalizada>({ asunto: '', previewText: '', html: '' });
+
+  // La última previsualización de 'personalizada' que confirmó el servidor
+  // -- asunto+html+firma. Independiente por completo de `plantillaAbierta`:
+  // plegar y desplegar esta sección NUNCA cuenta como "ya la vi" -- sólo lo
+  // hace un POST /api/campanas/previsualizar que tuvo éxito, abajo en
+  // `previsualizar()`. La única forma de que quede "vieja" es editar el
+  // asunto o el html después -- ver `personalizadaFueVista`, más abajo.
+  const [ultimaPrevisualizacionPersonalizada, setUltimaPrevisualizacionPersonalizada] = useState<{
+    asunto: string;
+    html: string;
+    firma: string;
+  } | null>(null);
+  // Qué le quitó el servidor al html pegado (script, formularios...) en la
+  // última previsualización -- ver lib/campanas/plantilla-personalizada.ts.
+  const [advertenciasPersonalizada, setAdvertenciasPersonalizada] = useState<string[]>([]);
+
   useEffect(() => {
     let cancelado = false;
     async function cargar() {
@@ -317,6 +346,23 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
     });
   }
 
+  // El asunto "actual", sin importar cuál de las cinco está elegida --
+  // usado por el resumen del `<summary>` (plegada) y por la confirmación.
+  const asuntoActual = plantillaElegida === PLANTILLA_PERSONALIZADA ? personalizada.asunto : (plantillaActual?.asunto ?? '');
+
+  // Punto 3: con 'personalizada', mandar exige haber previsualizado ESTE
+  // asunto+html exacto -- no "haber previsualizado alguna vez". Comparar
+  // contra el contenido actual (no un booleano aparte que alguien tendría
+  // que acordarse de apagar) es lo que hace que editar después de
+  // previsualizar vuelva a bloquear el envío sin ningún código adicional:
+  // en cuanto `personalizada.asunto`/`personalizada.html` cambian, dejan de
+  // coincidir con lo que quedó guardado en `ultimaPrevisualizacionPersonalizada`.
+  const personalizadaFueVista =
+    plantillaElegida !== PLANTILLA_PERSONALIZADA ||
+    (ultimaPrevisualizacionPersonalizada !== null &&
+      ultimaPrevisualizacionPersonalizada.asunto === personalizada.asunto &&
+      ultimaPrevisualizacionPersonalizada.html === personalizada.html);
+
   // --- Vista previa ------------------------------------------------------
   const [destinatarioPreviewId, setDestinatarioPreviewId] = useState('');
   const [previsualizacion, setPrevisualizacion] = useState<{ asunto: string; previewText: string; html: string } | null>(
@@ -350,15 +396,26 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
     setCargandoPreview(true);
     setErrorPreview('');
     setPrevisualizacion(null);
+    const esPersonalizada = plantillaElegida === PLANTILLA_PERSONALIZADA;
     try {
       const res = await fetch('/api/campanas/previsualizar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          plantilla: plantillaElegida,
-          parrafos: parrafosActuales,
-          destinatario: { nombreCrm: destinatario.nombreCrm, correo: destinatario.correo },
-        }),
+        body: JSON.stringify(
+          esPersonalizada
+            ? {
+                plantilla: plantillaElegida,
+                asunto: personalizada.asunto,
+                previewText: personalizada.previewText,
+                html: personalizada.html,
+                destinatario: { nombreCrm: destinatario.nombreCrm, correo: destinatario.correo },
+              }
+            : {
+                plantilla: plantillaElegida,
+                parrafos: parrafosActuales,
+                destinatario: { nombreCrm: destinatario.nombreCrm, correo: destinatario.correo },
+              },
+        ),
       });
       const datos = await res.json();
       if (!res.ok || !datos.ok) {
@@ -367,6 +424,16 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
         return;
       }
       setPrevisualizacion({ asunto: datos.asunto, previewText: datos.previewText, html: datos.html });
+      // Sólo 'personalizada' arma/consume una firma -- ver el comentario
+      // grande de `personalizadaFueVista`, arriba.
+      if (esPersonalizada) {
+        setUltimaPrevisualizacionPersonalizada({
+          asunto: personalizada.asunto,
+          html: personalizada.html,
+          firma: datos.firmaPrevisualizacion,
+        });
+        setAdvertenciasPersonalizada((datos.advertencias as string[] | undefined) ?? []);
+      }
     } catch {
       setErrorPreview('Fallo de red al armar la vista previa.');
     } finally {
@@ -380,7 +447,10 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState<Mensaje | null>(null);
   // La campaña en curso -- se pinta acá apenas se crea, y el progreso se va
-  // actualizando tanda a tanda. `null` en reposo.
+  // actualizando tanda a tanda. `null` en reposo. Esto es SÓLO la campaña
+  // que esta pestaña acaba de crear en esta misma visita -- para el resto
+  // del historial (incluida esta misma campaña si se vuelve más tarde, o
+  // desde otra sesión) está VistaHistorialCampanas.tsx.
   const [campanaEnCurso, setCampanaEnCurso] = useState<{ id: string; plantilla: PlantillaCampana } | null>(null);
   const [progresoEnCurso, setProgresoEnCurso] = useState<ProgresoCampana | null>(null);
 
@@ -394,8 +464,8 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
   // servidor dice `terminada: true`. Cada llamada es independiente y
   // retomable -- si la pestaña se cierra a mitad de este `while`, el
   // registro por destinatario queda tal como estaba del lado del servidor
-  // (lib/campanas/envio.ts) y volver a esta pantalla más tarde ofrece
-  // "Retomar" sobre la misma campaña (ver el bloque de historial, arriba).
+  // (lib/campanas/envio.ts) y el Historial de campañas ofrece "Retomar"
+  // sobre la misma campaña.
   async function enviarPorTandas(campanaId: string) {
     for (;;) {
       let res: Response;
@@ -411,7 +481,7 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
       } catch {
         setMensaje({
           tipo: 'error',
-          texto: 'Fallo de red a mitad del envío. La campaña quedó donde iba -- volvé a "Retomar" cuando haya conexión.',
+          texto: 'Fallo de red a mitad del envío. La campaña quedó donde iba -- se puede retomar desde Historial de campañas.',
         });
         return;
       }
@@ -420,7 +490,7 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
         if (res.status === 401) return onSesionInvalida();
         setMensaje({
           tipo: 'error',
-          texto: `${datos.error ?? `Error ${res.status}`} La campaña quedó donde iba -- se puede retomar.`,
+          texto: `${datos.error ?? `Error ${res.status}`} La campaña quedó donde iba -- se puede retomar desde Historial de campañas.`,
         });
         return;
       }
@@ -433,9 +503,12 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
           pendientes: Math.max(0, base.pendientes - datos.procesados),
         };
       });
+      if (datos.cancelada) {
+        setMensaje({ tipo: 'aviso', texto: 'Esta campaña se canceló -- el resto no se va a mandar.' });
+        return;
+      }
       if (datos.terminada) {
         setMensaje({ tipo: 'ok', texto: 'La campaña terminó de enviarse.' });
-        await cargarCampanas();
         return;
       }
     }
@@ -445,6 +518,7 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
     if (textoConfirmacion.trim().toUpperCase() !== PALABRA_CONFIRMACION) return;
     setEnviando(true);
     setMensaje(null);
+    const esPersonalizada = plantillaElegida === PLANTILLA_PERSONALIZADA;
     try {
       const csrf = obtenerCsrf();
       const res = await fetch('/api/campanas/crear', {
@@ -458,7 +532,14 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
           seleccion: seleccion.modo === 'zona' ? 'zona' : 'pagina',
           contactIds: seleccion.modo === 'manual' ? [...seleccion.ids] : undefined,
           plantilla: plantillaElegida,
-          parrafos: parrafosActuales,
+          ...(esPersonalizada
+            ? {
+                asunto: personalizada.asunto,
+                previewText: personalizada.previewText,
+                html: personalizada.html,
+                firmaPrevisualizacion: ultimaPrevisualizacionPersonalizada?.firma,
+              }
+            : { parrafos: parrafosActuales }),
         }),
       });
       const datos = await res.json();
@@ -501,41 +582,10 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
 
   return (
     <div className="space-y-6">
-      {errorCampanas && (
-        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
-          {errorCampanas}
-        </p>
-      )}
-
-      {/* Campaña interrumpida: lo primero que se ve, porque es lo más
-          urgente -- una campaña a medias es dinero (y contactos) esperando.
-          El registro por destinatario ya existe del lado del servidor
-          desde que se creó; esto es lo único que lo hace visible. */}
-      {campanaInterrumpida && !campanaEnCurso && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">
-            Hay una campaña sin terminar: {ETIQUETAS_PLANTILLA[campanaInterrumpida.plantilla]}, creada por{' '}
-            {campanaInterrumpida.creadoPor} el {formatearFecha(campanaInterrumpida.creadoAt)}.
-          </p>
-          <p className="mt-1 text-xs text-amber-800">
-            {campanaInterrumpida.progreso.enviados} de {campanaInterrumpida.progreso.total} enviados
-            {campanaInterrumpida.progreso.fallidos > 0 ? `, ${campanaInterrumpida.progreso.fallidos} con error` : ''}
-            . Quedan {campanaInterrumpida.progreso.pendientes} por mandar.
-          </p>
-          <button
-            type="button"
-            disabled={enviando}
-            onClick={() =>
-              void retomar(campanaInterrumpida.id, campanaInterrumpida.plantilla, campanaInterrumpida.progreso)
-            }
-            className="mt-3 rounded-lg bg-navy px-4 py-2 text-sm font-medium text-beige hover:bg-navy/90 disabled:opacity-40"
-          >
-            Retomar el envío
-          </button>
-        </div>
-      )}
-
-      {/* Progreso de la campaña en curso (recién creada, o retomada). */}
+      {/* Progreso de la campaña en curso (recién creada, o retomada en esta
+          misma pestaña). Para cualquier OTRA campaña interrumpida -- de
+          esta sesión hace rato, o de otra sesión -- está Historial de
+          campañas. */}
       {campanaEnCurso && progresoEnCurso && (
         <div className="rounded-xl border border-[var(--carta-border)] bg-white p-4" aria-live="polite">
           <p className="text-sm font-medium text-navy">
@@ -790,7 +840,12 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
         )}
       </div>
 
-      {/* Plantilla y edición de texto */}
+      {/* Plantilla y edición de texto -- punto 3 (personalizada) y punto 4
+          (plegable) del encargo. Los chips de elegir plantilla quedan
+          SIEMPRE visibles, fuera del `<details>` de abajo: es lo que
+          permite cambiar de plantilla sin desplegar nada -- lo único que se
+          plega es el CONTENIDO de la que está elegida (los párrafos, o el
+          html pegado), no el control para elegir cuál. */}
       <div className="rounded-xl border border-[var(--carta-border)] p-4">
         <h2 className="font-display text-sm text-navy">Plantilla</h2>
         {errorPlantillas && (
@@ -799,7 +854,7 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
           </p>
         )}
         <div className="mt-2 flex flex-wrap gap-2">
-          {PLANTILLAS.map((p) => (
+          {TODAS_LAS_PLANTILLAS.map((p) => (
             <label
               key={p}
               htmlFor={`plantilla-${p}`}
@@ -823,34 +878,118 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
           ))}
         </div>
 
-        {plantillaActual && (
-          <div className="mt-4 space-y-3">
-            <p className="text-xs text-teal">
-              Asunto: <span className="text-navy">{plantillaActual.asunto}</span>
-            </p>
-            <p className="text-xs text-teal">
-              Se edita sólo el texto de cada párrafo. El diseño del correo (tablas, botón, firma) no se toca --
-              está armado para verse bien incluso en Outlook, y un cambio ahí puede romperlo.
-            </p>
-            {parrafosActuales.map((texto, i) => (
-              <div key={i}>
-                <label htmlFor={`parrafo-${i}`} className="block text-xs font-medium uppercase tracking-wide text-teal">
-                  Párrafo {i + 1}
-                </label>
-                <textarea
-                  id={`parrafo-${i}`}
-                  value={texto}
-                  onChange={(e) => editarParrafo(i, e.target.value)}
-                  rows={3}
-                  className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
-                />
-              </div>
-            ))}
-          </div>
+        {(plantillaActual || plantillaElegida === PLANTILLA_PERSONALIZADA) && (
+          <details
+            open={plantillaAbierta}
+            onToggle={(e) => setPlantillaAbierta(e.currentTarget.open)}
+            className="group mt-4 rounded-lg border border-[var(--carta-border)]"
+          >
+            {/* El resumen de la sección plegada: nombre + asunto alcanzan
+                para saber CUÁL plantilla es y QUÉ va a decir el asunto sin
+                abrirla -- lo mínimo que pide el encargo. Para
+                'personalizada' se suma un aviso si falta el marcador de
+                baja: de las cinco, es la única donde ese dato puede faltar
+                de verdad, y es el que menos se puede pasar por alto sin
+                mirar. */}
+            <summary className="cursor-pointer select-none rounded-lg px-3 py-2 text-sm font-medium text-navy hover:bg-[var(--carta-fill)]">
+              {ETIQUETAS_PLANTILLA[plantillaElegida]}
+              {' — Asunto: '}
+              <span className="font-normal text-teal">
+                {asuntoActual.trim() ? `"${asuntoActual}"` : '(sin asunto todavía)'}
+              </span>
+              {plantillaElegida === PLANTILLA_PERSONALIZADA && !personalizada.html.includes('{{unsubscribe_url}}') && (
+                <span className="ml-2 font-semibold text-amber-700">-- falta {'{{unsubscribe_url}}'}</span>
+              )}
+            </summary>
+            <div className="space-y-3 border-t border-[var(--carta-border)] px-3 py-3">
+              {plantillaElegida === PLANTILLA_PERSONALIZADA ? (
+                <>
+                  <p className="text-xs text-teal">
+                    Pegá el HTML completo del correo. Tiene que incluir <code>{'{{unsubscribe_url}}'}</code> en el
+                    enlace de baja -- no se puede mandar sin él, y no se inyecta solo: el marcador va donde vos lo
+                    pongas. <code>{'{{nombre}}'}</code> y <code>{'{{empresa}}'}</code> son opcionales, igual que en
+                    las cuatro plantillas fijas.
+                  </p>
+                  <div>
+                    <label htmlFor="personalizada-asunto" className="block text-xs font-medium uppercase tracking-wide text-teal">
+                      Asunto
+                    </label>
+                    <input
+                      id="personalizada-asunto"
+                      value={personalizada.asunto}
+                      onChange={(e) => setPersonalizada((prev) => ({ ...prev, asunto: e.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="personalizada-preview" className="block text-xs font-medium uppercase tracking-wide text-teal">
+                      Vista previa de bandeja (opcional)
+                    </label>
+                    <input
+                      id="personalizada-preview"
+                      value={personalizada.previewText}
+                      onChange={(e) => setPersonalizada((prev) => ({ ...prev, previewText: e.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="personalizada-html" className="block text-xs font-medium uppercase tracking-wide text-teal">
+                      HTML del correo
+                    </label>
+                    <textarea
+                      id="personalizada-html"
+                      value={personalizada.html}
+                      onChange={(e) => setPersonalizada((prev) => ({ ...prev, html: e.target.value }))}
+                      rows={12}
+                      spellCheck={false}
+                      className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 font-mono text-xs text-navy"
+                    />
+                  </div>
+                  {advertenciasPersonalizada.length > 0 && (
+                    <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <p className="font-medium">La última vista previa quitó esto del HTML pegado:</p>
+                      <ul className="mt-1 list-disc pl-4">
+                        {advertenciasPersonalizada.map((a, i) => (
+                          <li key={i}>{a}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              ) : (
+                plantillaActual && (
+                  <>
+                    <p className="text-xs text-teal">
+                      Se edita sólo el texto de cada párrafo. El diseño del correo (tablas, botón, firma) no se toca
+                      -- está armado para verse bien incluso en Outlook, y un cambio ahí puede romperlo.
+                    </p>
+                    {parrafosActuales.map((texto, i) => (
+                      <div key={i}>
+                        <label htmlFor={`parrafo-${i}`} className="block text-xs font-medium uppercase tracking-wide text-teal">
+                          Párrafo {i + 1}
+                        </label>
+                        <textarea
+                          id={`parrafo-${i}`}
+                          value={texto}
+                          onChange={(e) => editarParrafo(i, e.target.value)}
+                          rows={3}
+                          className="mt-1 w-full rounded-lg border border-[var(--carta-border)] bg-white px-3 py-2 text-sm text-navy"
+                        />
+                      </div>
+                    ))}
+                  </>
+                )
+              )}
+            </div>
+          </details>
         )}
       </div>
 
-      {/* Vista previa, con un destinatario real de la selección */}
+      {/* Vista previa, con un destinatario real de la selección. Con
+          'personalizada' pesa más que nunca (encargo): es la única defensa
+          que queda contra un HTML roto o peligroso, y es lo que arma la
+          firma que exige POST /api/campanas/crear -- ver
+          `personalizadaFueVista` y el botón de enviar, más abajo. */}
       <div className="rounded-xl border border-[var(--carta-border)] p-4">
         <h2 className="font-display text-sm text-navy">Vista previa</h2>
         {seleccionados.length === 0 ? (
@@ -904,16 +1043,27 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
         )}
       </div>
 
-      {/* Enviar -- exige la confirmación de abajo, nunca dispara directo. */}
+      {/* Enviar -- exige la confirmación de abajo, nunca dispara directo.
+          Con 'personalizada', además, exige haber previsualizado ESTE
+          contenido exacto (`personalizadaFueVista`) -- "que sea imposible
+          mandar una campaña con HTML pegado sin haberla visto" (pedido
+          explícito). Deshabilitar este botón, el que ABRE la confirmación,
+          alcanza: sin él no hay forma de llegar ni al diálogo. */}
       <div>
         <button
           type="button"
-          disabled={cantidadSeleccionada === 0 || enviando || Boolean(campanaEnCurso)}
+          disabled={cantidadSeleccionada === 0 || enviando || Boolean(campanaEnCurso) || !personalizadaFueVista}
           onClick={abrirConfirmacion}
           className="rounded-lg bg-navy px-4 py-2.5 text-sm font-medium text-beige hover:bg-navy/90 disabled:opacity-40"
         >
           Enviar a {cantidadSeleccionada} destinatario{cantidadSeleccionada === 1 ? '' : 's'}
         </button>
+        {plantillaElegida === PLANTILLA_PERSONALIZADA && !personalizadaFueVista && cantidadSeleccionada > 0 && !campanaEnCurso && (
+          <p className="mt-2 text-xs text-amber-800">
+            Con HTML personalizado, primero tenés que previsualizarlo (con este mismo asunto y contenido) antes de
+            poder enviarlo. Si lo editaste después de previsualizarlo, previsualizalo de nuevo.
+          </p>
+        )}
       </div>
 
       {/* La confirmación: a cuántos, de qué zona, con qué plantilla -- y
@@ -938,7 +1088,10 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
               <strong>{zonaActiva}</strong>
               {seleccion.modo === 'zona' ? ' (la zona completa)' : ' (la selección puntual de esta página)'}.
             </p>
-            <p className="mt-2 text-xs text-teal">Esto no se puede deshacer una vez enviado.</p>
+            <p className="mt-2 text-xs text-teal">
+              Esto no se puede deshacer una vez enviado -- lo que ya salga se puede cancelar después desde Historial
+              de campañas, pero lo enviado no se deshace.
+            </p>
             <label htmlFor="campanas-confirmar-texto" className="mt-4 block text-xs font-medium uppercase tracking-wide text-teal">
               Escribí {PALABRA_CONFIRMACION} para confirmar
             </label>
@@ -971,41 +1124,6 @@ export function VistaCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
                 {enviando ? 'Enviando…' : 'Confirmar y enviar'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Historial de campañas ya creadas -- visible siempre, no sólo
-          cuando hay una interrumpida, para que "¿ya se mandó esto?" tenga
-          una respuesta sin salir de la pantalla. */}
-      {campanas && campanas.length > 0 && (
-        <div>
-          <h2 className="font-display text-sm text-navy">Campañas anteriores</h2>
-          <div className="mt-2 overflow-x-auto rounded-xl border border-[var(--carta-border)]">
-            <table className="w-full min-w-[600px] text-left text-sm">
-              <thead className="bg-[var(--carta-fill)] text-xs uppercase tracking-wide text-teal">
-                <tr>
-                  <th className="px-3 py-2">Plantilla</th>
-                  <th className="px-3 py-2">Creada por</th>
-                  <th className="px-3 py-2">Fecha</th>
-                  <th className="px-3 py-2">Progreso</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--carta-border)]">
-                {campanas.map((c) => (
-                  <tr key={c.id}>
-                    <td className="px-3 py-2 align-top text-navy">{ETIQUETAS_PLANTILLA[c.plantilla]}</td>
-                    <td className="px-3 py-2 align-top text-teal">{c.creadoPor}</td>
-                    <td className="px-3 py-2 align-top text-teal">{formatearFecha(c.creadoAt)}</td>
-                    <td className="px-3 py-2 align-top text-teal">
-                      {c.progreso.enviados}/{c.progreso.total} enviados
-                      {c.progreso.fallidos > 0 ? `, ${c.progreso.fallidos} con error` : ''}
-                      {c.progreso.pendientes > 0 ? ` -- ${c.progreso.pendientes} pendientes` : ' -- terminada'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         </div>
       )}

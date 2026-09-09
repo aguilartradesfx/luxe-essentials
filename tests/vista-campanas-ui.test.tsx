@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Cotizador from '@/app/cotizador/Panel';
 import { VistaCampanas } from '@/app/cotizador/VistaCampanas';
@@ -125,8 +125,20 @@ function mockFetchCampanas(
       return new Response(JSON.stringify({ ok: true, campanas: opciones.listado ?? [] }), { status: 200 });
     }
     if (url.endsWith('/api/campanas/previsualizar')) {
+      const esPersonalizada = cuerpo.plantilla === 'personalizada';
       return new Response(
-        JSON.stringify({ ok: true, asunto: 'Asunto inicial', previewText: 'preview', html: '<p>hola</p>' }),
+        JSON.stringify({
+          ok: true,
+          asunto: esPersonalizada ? cuerpo.asunto : 'Asunto inicial',
+          previewText: esPersonalizada ? cuerpo.previewText : 'preview',
+          html: esPersonalizada ? `<p>vista previa de: ${cuerpo.html}</p>` : '<p>hola</p>',
+          advertencias: esPersonalizada ? ['Se quitó 1 etiqueta <script>.'] : undefined,
+          // Firma "de mentira" -- alcanza con que sea determinística sobre
+          // asunto+html para que las pruebas de abajo puedan comprobar que
+          // `POST /api/campanas/crear` recibe la firma que le devolvió ESTA
+          // previsualización, y ninguna otra.
+          firmaPrevisualizacion: esPersonalizada ? `firma(${cuerpo.asunto}|${cuerpo.html})` : undefined,
+        }),
         { status: 200 },
       );
     }
@@ -312,32 +324,10 @@ describe('VistaCampanas', () => {
     expect(screen.getByText(/28 enviados/)).toBeInTheDocument();
   });
 
-  it('muestra el aviso de campaña interrumpida y permite retomarla', async () => {
-    mockFetchCampanas({
-      listado: [
-        {
-          id: 'camp-vieja',
-          plantilla: 'inicial',
-          asunto: 'Asunto',
-          creadoPor: 'Ana Solano',
-          creadoAt: '2026-01-01T00:00:00Z',
-          progreso: { total: 50, enviados: 30, fallidos: 0, pendientes: 20 },
-        },
-      ],
-      enviarSecuencia: [{ procesados: 20, enviados: 20, fallidos: 0, terminada: true }],
-    });
-    render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-
-    expect(await screen.findByText(/hay una campaña sin terminar/i)).toBeInTheDocument();
-    expect(screen.getByText(/30 de 50 enviados/)).toBeInTheDocument();
-
-    const usuario = userEvent.setup();
-    await usuario.click(screen.getByRole('button', { name: /retomar el envío/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/la campaña terminó de enviarse/i)).toBeInTheDocument();
-    });
-  });
+  // El historial (aviso de campaña interrumpida, retomarla desde ahí,
+  // cancelarla) ya no vive en esta pantalla -- se mudó a
+  // VistaHistorialCampanas.tsx (encargo del dueño, punto 2). Esas pruebas
+  // están en tests/vista-historial-campanas-ui.test.tsx.
 
   // Pedido expreso del dueño: "cambiar de zona con una selección de
   // destinatarios ya hecha es una forma fácil de mandarle una campaña a la
@@ -394,5 +384,243 @@ describe('VistaCampanas', () => {
     );
     render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />);
     await waitFor(() => expect(onSesionInvalida).toHaveBeenCalled());
+  });
+});
+
+// ---------------------------------------------------------------------
+// Punto 4 del encargo: la sección "Plantilla" plegable.
+describe('VistaCampanas — sección "Plantilla" plegable', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('arranca plegada, con el nombre y el asunto visibles en el resumen sin desplegar', async () => {
+    mockFetchCampanas();
+    const { container } = render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    // Espera a que carguen las plantillas -- "Asunto inicial" sólo aparece
+    // una vez que `plantillaActual` tiene datos.
+    await screen.findByText(/asunto inicial/i);
+
+    const detalle = container.querySelector('details');
+    expect(detalle).not.toBeNull();
+    expect(detalle?.open).toBe(false);
+    expect(container.querySelector('summary')?.textContent).toMatch(/correo inicial/i);
+    // Nota: no se comprueba acá que el contenido quede OCULTO -- jsdom no
+    // aplica la hoja de estilos por defecto del navegador que hace
+    // `details:not([open]) > *:not(summary) { display: none }`, así que
+    // `getByLabelText`/`queryByLabelText` seguirían encontrando el
+    // `<textarea>` en el DOM aunque esté plegado. Lo único que SÍ es
+    // observable acá -- y lo que de verdad importa: `detalle.open` es
+    // `false` (comprobado arriba), que es la propiedad real que el
+    // navegador usa para decidir si mostrar el contenido.
+  });
+
+  it('se despliega al hacer click en el resumen, y sigue desplegada al cambiar entre las cuatro plantillas fijas', async () => {
+    mockFetchCampanas();
+    const { container } = render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    await screen.findByText(/asunto inicial/i);
+    const usuario = userEvent.setup();
+
+    await usuario.click(container.querySelector('summary')!);
+    expect(container.querySelector('details')?.open).toBe(true);
+    expect(await screen.findByLabelText(/párrafo 1/i)).toBeInTheDocument();
+
+    await usuario.click(screen.getByLabelText(/^primer seguimiento$/i));
+    expect(container.querySelector('details')?.open).toBe(true);
+    expect(await screen.findByLabelText(/párrafo 1/i)).toBeInTheDocument();
+  });
+
+  it('cambiar de ZONA no pliega ni despliega la sección de plantilla', async () => {
+    mockFetchCampanas();
+    const { container } = render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    await screen.findByText(/asunto inicial/i);
+    const usuario = userEvent.setup();
+
+    await usuario.click(container.querySelector('summary')!);
+    expect(container.querySelector('details')?.open).toBe(true);
+
+    await usuario.selectOptions(screen.getByLabelText(/elegir zona/i), 'GAM Centro');
+    expect(container.querySelector('details')?.open).toBe(true);
+  });
+
+  it('elegir "HTML personalizado" despliega la sección aunque estuviera plegada', async () => {
+    mockFetchCampanas();
+    const { container } = render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    await screen.findByText(/asunto inicial/i);
+    expect(container.querySelector('details')?.open).toBe(false);
+
+    const usuario = userEvent.setup();
+    await usuario.click(screen.getByLabelText(/^html personalizado$/i));
+
+    expect(container.querySelector('details')?.open).toBe(true);
+    expect(await screen.findByLabelText(/^asunto$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/html del correo/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------
+// Punto 3 del encargo: plantilla personalizada (HTML pegado a mano).
+describe('VistaCampanas — plantilla "personalizada"', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function elegirPersonalizadaConSeleccion() {
+    render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    const usuario = userEvent.setup();
+    await usuario.click(await screen.findByRole('button', { name: /seleccionar esta página \(20\)/i }));
+    await usuario.click(screen.getByLabelText(/^html personalizado$/i));
+    return usuario;
+  }
+
+  it('el resumen avisa que falta {{unsubscribe_url}} mientras el html no lo trae', async () => {
+    mockFetchCampanas();
+    const { container } = render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    const usuario = userEvent.setup();
+    await usuario.click(screen.getByLabelText(/^html personalizado$/i));
+
+    expect(container.querySelector('summary')?.textContent).toMatch(/falta.*unsubscribe_url/i);
+
+    // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
+    // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
+    // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
+    // (o, como acá, un cambio directo del valor) no tiene ese problema.
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a>' },
+    });
+    await waitFor(() => expect(container.querySelector('summary')?.textContent).not.toMatch(/falta.*unsubscribe_url/i));
+  });
+
+  it('el botón de enviar queda deshabilitado hasta previsualizar, y se vuelve a deshabilitar si se edita el html después', async () => {
+    mockFetchCampanas();
+    const usuario = await elegirPersonalizadaConSeleccion();
+
+    await usuario.type(screen.getByLabelText(/^asunto$/i), 'Mi asunto');
+    // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
+    // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
+    // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
+    // (o, como acá, un cambio directo del valor) no tiene ese problema.
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a>' },
+    });
+
+    const botonEnviar = await screen.findByRole('button', { name: /enviar a 20 destinatarios/i });
+    expect(botonEnviar).toBeDisabled();
+    expect(screen.getByText(/primero tenés que previsualizarlo/i)).toBeInTheDocument();
+
+    await usuario.click(screen.getByRole('button', { name: /previsualizar/i }));
+    await waitFor(() => expect(botonEnviar).not.toBeDisabled());
+    expect(screen.queryByText(/primero tenés que previsualizarlo/i)).not.toBeInTheDocument();
+
+    // Editar el html DESPUÉS de previsualizar vuelve a bloquear el envío --
+    // el defecto exacto que pide el encargo ("que sea imposible mandar...
+    // sin haberla visto").
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a><p>agregado después</p>' },
+    });
+    expect(botonEnviar).toBeDisabled();
+  });
+
+  // El aviso del coordinador: plegar/desplegar el acordeón NUNCA cuenta
+  // como "ya la vi" -- sólo un POST /previsualizar exitoso lo hace.
+  it('plegar y desplegar la sección NO cuenta como haber previsualizado', async () => {
+    mockFetchCampanas();
+    const { container } = render(<VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByRole('option', { name: /GAM Oeste/ });
+    const usuario = userEvent.setup();
+    await usuario.click(await screen.findByRole('button', { name: /seleccionar esta página \(20\)/i }));
+    await usuario.click(screen.getByLabelText(/^html personalizado$/i));
+    await usuario.type(screen.getByLabelText(/^asunto$/i), 'Asunto');
+    // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
+    // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
+    // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
+    // (o, como acá, un cambio directo del valor) no tiene ese problema.
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a>' },
+    });
+
+    const botonEnviar = await screen.findByRole('button', { name: /enviar a 20 destinatarios/i });
+    expect(botonEnviar).toBeDisabled();
+
+    // Plegar y volver a desplegar, sin previsualizar.
+    await usuario.click(container.querySelector('summary')!);
+    expect(container.querySelector('details')?.open).toBe(false);
+    await usuario.click(container.querySelector('summary')!);
+    expect(container.querySelector('details')?.open).toBe(true);
+
+    expect(botonEnviar).toBeDisabled();
+  });
+
+  it('previsualizar manda plantilla/asunto/previewText/html, no "parrafos"', async () => {
+    const fetchImpl = mockFetchCampanas();
+    const usuario = await elegirPersonalizadaConSeleccion();
+    await usuario.type(screen.getByLabelText(/^asunto$/i), 'Mi asunto');
+    // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
+    // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
+    // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
+    // (o, como acá, un cambio directo del valor) no tiene ese problema.
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a>' },
+    });
+    await usuario.click(screen.getByRole('button', { name: /previsualizar/i }));
+
+    await waitFor(() => {
+      const llamada = fetchImpl.mock.calls.find(([input]) =>
+        (typeof input === 'string' ? input : input.toString()).endsWith('/api/campanas/previsualizar'),
+      );
+      expect(llamada).toBeDefined();
+      const cuerpo = JSON.parse((llamada as any)[1].body);
+      expect(cuerpo.plantilla).toBe('personalizada');
+      expect(cuerpo.asunto).toBe('Mi asunto');
+      expect(cuerpo.html).toContain('unsubscribe_url');
+      expect(cuerpo.parrafos).toBeUndefined();
+    });
+  });
+
+  it('crear manda asunto/previewText/html/firmaPrevisualizacion, con la firma de la última previsualización', async () => {
+    let cuerpoRecibido: any = null;
+    mockFetchCampanas({ onCrear: (c) => (cuerpoRecibido = c) });
+    const usuario = await elegirPersonalizadaConSeleccion();
+    await usuario.type(screen.getByLabelText(/^asunto$/i), 'Mi asunto');
+    // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
+    // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
+    // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
+    // (o, como acá, un cambio directo del valor) no tiene ese problema.
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a>' },
+    });
+    await usuario.click(screen.getByRole('button', { name: /previsualizar/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /enviar a 20 destinatarios/i })).not.toBeDisabled(),
+    );
+
+    await usuario.click(screen.getByRole('button', { name: /enviar a 20 destinatarios/i }));
+    await usuario.type(await screen.findByLabelText(/escribí ENVIAR para confirmar/i), 'ENVIAR');
+    await usuario.click(screen.getByRole('button', { name: /^confirmar y enviar$/i }));
+
+    await waitFor(() => expect(cuerpoRecibido).not.toBeNull());
+    expect(cuerpoRecibido.plantilla).toBe('personalizada');
+    expect(cuerpoRecibido.asunto).toBe('Mi asunto');
+    expect(cuerpoRecibido.html).toContain('unsubscribe_url');
+    expect(cuerpoRecibido.firmaPrevisualizacion).toBe('firma(Mi asunto|<a href="{{unsubscribe_url}}">Baja</a>)');
+    expect(cuerpoRecibido.parrafos).toBeUndefined();
+  });
+
+  it('muestra las advertencias de qué se quitó del html en la última previsualización', async () => {
+    mockFetchCampanas();
+    const usuario = await elegirPersonalizadaConSeleccion();
+    await usuario.type(screen.getByLabelText(/^asunto$/i), 'Asunto');
+    fireEvent.change(screen.getByLabelText(/html del correo/i), {
+      target: { value: '<a href="{{unsubscribe_url}}">Baja</a><script>x</script>' },
+    });
+    await usuario.click(screen.getByRole('button', { name: /previsualizar/i }));
+
+    expect(await screen.findByText(/se quitó 1 etiqueta <script>/i)).toBeInTheDocument();
   });
 });

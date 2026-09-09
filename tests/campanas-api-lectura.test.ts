@@ -295,6 +295,90 @@ describe('POST /api/campanas/previsualizar', () => {
     expect(cuerpo.html).not.toContain('{{unsubscribe_url}}');
   });
 
+  // Punto 3 del encargo ("plantilla personalizada"): con HTML pegado a
+  // mano, la previsualización pesa más que nunca -- es la ruta que sanea,
+  // exige el marcador de baja, y firma "esto ya se vio" para que
+  // POST /api/campanas/crear lo pueda comprobar.
+  describe('con plantilla "personalizada"', () => {
+    it('rechaza (400) un html que no trae {{unsubscribe_url}} -- nunca lo inyecta solo', async () => {
+      const { cookie, csrf } = sesionSuperadmin();
+      const res = await postPrevisualizar(
+        peticion(
+          {
+            plantilla: 'personalizada',
+            asunto: 'Asunto de prueba',
+            html: '<p>Hola, no traigo enlace de baja.</p>',
+            destinatario: { nombreCrm: 'Ana Rodríguez', correo: 'ana@hotel.com' },
+          },
+          { cookie, 'x-csrf-token': csrf },
+        ),
+      );
+      expect(res.status).toBe(400);
+      const cuerpo = await res.json();
+      expect(cuerpo.error).toContain('{{unsubscribe_url}}');
+    });
+
+    it('400 sin asunto', async () => {
+      const { cookie, csrf } = sesionSuperadmin();
+      const res = await postPrevisualizar(
+        peticion(
+          {
+            plantilla: 'personalizada',
+            asunto: '   ',
+            html: '<a href="{{unsubscribe_url}}">Baja</a>',
+            destinatario: { nombreCrm: 'Ana', correo: 'a@x.cr' },
+          },
+          { cookie, 'x-csrf-token': csrf },
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it('400 sin html', async () => {
+      const { cookie, csrf } = sesionSuperadmin();
+      const res = await postPrevisualizar(
+        peticion(
+          { plantilla: 'personalizada', asunto: 'Asunto', html: '  ', destinatario: { nombreCrm: 'Ana', correo: 'a@x.cr' } },
+          { cookie, 'x-csrf-token': csrf },
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it('sanea <script>/<form>, resuelve los marcadores, y devuelve una firma no vacía', async () => {
+      const { cookie, csrf } = sesionSuperadmin();
+      const res = await postPrevisualizar(
+        peticion(
+          {
+            plantilla: 'personalizada',
+            asunto: 'Asunto personalizado',
+            previewText: 'Vista previa personalizada',
+            html:
+              '<p>Buenos días{{nombre}}: somos {{empresa}}.</p>' +
+              '<script>alert(1)</script>' +
+              '<form action="/x"><input></form>' +
+              '<a href="{{unsubscribe_url}}">Darse de baja</a>',
+            destinatario: { nombreCrm: 'Ana Rodríguez', correo: 'ana@hotel.com' },
+          },
+          { cookie, 'x-csrf-token': csrf },
+        ),
+      );
+      expect(res.status).toBe(200);
+      const cuerpo = await res.json();
+      expect(cuerpo.ok).toBe(true);
+      expect(cuerpo.asunto).toBe('Asunto personalizado');
+      expect(cuerpo.previewText).toBe('Vista previa personalizada');
+      expect(cuerpo.html).not.toContain('<script');
+      expect(cuerpo.html).not.toContain('<form');
+      expect(cuerpo.html).toContain('Ana');
+      expect(cuerpo.html).toContain('/baja?t=');
+      expect(cuerpo.html).not.toContain('{{unsubscribe_url}}');
+      expect(cuerpo.advertencias.length).toBeGreaterThanOrEqual(2);
+      expect(typeof cuerpo.firmaPrevisualizacion).toBe('string');
+      expect(cuerpo.firmaPrevisualizacion.length).toBeGreaterThan(0);
+    });
+  });
+
   it('el saludo no se personaliza para un nombre de negocio', async () => {
     const { cookie, csrf } = sesionSuperadmin();
     const res = await postPrevisualizar(
