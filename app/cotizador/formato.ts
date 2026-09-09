@@ -55,6 +55,19 @@ export function formatearEspera(iso: string, ahora: Date = new Date()): string {
 
 export { GRUPOS };
 
+// "08/09/2026 14:05" -- fecha y hora locales, de un vistazo, sin depender
+// de `toLocaleString` (mismo motivo que `formatearColones`: el formato que
+// da el runtime de Node varía según la configuración regional del
+// servidor). Compartido entre VistaCampanas.tsx (la campaña recién creada)
+// y VistaHistorialCampanas.tsx (cada fila del historial) -- las dos
+// necesitan exactamente el mismo formato para la misma fecha.
+export function formatearFecha(iso: string): string {
+  const f = new Date(iso);
+  if (Number.isNaN(f.getTime())) return iso;
+  const dos = (n: number) => String(n).padStart(2, '0');
+  return `${dos(f.getDate())}/${dos(f.getMonth() + 1)}/${f.getFullYear()} ${dos(f.getHours())}:${dos(f.getMinutes())}`;
+}
+
 // Colones sin decimales, agrupados de a tres. No se usa `toLocaleString`
 // porque el separador de miles que trae el runtime de Node para `es-CR`
 // varía entre versiones de ICU (a veces un espacio, no un punto), y el

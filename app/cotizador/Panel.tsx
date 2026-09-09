@@ -5,6 +5,7 @@ import type { LineaEntrada } from '@/lib/cotizador/tipos';
 import { PantallaClave } from './PantallaClave';
 import { VistaAprobaciones } from './VistaAprobaciones';
 import { VistaCampanas } from './VistaCampanas';
+import { VistaHistorialCampanas } from './VistaHistorialCampanas';
 import { VistaCrear } from './VistaCrear';
 import { VistaEquipo } from './VistaEquipo';
 import { VistaListado } from './VistaListado';
@@ -46,7 +47,11 @@ export type PrefillCotizacion = {
   contactId?: string;
 };
 
-type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones' | 'campanas';
+// 'historial-campanas' (encargo del dueño, punto 2): pestaña propia, aparte
+// de 'campanas' -- ver el comentario grande al principio de
+// VistaHistorialCampanas.tsx para el porqué (el mismo criterio que ya
+// separa 'crear' de 'cotizaciones' acá mismo).
+type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones' | 'campanas' | 'historial-campanas';
 
 // Rótulo visible de cada sección -- vive acá, fuera del componente, porque
 // tanto la lista de la barra lateral como el rótulo "Sección: …" del modo
@@ -60,6 +65,7 @@ const ETIQUETAS_SECCION: Record<Pestana, string> = {
   equipo: 'Equipo',
   aprobaciones: 'Aprobaciones',
   campanas: 'Campañas',
+  'historial-campanas': 'Historial de campañas',
 };
 
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
@@ -583,7 +589,9 @@ export default function Panel() {
                     'crear',
                     'cotizaciones',
                     'metricas',
-                    ...(rol === 'superadmin' ? (['equipo', 'aprobaciones', 'campanas'] as Pestana[]) : []),
+                    ...(rol === 'superadmin'
+                      ? (['equipo', 'aprobaciones', 'campanas', 'historial-campanas'] as Pestana[])
+                      : []),
                   ] as Pestana[]
                 ).map((valor) => (
                   <li key={valor}>
@@ -666,6 +674,12 @@ export default function Panel() {
               {/* Mismo doble chequeo que "Equipo"/"Aprobaciones", mismo motivo. */}
               {pestana === 'campanas' && rol === 'superadmin' && (
                 <VistaCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+              )}
+              {/* Mismo doble chequeo, mismo motivo -- ver el comentario grande
+                  al principio de VistaHistorialCampanas.tsx para por qué es
+                  una pestaña propia y no una sección dentro de "Campañas". */}
+              {pestana === 'historial-campanas' && rol === 'superadmin' && (
+                <VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
               )}
             </div>
           </div>
