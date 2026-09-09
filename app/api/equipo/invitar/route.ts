@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   // esquema: mismo motivo que en el resto de app/api/*, extendido a "no
   // revelar la forma esperada del cuerpo a quien no puede usarlo". Esta
   // ruta escribe (crea una fila): exige el token anti-CSRF.
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: true });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: true });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

@@ -281,6 +281,7 @@ const { POST: postReenviar } = await import('@/app/api/equipo/reenviar/route');
 const { POST: postEstado } = await import('@/app/api/equipo/estado/route');
 const { emitirSesion } = await import('@/lib/sesion');
 const { huellaDe } = await import('@/lib/cotizador/invitaciones');
+const { _reiniciarCacheAutenticacion } = await import('@/lib/autenticacion-cotizador');
 
 function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('https://luxeessentialscr.com/api/equipo', {
@@ -352,6 +353,12 @@ beforeEach(() => {
   actualizacionesDirectas = 0;
   simularClaveFijadaEntreLecturaYEscrituraId = null;
   resultadoRpcForzado = undefined;
+  // I6 (revision-final-2.md): `autenticarPeticion` ahora cachea
+  // `activo`/`rol` por un minuto -- sin este reset, una prueba que deja
+  // (por ejemplo) `UUID_CARLA_BAJA` en caché como desactivada contaminaría
+  // a cualquier prueba posterior que reutilice ese mismo id con `filas`
+  // reasignado de otra forma.
+  _reiniciarCacheAutenticacion();
 });
 
 describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)', () => {
@@ -418,25 +425,34 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
   // Cookie válida con rol 'superadmin' Y la base también dice 'superadmin'
   // para ese nombre — pero `activo: false`. Sólo la desactivación distingue
   // este caso del de control de arriba. Repetido en las cuatro rutas.
-  it('listar: rechaza a un superadmin desactivado en la base', async () => {
+  //
+  // I6 (revision-final-2.md): antes de ese arreglo, `autenticarPeticion`
+  // nunca miraba `activo` -- así que esta persona desactivada SÍ entraba
+  // (auth.ok), y era `autorizarSuperadmin` quien la frenaba después, con
+  // 403 ("no tenés permiso"). Ahora `autenticarPeticion` relee la misma
+  // fila ANTES, así que la rechaza ella misma, con 401 -- el mismo mensaje
+  // genérico de sesión inválida que recibe cualquier cookie vencida (no le
+  // confirma a quien fue dado de baja que su cuenta existe). El resto de la
+  // prueba -- que ninguna escritura llegó a ocurrir -- sigue intacto.
+  it('listar: rechaza (401, antes de llegar a autorizar) a un superadmin desactivado en la base', async () => {
     filas = [filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
     const { cookie } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postListar(peticion({}, { cookie }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
-  it('invitar: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
+  it('invitar: rechaza (401, antes de llegar a autorizar) a un superadmin desactivado en la base (con CSRF válido)', async () => {
     filas = [filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false })];
     const { cookie, csrf } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postInvitar(
       peticion({ correo: 'nuevo@luxe.cr', nombre: 'Nueva Persona', rol: 'vendedor' }, { cookie, 'x-csrf-token': csrf }),
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(filas.find((f) => f.correo === 'nuevo@luxe.cr')).toBeUndefined();
     expect(llamadasCorreo).toHaveLength(0);
   });
 
-  it('reenviar: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
+  it('reenviar: rechaza (401, antes de llegar a autorizar) a un superadmin desactivado en la base (con CSRF válido)', async () => {
     filas = [
       filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
       filaBase({
@@ -451,18 +467,18 @@ describe('autorizacion: el rol de la cookie no autoriza nada (las cuatro rutas)'
     ];
     const { cookie, csrf } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postReenviar(peticion({ id: UUID_INVITADA }, { cookie, 'x-csrf-token': csrf }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(llamadasCorreo).toHaveLength(0);
   });
 
-  it('estado: rechaza a un superadmin desactivado en la base (con CSRF válido)', async () => {
+  it('estado: rechaza (401, antes de llegar a autorizar) a un superadmin desactivado en la base (con CSRF válido)', async () => {
     filas = [
       filaBase({ id: UUID_U1 }),
       filaBase({ id: UUID_CARLA_BAJA, nombre: 'Carla Baja', correo: 'carla@luxeessentialscr.com', activo: false }),
     ];
     const { cookie, csrf } = sesion('Carla Baja', 'superadmin', UUID_CARLA_BAJA);
     const res = await postEstado(peticion({ id: UUID_U1, activo: false }, { cookie, 'x-csrf-token': csrf }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(filas.find((f) => f.id === UUID_U1)?.activo).toBe(true);
     expect(llamadasRpc).toHaveLength(0);
   });
@@ -1138,11 +1154,17 @@ describe('autorizarSuperadmin: diagnostico de un fallo de lectura vs. sin fila',
   // `emitirSesion` no la rechaza al emitirla— que no corresponde a
   // ninguna fila: una cuenta borrada después de que la cookie ya existía,
   // por ejemplo.
-  it('una cookie con un id sin fila en el equipo deja una linea en el log', async () => {
+  // I6 (revision-final-2.md): antes de ese arreglo, esto lo frenaba
+  // `autorizarSuperadmin` (403, "no tenés permiso"). Ahora `autenticarPeticion`
+  // relee `usuarios_panel` primero -- por el MISMO id -- y como tampoco
+  // encuentra fila, rechaza ella misma con 401 antes de que la petición
+  // llegue a `autorizarSuperadmin`. Sigue dejando una línea en el log (la
+  // deja `estadoFrescoDe`, en lib/autenticacion-cotizador.ts).
+  it('una cookie con un id sin fila en el equipo se rechaza (401) al autenticar, con una linea en el log', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { cookie } = sesion('Cualquiera', 'superadmin', UUID_SIN_FILA);
     const res = await postListar(peticion({}, { cookie }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });

@@ -1,7 +1,41 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// I6 (revision-final-2.md): `autenticarPeticion` ahora relee
+// `usuarios_panel` por el id de la cookie -- esta ruta nunca había tocado
+// Supabase antes de eso, así que este archivo no tenía ningún mock. La fila
+// calza con el id que usa `peticionAutenticada`, activa, para que el
+// camino feliz de este archivo (probar la proyección del catálogo, nunca la
+// desactivación) siga exactamente igual que antes. Las pruebas de I6 en sí
+// viven en tests/autenticacion-cotizador.test.ts.
+//
+// `rolUsuarioMock` es mutable (por defecto 'vendedor', reseteado en cada
+// prueba) porque el rol que devuelve la ruta ahora sale FRESCO de esta
+// fila, no del que traía la cookie -- la prueba "devuelve el rol de la
+// sesión junto al vendedor", más abajo, lo pone en 'superadmin' antes de
+// llamar, precisamente para comprobar que la ruta relaya ese dato fresco.
+let rolUsuarioMock: 'vendedor' | 'superadmin' = 'vendedor';
+
+vi.mock('@/lib/supabase/server', () => ({
+  supabaseAdmin: () => ({
+    from: (tabla: string) => {
+      if (tabla !== 'usuarios_panel') throw new Error(`tabla no mockeada en este doble: ${tabla}`);
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: { id: 'aaaaaaaa-0000-4000-8000-000000000001', rol: rolUsuarioMock, activo: true },
+              error: null,
+            }),
+          }),
+        }),
+      };
+    },
+  }),
+}));
 
 const { POST } = await import('@/app/api/cotizacion/catalogo/route');
 const { emitirSesion } = await import('@/lib/sesion');
+const { _reiniciarCacheAutenticacion } = await import('@/lib/autenticacion-cotizador');
 
 function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/api/cotizacion/catalogo', {
@@ -21,6 +55,13 @@ function peticionAutenticada(cuerpo: unknown) {
 describe('POST /api/cotizacion/catalogo', () => {
   beforeEach(() => {
     process.env.LUXE_SESION_SECRETO = 'secreta';
+    rolUsuarioMock = 'vendedor';
+    // I6 (revision-final-2.md): la caché de un minuto de `autenticarPeticion`
+    // vive a nivel de módulo -- sin este reset, la primera prueba de este
+    // archivo que autentica al id de siempre deja "vendedor" en caché, y la
+    // prueba de más abajo que espera "superadmin" para ese mismo id nunca
+    // llegaría a leer el mock actualizado.
+    _reiniciarCacheAutenticacion();
   });
 
   it('rechaza sin sesión', async () => {
@@ -92,6 +133,10 @@ describe('POST /api/cotizacion/catalogo', () => {
   // Tarea 3 (invitaciones y roles): la respuesta de esta ruta es también de
   // donde el panel obtiene el rol de la sesión (para decidir qué dibujar).
   it('devuelve el rol de la sesión junto al vendedor', async () => {
+    // I6 (revision-final-2.md): el rol que devuelve la ruta ahora sale
+    // FRESCO de `usuarios_panel`, no del que trae la cookie -- por eso la
+    // fila mockeada (no sólo la cookie) se pone en 'superadmin' acá.
+    rolUsuarioMock = 'superadmin';
     const { cookie } = emitirSesion('Guillermo Rojas', 'superadmin', 'aaaaaaaa-0000-4000-8000-000000000001');
     const res = await POST(peticion({}, { cookie: cookie.split(';')[0] }));
     expect(res.status).toBe(200);

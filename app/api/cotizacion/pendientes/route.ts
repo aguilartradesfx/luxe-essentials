@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
   // Ruta de solo lectura (SELECT): no exige el token anti-CSRF, igual que
   // /listado y /api/equipo/listar.
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: false });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: false });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

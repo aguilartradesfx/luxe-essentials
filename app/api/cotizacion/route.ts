@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   // revelen la forma esperada del cuerpo. Mismo orden que app/api/q7m4/route.ts.
   // Esta ruta escribe (inserta la cotización): `requiereCsrf: true` exige el
   // token anti-CSRF cuando se entra por cookie (ver lib/autenticacion-cotizador.ts).
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: true });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: true });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

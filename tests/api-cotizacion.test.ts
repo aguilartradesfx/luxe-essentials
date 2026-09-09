@@ -148,6 +148,7 @@ const { guardarPdf, enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
 const { avisarSolicitudAprobacion } = await import('@/lib/cotizador/aprobacion');
 const { emitirSesion } = await import('@/lib/sesion');
+const { _reiniciarCacheAutenticacion } = await import('@/lib/autenticacion-cotizador');
 
 function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request('http://localhost/api/cotizacion', {
@@ -203,6 +204,12 @@ describe('POST /api/cotizacion', () => {
     resultadoFilaVieja = { data: { estado: 'enviada', numero: 'COT-2026-0001', contact_id: 'contacto-viejo' }, error: null };
     resultadoUsuarioPanel = { data: { id: ID_SESION_VENDEDOR, rol: 'vendedor', activo: true }, error: null };
     process.env.LUXE_SESION_SECRETO = 'secreta';
+    // I6 (revision-final-2.md): `autenticarPeticion` ahora cachea
+    // `activo`/`rol` por un minuto -- sin este reset, una prueba que deja
+    // `ID_SESION_SUPERADMIN` en caché como activo (o desactivado) contamina
+    // a la siguiente que reutiliza el mismo id con otro valor de
+    // `resultadoUsuarioPanel`.
+    _reiniciarCacheAutenticacion();
     vi.mocked(avisarSolicitudAprobacion).mockClear();
     vi.mocked(avisarSolicitudAprobacion).mockResolvedValue({ ok: true, resendId: 're_sol' });
     vi.mocked(crearEstimate).mockResolvedValue({ ok: true, estimateId: 'est-1', contactId: 'contacto-ghl-1' });
@@ -1093,12 +1100,23 @@ describe('POST /api/cotizacion', () => {
       });
     });
 
-    it('un superadmin DESACTIVADO en la base sigue necesitando aprobación', async () => {
+    // I6 (revision-final-2.md): antes de ese arreglo, `autenticarPeticion`
+    // nunca releía `activo` -- así que un superadmin desactivado en la base
+    // igual ENTRABA (200), y lo único que lo frenaba era esta ruta pidiendo
+    // aprobación en vez de auto-aprobarse (la aserción original de esta
+    // prueba: `cuerpo.estado === 'esperando_aprobacion'`). Ahora
+    // `autenticarPeticion` relee esa misma fila ANTES de que la ruta llegue
+    // a decidir nada, así que a alguien desactivado ni siquiera lo deja
+    // entrar -- la cotización no se crea ni pendiente ni de ninguna otra
+    // forma. Verificación por mutación: si alguien reintroduce el hueco de
+    // I6 (autenticarPeticion vuelve a confiar ciegamente en la cookie), esta
+    // prueba pasa a fallar con `res.status === 200` en vez de `401`.
+    it('un superadmin DESACTIVADO en la base ni siquiera entra (401) -- no llega a "esperando_aprobacion"', async () => {
       resultadoUsuarioPanel = { data: { id: ID_SESION_SUPERADMIN, rol: 'superadmin', activo: false }, error: null };
       const llamadasPrevias = vi.mocked(crearEstimate).mock.calls.length;
       const res = await POST(peticionAutenticadaComoSuperadmin(conDescuento));
-      const cuerpo = await res.json();
-      expect(cuerpo.estado).toBe('esperando_aprobacion');
+      expect(res.status).toBe(401);
+      expect(insertado).toHaveLength(0); // nada se guardó, ni pendiente ni enviada.
       expect(llamadasNuevasACrearEstimate(llamadasPrevias)).toBe(0);
     });
   });

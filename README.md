@@ -172,21 +172,31 @@ persona.
 Se desactiva, nunca se borra: una cotización firmada por alguien que ya no está tiene que
 seguir diciendo quién la hizo.
 
-**Para sacar a alguien del equipo hacen falta dos pasos, no uno:** desactivarla —por consola o
-desde la pestaña Equipo, es lo mismo— y **además** rotar `LUXE_SESION_SECRETO` en Vercel
-(`openssl rand -hex 32`) y volver a desplegar.
+**Para sacar a alguien del equipo alcanza con un paso:** desactivarla —por consola o desde la
+pestaña Equipo, es lo mismo.
 
 ```bash
 npm run usuarios -- desactivar guillermo@luxe.cr
 ```
 
-`desactivar` impide entradas futuras, y para **administrar el equipo** (invitar, reenviar,
-activar, desactivar, cambiar de rol) corta el poder de inmediato: esas cuatro rutas releen la
-base en cada llamada. Pero **no corta la sesión que esa persona ya tenga abierta para
-cotizar**: esa cookie dura 30 días y las rutas de cotizar no vuelven a consultar la tabla en
-cada petición. Rotar el secreto invalida todas las sesiones vivas de una vez, y ése es el paso
-que de verdad la saca de cotizar. El costo es que **todo el equipo tiene que volver a entrar
-una vez** —con cinco personas es trivial, y no afecta a `/q7m4`, que tiene su propia clave.
+`desactivar` impide entradas futuras, y corta de inmediato el poder de **administrar el
+equipo** (invitar, reenviar, activar, desactivar, cambiar de rol): esas cuatro rutas releen la
+base en cada llamada. Y también corta, dentro de un minuto como mucho, la sesión que esa
+persona ya tenga abierta para **cotizar** —crear y mandar cotizaciones, reenviar, marcar
+ganada/perdida, cancelar una aprobación, leer el libro de clientes—: cada petición del panel
+relee `activo` de la base, con una caché corta (≤60s por instancia) para no convertir cada clic
+en una lectura. Ya no hace falta un segundo paso: antes de este arreglo, esa sesión seguía viva
+hasta 30 días (lo que dura la cookie) y el único remedio real era rotar `LUXE_SESION_SECRETO` y
+volver a desplegar, tumbando a todo el equipo de una vez para sacar a una sola persona.
+
+Esa rotación (`openssl rand -hex 32` en `LUXE_SESION_SECRETO`, en Vercel) sigue disponible como
+último recurso —por ejemplo, si se sospecha que una cookie se filtró de verdad—, pero ya no es
+parte del procedimiento normal de baja. No afecta a `/q7m4`, que tiene su propia clave.
+
+Si la base de datos no responde justo cuando alguien hace clic, esa persona igual entra (con
+los datos de su cookie, sin releer nada) en vez de quedar bloqueada: un corte transitorio de
+Supabase no debe dejar a todo el equipo afuera de su herramienta de trabajo diaria. Ese hueco
+dura, como mucho, lo que dure la caída real de la base —nunca más.
 
 **Salir / cambiar de usuario.** El panel tiene un botón "Salir" junto a "Sesión de …". En una
 computadora compartida hay que usarlo: si no, la siguiente persona cotiza con la sesión de la

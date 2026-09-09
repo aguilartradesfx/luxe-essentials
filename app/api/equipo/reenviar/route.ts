@@ -20,7 +20,7 @@ export async function POST(request: Request) {
 
   // Esta ruta escribe (genera un enlace nuevo y lo guarda): exige el token
   // anti-CSRF, igual que /invitar y /estado.
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: true });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: true });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

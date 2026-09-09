@@ -59,25 +59,48 @@ vi.mock('@/lib/cotizador/almacen', () => ({
 vi.mock('@/lib/cotizador/correo', () => ({
   enviarCotizacion: vi.fn().mockResolvedValue({ ok: true, resendId: 're_1' }),
 }));
+// I6 (revision-final-2.md): `autenticarPeticion` ahora relee `usuarios_panel`
+// por el id de la cookie -- este mock, que antes ignoraba el nombre de la
+// tabla (sólo conocía 'cotizaciones'), tiene que responder también a esa
+// consulta. `USUARIO_MOCK` calza con el id que usa TODA cookie "válida" de
+// este archivo (`emitirSesion(..., 'aaaaaaaa-0000-4000-8000-000000000001')`),
+// activo, para que las 20+ pruebas existentes de este archivo -- que nunca
+// se propusieron probar la desactivación -- sigan pasando exactamente igual
+// que antes. Las pruebas específicas de I6 (caché, fail-open, rechazo de
+// alguien desactivado) viven aparte, en tests/autenticacion-cotizador.test.ts,
+// donde se puede controlar ese estado sin arrastrar el resto de este mock.
+const USUARIO_MOCK = { id: 'aaaaaaaa-0000-4000-8000-000000000001', rol: 'vendedor', activo: true };
+
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
-    from: () => ({
-      insert: () => ({
-        select: () => ({
-          single: async () => ({ data: { id: 'cot-1', numero: 'COT-2026-0001' }, error: null }),
+    from: (tabla: string) => {
+      if (tabla === 'usuarios_panel') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: USUARIO_MOCK, error: null }),
+            }),
+          }),
+        };
+      }
+      return {
+        insert: () => ({
+          select: () => ({
+            single: async () => ({ data: { id: 'cot-1', numero: 'COT-2026-0001' }, error: null }),
+          }),
         }),
-      }),
-      update: () => ({ eq: async () => ({ error: null }) }),
-      select: () => ({
-        eq: () => ({
+        update: () => ({ eq: async () => ({ error: null }) }),
+        select: () => ({
           eq: () => ({
-            order: () => ({
-              limit: async () => ({ data: [], error: null }),
+            eq: () => ({
+              order: () => ({
+                limit: async () => ({ data: [], error: null }),
+              }),
             }),
           }),
         }),
-      }),
-    }),
+      };
+    },
   }),
 }));
 
@@ -429,14 +452,14 @@ describe('autenticarPeticion', () => {
     const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado', {
       headers: { cookie: cookie.split(';')[0] },
     });
-    const r = autenticarPeticion(req, {}, { requiereCsrf: false });
+    const r = await autenticarPeticion(req, {}, { requiereCsrf: false });
     expect(r).toEqual({ ok: true, vendedor: 'Guillermo Rojas', rol: 'vendedor', id: 'aaaaaaaa-0000-4000-8000-000000000001' });
   });
 
   it('ya no acepta la clave compartida en el cuerpo', async () => {
     const { autenticarPeticion } = await import('@/lib/autenticacion-cotizador');
     const req = new Request('https://luxeessentialscr.com/api/cotizacion/listado');
-    const r = autenticarPeticion(req, { clave: 'secreto-de-firma' }, { requiereCsrf: false });
+    const r = await autenticarPeticion(req, { clave: 'secreto-de-firma' }, { requiereCsrf: false });
     expect(r.ok).toBe(false);
   });
 });

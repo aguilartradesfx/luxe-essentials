@@ -11,9 +11,25 @@ const filas = [
 
 const filtros: [string, string][] = [];
 
+// I6 (revision-final-2.md): `autenticarPeticion` ahora relee `usuarios_panel`
+// -- este mock, que antes ignoraba el nombre de la tabla (sólo conocía
+// 'cotizaciones'), tiene que responder también a esa consulta con una fila
+// activa que calce con el id de `peticionAutenticada`.
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
-    from: () => {
+    from: (tabla: string) => {
+      if (tabla === 'usuarios_panel') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { id: 'aaaaaaaa-0000-4000-8000-000000000001', rol: 'vendedor', activo: true },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
       const encadenable: Record<string, unknown> = {
         eq: (columna: string, valor: string) => {
           filtros.push([columna, valor]);

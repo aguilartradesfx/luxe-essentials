@@ -18,7 +18,7 @@ export async function POST(request: Request) {
 
   // Ruta de solo lectura (SELECT): la sesión por cookie basta, sin exigir el
   // token anti-CSRF que sí piden las que escriben.
-  const auth = autenticarPeticion(request, cuerpo, { requiereCsrf: false });
+  const auth = await autenticarPeticion(request, cuerpo, { requiereCsrf: false });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

@@ -57,7 +57,7 @@ export async function POST(request: Request) {
   // cookie (ver lib/autenticacion-cotizador.ts) — con `SameSite=None` esa
   // cookie viaja sola en peticiones que origina cualquier otro sitio que el
   // vendedor visite, y el token es la única defensa contra eso.
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: true });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: true });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

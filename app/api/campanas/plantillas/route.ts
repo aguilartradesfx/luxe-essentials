@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Cuerpo inválido.' }, { status: 400 });
   }
 
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: false });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: false });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

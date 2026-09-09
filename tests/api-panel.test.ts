@@ -122,13 +122,33 @@ function construirEscritura(cambios: unknown): any {
 
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
-    from: () => ({
-      select: (columnas: string) => {
-        columnasSeleccionadas.push(columnas);
-        return construirLectura();
-      },
-      update: (cambios: unknown) => construirEscritura(cambios),
-    }),
+    from: (tabla: string) => {
+      // I6 (revision-final-2.md): `autenticarPeticion` ahora relee
+      // `usuarios_panel` en CADA petición, antes de que la ruta llegue a
+      // hacer su propia consulta -- se despacha aparte, con una fila activa
+      // fija, para no ensuciar `columnasSeleccionadas` (que varias pruebas
+      // indexan por posición, `[0]`, asumiendo que es la PRIMERA consulta
+      // que hace la ruta misma).
+      if (tabla === 'usuarios_panel') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { id: 'aaaaaaaa-0000-4000-8000-000000000001', rol: 'vendedor', activo: true },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+      return {
+        select: (columnas: string) => {
+          columnasSeleccionadas.push(columnas);
+          return construirLectura();
+        },
+        update: (cambios: unknown) => construirEscritura(cambios),
+      };
+    },
     storage: {
       from: () => ({ download: async () => resultadoDescarga }),
     },
@@ -144,6 +164,7 @@ const { POST: postPdf } = await import('@/app/api/cotizacion/pdf/route');
 const { enlaceFirmado } = await import('@/lib/cotizador/almacen');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
 const { emitirSesion } = await import('@/lib/sesion');
+const { _reiniciarCacheAutenticacion } = await import('@/lib/autenticacion-cotizador');
 
 function peticion(url: string, cuerpo: unknown, cabeceras: Record<string, string> = {}) {
   return new Request(url, {
@@ -172,6 +193,7 @@ beforeEach(() => {
   process.env.RESEND_API_KEY = 'llave';
   process.env.LUXE_CORREO_REMITENTE = 'Luxe Essentials <cotizaciones@luxe.cr>';
   process.env.LUXE_GHL_LOCATION_ID = 'location-de-prueba';
+  _reiniciarCacheAutenticacion();
 
   resultadoLista = { data: [], error: null };
   resultadoFila = { data: null, error: null };

@@ -35,7 +35,7 @@ export async function POST(request: Request) {
   // La credencial (y la autorización, más abajo) se revisan antes que el
   // esquema: mismo motivo que en el resto de app/api/*. Esta ruta escribe
   // (aprueba y envía): exige el token anti-CSRF.
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: true });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: true });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }

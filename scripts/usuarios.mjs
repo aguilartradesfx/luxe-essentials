@@ -383,19 +383,18 @@ async function ejecutar(orden, argumentos) {
       }
     }
 
-    // Revisión final, Importante 1: `desactivar` impide entradas FUTURAS y no
-    // corta la sesión que ya está viva. `autenticarPeticion` sólo mira la
-    // firma de la cookie y nunca vuelve a consultar la tabla; `activo` se
-    // comprueba una sola vez, al entrar. Se aceptó que la baja no sea
-    // inmediata (ver lib/autenticacion-cotizador.ts para por qué), pero no es
-    // defendible que quien corra esta orden se quede creyendo que ya está.
+    // I6 (revision-final-2.md), arreglado: `autenticarPeticion` ahora relee
+    // `activo` de la base en cada petición del panel (con una caché corta,
+    // ≤60s por instancia -- ver lib/autenticacion-cotizador.ts), así que
+    // `desactivar` corta también la sesión que esa persona ya tenía abierta,
+    // dentro de ese minuto -- no sólo las entradas futuras. Antes de este
+    // arreglo la sesión vieja seguía sirviendo hasta 30 días y hacía falta un
+    // segundo paso manual (rotar LUXE_SESION_SECRETO) para cortarla de
+    // verdad; ese paso ya no es necesario para una baja normal.
     if (orden === 'desactivar' && rowCount > 0) {
       console.log('');
-      console.log('Ojo: esto NO corta la sesión que esa persona ya tenga abierta.');
-      console.log('  - No va a poder volver a entrar.');
-      console.log('  - Su sesión actual sigue sirviendo hasta 30 días.');
-      console.log('Para cortarla ya: rotá LUXE_SESION_SECRETO en Vercel y volvé a desplegar.');
-      console.log('Eso obliga a todo el equipo a entrar de nuevo una vez. Ver README.md.');
+      console.log('Va a dejar de poder entrar, y su sesión actual (si tenía una abierta) deja de');
+      console.log('servir dentro de un minuto, como mucho -- no hace falta ningún paso más.');
     }
   } catch (err) {
     if (err && err.code === '23505') {

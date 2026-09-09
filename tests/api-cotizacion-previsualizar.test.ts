@@ -1,4 +1,26 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// I6 (revision-final-2.md): mismo motivo que en
+// tests/api-cotizacion-catalogo.test.ts -- `autenticarPeticion` ahora relee
+// `usuarios_panel`, y esta ruta nunca había necesitado un mock de Supabase
+// antes de eso.
+vi.mock('@/lib/supabase/server', () => ({
+  supabaseAdmin: () => ({
+    from: (tabla: string) => {
+      if (tabla !== 'usuarios_panel') throw new Error(`tabla no mockeada en este doble: ${tabla}`);
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: { id: 'aaaaaaaa-0000-4000-8000-000000000001', rol: 'vendedor', activo: true },
+              error: null,
+            }),
+          }),
+        }),
+      };
+    },
+  }),
+}));
 
 const { POST } = await import('@/app/api/cotizacion/previsualizar/route');
 const { emitirSesion } = await import('@/lib/sesion');

@@ -50,12 +50,30 @@ function nodoUpdateCot(cambios: Record<string, unknown>): any {
   return nodo;
 }
 
+// I6 (revision-final-2.md): `autenticarPeticion` ahora relee `usuarios_panel`
+// -- se agrega el despacho por tabla que este mock no necesitaba antes (sólo
+// conocía 'cotizaciones'). Cualquier id se responde como una persona activa
+// -- este archivo prueba "cancelar", no la desactivación (que tiene su
+// propia cobertura en tests/autenticacion-cotizador.test.ts), así que no
+// hace falta fijar un id de memoria que se desincronice si la sesión de
+// prueba cambia.
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
-    from: () => ({
-      select: () => nodoSelect(cotizaciones),
-      update: (cambios: Record<string, unknown>) => nodoUpdateCot(cambios),
-    }),
+    from: (tabla: string) => {
+      if (tabla === 'usuarios_panel') {
+        return {
+          select: () => ({
+            eq: (_columna: string, valor: string) => ({
+              maybeSingle: async () => ({ data: { id: valor, rol: 'vendedor', activo: true }, error: null }),
+            }),
+          }),
+        };
+      }
+      return {
+        select: () => nodoSelect(cotizaciones),
+        update: (cambios: Record<string, unknown>) => nodoUpdateCot(cambios),
+      };
+    },
   }),
 }));
 

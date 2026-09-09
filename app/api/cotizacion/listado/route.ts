@@ -54,7 +54,7 @@ export async function POST(request: Request) {
   // resto de app/api/cotizacion/* — no filtrar la forma del cuerpo a quien
   // no tiene credencial. Ruta de solo lectura (SELECT): no exige el token
   // anti-CSRF, ese requisito es de las que escriben (/cerrar, /reenviar).
-  const auth = autenticarPeticion(request, crudo, { requiereCsrf: false });
+  const auth = await autenticarPeticion(request, crudo, { requiereCsrf: false });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }
