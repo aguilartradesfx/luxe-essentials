@@ -260,6 +260,35 @@ describe('VistaAprobaciones', () => {
     expect(screen.getByRole('button', { name: /aprobar \(sin cambios\)/i })).toBeInTheDocument();
   });
 
+  // Menor (revisión final): `Number('')` da `0`, no `NaN` -- un campo
+  // BORRADO se colaba como un descuento general de 0% VÁLIDO, con el botón
+  // de confirmar habilitado. Un 0% aprobado por descuido es el precio de
+  // lista mandado como si fuera una oferta. Mata al mutante que quitara el
+  // chequeo `if (crudo === '') return undefined`: sin él, el botón de abajo
+  // quedaría HABILITADO con el campo vacío.
+  it('borrar el campo de porcentaje NO se aprueba como 0% -- el botón de confirmar queda deshabilitado', async () => {
+    mockFetch({ pendientes: [FILA_GENERAL] });
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await usuario.click(await screen.findByRole('button', { name: /cambiar % y aprobar/i }));
+    const campo = screen.getByLabelText(/nuevo porcentaje general/i);
+    await usuario.clear(campo);
+
+    expect(campo).toHaveValue(null);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    const confirmar = screen.getByRole('button', { name: /aprobar \(sin cambios\)/i });
+    expect(confirmar).toBeDisabled();
+
+    // Y no llega a pedir ninguna previsualización con ese "0%" inventado.
+    const fetchImpl = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    await new Promise((r) => setTimeout(r, 350));
+    const llamadaPrevia = fetchImpl.mock.calls.find(([input]) =>
+      (typeof input === 'string' ? input : input.toString()).endsWith('/api/cotizacion/previsualizar'),
+    );
+    expect(llamadaPrevia).toBeUndefined();
+  });
+
   it('confirmar el cambio manda /aprobar con el nuevo descuentoPersonalizado', async () => {
     const fetchEspiado = mockFetch({
       pendientes: [FILA_GENERAL],

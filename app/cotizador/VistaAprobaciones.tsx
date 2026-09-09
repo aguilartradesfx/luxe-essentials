@@ -183,12 +183,23 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
   // el JSX).
   function descuentoEditado(fila: FilaPendiente): DescuentoPersonalizado | undefined {
     if ('general' in fila.descuento_personalizado) {
-      const n = Number((valoresEdicion.general ?? '').trim());
+      const crudo = (valoresEdicion.general ?? '').trim();
+      // Menor (revisión final): `Number('')` da `0`, no `NaN` -- sin este
+      // chequeo, un campo que la persona BORRÓ (para escribir un número
+      // nuevo, o por error) se colaba como un descuento general de 0%
+      // VÁLIDO, con el botón de confirmar habilitado. Un descuento del 0%
+      // aprobado por descuido es el precio de lista mandado como si fuera
+      // una oferta -- justo lo que el diseño entero de esta pantalla
+      // (mostrar el total, exigir ver el cambio) busca evitar.
+      if (crudo === '') return undefined;
+      const n = Number(crudo);
       return Number.isFinite(n) && n >= 0 && n < 100 ? { general: n } : undefined;
     }
     const familias: Partial<Record<GrupoDescuento, number>> = {};
     for (const g of familiasPedidas(fila.descuento_personalizado)) {
-      const n = Number((valoresEdicion[g] ?? '').trim());
+      const crudo = (valoresEdicion[g] ?? '').trim();
+      if (crudo === '') return undefined;
+      const n = Number(crudo);
       if (!Number.isFinite(n) || n < 0 || n >= 100) return undefined;
       familias[g] = n;
     }
