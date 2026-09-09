@@ -31,6 +31,11 @@ const TINTA_SUAVE = '#6B7A85';
 // Mismo tono que `correo.ts` usa para destacar el total: acá se reutiliza
 // para el porcentaje que cambió, el dato más caro de pasar por alto.
 const AMBAR = '#93712f';
+// I4 (revision-final-2.md): cuando el correo al hotel no salió, "aprobada"
+// no puede leerse igual que cuando sí salió -- este tono es más urgente que
+// el ámbar de arriba porque acá no hay nada que confirmar, hay algo que
+// reenviar antes de que el vendedor llame al cliente.
+const ROJO = '#b3261e';
 
 export type ClienteCorreo = { nombre: string; empresa?: string; email: string };
 
@@ -216,6 +221,15 @@ export type ParamsResolucionCorreo = {
   // Sólo tiene valor cuando `resultado === 'rechazada'`.
   motivoRechazo?: string;
   resueltoPor: string;
+  // I4 (revision-final-2.md): sólo importa cuando `resultado === 'aprobada'`.
+  // Es `resultadoEnvio.correoOk` de `enviarCotizacionAlHotel`
+  // (lib/cotizador/enviar.ts) -- si es `false`, el descuento se aprobó pero
+  // la cotización NUNCA llegó al hotel (PDF/Resend/GHL reventaron), y este
+  // correo no puede decir "ya salió al cliente": el vendedor llamaría a
+  // hablar de un precio que el hotel jamás vio. Para 'rechazada' no se usa;
+  // se manda `true` en ese caso por comodidad de tipos (no hay envío al
+  // hotel que resolver en un rechazo).
+  correoHotelOk: boolean;
 };
 
 function cuerpoResolucionHtml(p: ParamsResolucionCorreo): string {
@@ -257,13 +271,27 @@ function cuerpoResolucionHtml(p: ParamsResolucionCorreo): string {
       </p>
       `;
 
+  // I4: si el correo al hotel no salió, el párrafo principal NO puede decir
+  // "ya salió al cliente" -- y este aviso, destacado igual que `avisoCambio`,
+  // es el que le dice al vendedor que hay algo pendiente de reenviar antes
+  // de hablar con nadie.
+  const avisoFalloEnvio = !p.correoHotelOk
+    ? `
+      <p style="margin: 0 0 20px 0; padding: 14px 18px; background-color: #fbeceb; border-left: 4px solid ${ROJO}; font-size: 15px; line-height: 1.6;">
+        <strong>El correo al hotel no salió.</strong> Hubo un error al enviar la cotización -- no llamés
+        al cliente todavía. Hay que reenviarla desde el panel antes de hablar de este precio.
+      </p>
+      `
+    : '';
+
   return envoltorio(
     `Tu cotización ${numero} fue aprobada`,
     `
     <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6;">
       <strong>${resolutor}</strong> aprobó el descuento personalizado de la cotización
-      <strong>${numero}</strong>, para <strong>${cliente}</strong>. Ya salió al cliente.
+      <strong>${numero}</strong>, para <strong>${cliente}</strong>.${p.correoHotelOk ? ' Ya salió al cliente.' : ''}
     </p>
+    ${avisoFalloEnvio}
     ${avisoCambio}
     `,
   );
@@ -293,7 +321,18 @@ function cuerpoResolucionTexto(p: ParamsResolucionCorreo): string {
     `Tu cotización ${p.numero} fue aprobada`,
     '',
     `${p.resueltoPor} aprobó el descuento personalizado de la cotización ${p.numero},`,
-    `para ${nombreDestino(p.cliente)}. Ya salió al cliente.`,
+    p.correoHotelOk
+      ? `para ${nombreDestino(p.cliente)}. Ya salió al cliente.`
+      : `para ${nombreDestino(p.cliente)}.`,
+    // I4: mismo aviso que en el html, en el mismo lugar -- antes de la
+    // parte del porcentaje, no después, para que no quede enterrado.
+    ...(p.correoHotelOk
+      ? []
+      : [
+          '',
+          'EL CORREO AL HOTEL NO SALIO: hubo un error al enviar la cotizacion -- no llames al cliente ' +
+            'todavia. Hay que reenviarla desde el panel antes de hablar de este precio.',
+        ]),
     '',
     p.cambioPorcentaje
       ? `OJO: pediste ${formatearDescuento(p.descuentoPedido)} y se aprobó ${formatearDescuento(descuentoAprobado)}. ` +

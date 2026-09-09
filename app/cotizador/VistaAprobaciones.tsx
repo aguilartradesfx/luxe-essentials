@@ -300,12 +300,24 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
       // decir, sin ambigüedad, si el porcentaje cambió -- es el mismo hecho
       // que el diseño dice que hay que destacar en el correo al vendedor
       // ("pidió 20%, se aprobó 12%"), y esta pantalla no debe decir menos.
-      setAvisoGlobal({
-        tipo: 'ok',
-        texto: datos.cambioPorcentaje
-          ? `Aprobada ${datos.numero} con el porcentaje cambiado.`
-          : `Aprobada ${datos.numero} tal cual se pidió.`,
-      });
+      const base = datos.cambioPorcentaje
+        ? `Aprobada ${datos.numero} con el porcentaje cambiado.`
+        : `Aprobada ${datos.numero} tal cual se pidió.`;
+      // I4 (revision-final-2.md): la ruta devuelve `estado: 'error'` cuando
+      // `enviarCotizacionAlHotel` falló (Resend, `renderizarCotizacion`,
+      // GHL) -- la cotización quedó aprobada en la base, pero NUNCA salió
+      // al hotel. Esta pantalla pintaba "Aprobada ... tal cual se pidió"
+      // igual en los dos casos, sin mirar `datos.estado`; el superadmin no
+      // tenía forma de saber, desde acá, que había algo pendiente de
+      // reenviar.
+      setAvisoGlobal(
+        datos.estado === 'error'
+          ? {
+              tipo: 'error',
+              texto: `${base} Pero el correo al hotel falló: la cotización no le llegó. Hay que reenviarla.`,
+            }
+          : { tipo: 'ok', texto: base },
+      );
     } catch {
       setMensajesFila((m) => ({ ...m, [fila.id]: { tipo: 'error', texto: 'Fallo de red.' } }));
     } finally {

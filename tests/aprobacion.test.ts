@@ -393,6 +393,7 @@ describe('aprobar', () => {
         descuentoAprobado: { general: 12 },
         cambioPorcentaje: true,
         resueltoPor: 'Ana Solano',
+        correoHotelOk: true,
       }),
       deps,
     );
@@ -401,7 +402,23 @@ describe('aprobar', () => {
   it('manda el aviso de resolución con cambioPorcentaje=false cuando se aprobó tal cual', async () => {
     await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano' });
     expect(mockResolucion).toHaveBeenCalledWith(
-      expect.objectContaining({ cambioPorcentaje: false, descuentoAprobado: { general: 20 } }),
+      expect.objectContaining({ cambioPorcentaje: false, descuentoAprobado: { general: 20 }, correoHotelOk: true }),
+      deps,
+    );
+  });
+
+  // I4 (revision-final-2.md), el hallazgo central de esta ronda: antes se
+  // llamaba a `avisarResolucion` con `resultado: 'aprobada'` SIN mirar
+  // `resultadoEnvio.correoOk` -- el vendedor recibía "ya salió al cliente"
+  // aunque el correo al hotel hubiera fallado. Esta prueba ata el aviso al
+  // resultado real del envío. Verificación por mutación: si alguien vuelve
+  // a escribir `correoHotelOk: true` a secas (en vez de
+  // `resultadoEnvio.correoOk`) en `aprobar()`, esta prueba se pone roja.
+  it('cuando el correo al hotel falla, el aviso de resolución lleva correoHotelOk=false', async () => {
+    vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+    await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano' });
+    expect(mockResolucion).toHaveBeenCalledWith(
+      expect.objectContaining({ resultado: 'aprobada', correoHotelOk: false }),
       deps,
     );
   });

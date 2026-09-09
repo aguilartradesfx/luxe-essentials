@@ -229,6 +229,33 @@ describe('VistaAprobaciones', () => {
     });
   });
 
+  // I4 (revision-final-2.md): la ruta puede devolver `estado: 'error'`
+  // cuando el descuento SÍ se aprobó pero el correo al hotel falló. Antes
+  // esta pantalla pintaba "Aprobada ... tal cual se pidió" en los dos
+  // casos, sin mirar `datos.estado` -- el superadmin no tenía forma de
+  // saber, desde acá, que había algo pendiente de reenviar. Verificación
+  // por mutación: si el `datos.estado === 'error'` de VistaAprobaciones.tsx
+  // se borra (o se invierte), esta prueba se pone roja porque el aviso
+  // vuelve a leer "Aprobada COT-2026-0001 tal cual se pidió" sin mención
+  // del fallo.
+  it('si el correo al hotel falló, el aviso NO dice sólo "tal cual se pidió": avisa que hay que reenviar', async () => {
+    mockFetch({
+      pendientes: [FILA_GENERAL],
+      aprobarRespuesta: { ok: true, numero: FILA_GENERAL.numero, estado: 'error', cambioPorcentaje: false, avisoEnviado: true },
+    });
+    const usuario = userEvent.setup();
+    renderVista();
+
+    await usuario.click(await screen.findByRole('button', { name: /aprobar tal cual/i }));
+
+    const aviso = await screen.findByText(/aprobada COT-2026-0001 tal cual se pidió/i);
+    expect(aviso.textContent).toMatch(/correo al hotel falló/i);
+    expect(aviso.textContent).toMatch(/reenviarla/i);
+    // Mismo tratamiento visual que un error real (rojo), no el verde de un
+    // envío que sí llegó -- ver `avisoGlobal.tipo === 'error'` en el JSX.
+    expect(aviso.className).toMatch(/bg-red-50/);
+  });
+
   // El requisito central del diseño: "que aprobar con un porcentaje
   // distinto del pedido sea evidente, no un descuido".
   it('cambiar el % muestra un aviso explícito y el botón de confirmar repite los dos números', async () => {

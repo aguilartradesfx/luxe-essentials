@@ -193,6 +193,9 @@ async function avisarResolucion(
     cambioPorcentaje: boolean;
     motivoRechazo?: string;
     resueltoPor: string;
+    // I4 (revision-final-2.md): sólo importa cuando `resultado === 'aprobada'`
+    // -- ver el comentario del mismo nombre en correo-aprobacion.ts.
+    correoHotelOk: boolean;
   },
 ): Promise<ResultadoCorreo> {
   const correo = await correoDePersona(db, params.nombreVendedor);
@@ -399,6 +402,14 @@ export async function aprobar(
     return { ok: false, motivo: 'error', error: mensaje };
   }
 
+  // I4 (revision-final-2.md): `correoHotelOk` viaja acá -- `resultadoEnvio`
+  // ya existe en este punto, calculado arriba -- para que el correo al
+  // vendedor diga la verdad en los dos casos. Antes se llamaba con
+  // `resultado: 'aprobada'` sin mirar `resultadoEnvio.correoOk`, así que un
+  // fallo de Resend o de `renderizarCotizacion` dejaba la fila en 'error'
+  // (correcto, `estadoFinal` de abajo) mientras el vendedor recibía "ya
+  // salió al cliente" (incorrecto) y llamaba al hotel a hablar de un precio
+  // que nunca le llegó.
   const aviso = await avisarResolucion(db, deps, {
     nombreVendedor: fila.solicitado_por,
     numero: fila.numero,
@@ -408,6 +419,7 @@ export async function aprobar(
     descuentoAprobado: descuentoFinal,
     cambioPorcentaje,
     resueltoPor: params.aprobador,
+    correoHotelOk: resultadoEnvio.correoOk,
   });
   if (!aviso.ok) {
     console.error('[cotizador] La cotización se aprobó, pero el aviso al vendedor no salió.', aviso.error);
@@ -484,6 +496,10 @@ export async function rechazar(
     cambioPorcentaje: false,
     motivoRechazo: params.motivo,
     resueltoPor: params.aprobador,
+    // No hay envío al hotel que resolver en un rechazo -- `true` es sólo
+    // para satisfacer el tipo, `cuerpoResolucionHtml`/`Texto` nunca lo leen
+    // fuera de la rama `resultado === 'aprobada'`.
+    correoHotelOk: true,
   });
   if (!aviso.ok) {
     console.error('[cotizador] La cotización se rechazó, pero el aviso al vendedor no salió.', aviso.error);

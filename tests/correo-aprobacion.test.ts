@@ -149,6 +149,9 @@ describe('enviarResolucionAprobacion', () => {
     cliente,
     descuentoPedido: { general: 20 },
     resueltoPor: 'Ana Solano',
+    // Camino feliz por defecto -- las pruebas de I4 más abajo lo pisan con
+    // `false` para probar el caso donde el correo al hotel no salió.
+    correoHotelOk: true,
   };
 
   it('aprobada sin cambio: NO destaca ningún cambio de porcentaje', async () => {
@@ -162,6 +165,54 @@ describe('enviarResolucionAprobacion', () => {
     expect(html).not.toMatch(/ojo/i);
     expect(text).not.toMatch(/ojo/i);
     expect(html).toContain('tal cual lo pediste');
+  });
+
+  // I4 (revision-final-2.md), el hallazgo central de esta ronda: si el
+  // correo al hotel falló, el vendedor NO puede leer "ya salió al
+  // cliente" -- llamaría al hotel a hablar de un precio que nunca le
+  // llegó. Verificación por mutación: si alguien vuelve a poner el `?`
+  // condicional en algo siempre verdadero (o borra `avisoFalloEnvio`),
+  // esta prueba se pone roja porque "ya salió al cliente" reaparece.
+  it('aprobada pero el correo al hotel FALLÓ: no dice "ya salió al cliente", y avisa que hay que reenviar', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarResolucionAprobacion(
+      {
+        ...base,
+        resultado: 'aprobada',
+        descuentoAprobado: { general: 20 },
+        cambioPorcentaje: false,
+        correoHotelOk: false,
+      },
+      { ...deps, fetchImpl },
+    );
+    const { html, text } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    for (const cuerpo of [html, text]) {
+      expect(cuerpo).not.toMatch(/ya salió al cliente/i);
+      expect(cuerpo).toMatch(/correo al hotel no sali/i);
+      expect(cuerpo).toMatch(/reenviar/i);
+    }
+  });
+
+  // El otro lado del mismo hallazgo: cuando SÍ salió, el texto de reenvío
+  // no debe aparecer -- si apareciera siempre, la prueba de arriba no
+  // demostraría nada.
+  it('aprobada y el correo al hotel SÍ salió: sigue diciendo "ya salió al cliente", sin el aviso de reenvío', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(respuesta({ id: 're_1' }));
+    await enviarResolucionAprobacion(
+      {
+        ...base,
+        resultado: 'aprobada',
+        descuentoAprobado: { general: 20 },
+        cambioPorcentaje: false,
+        correoHotelOk: true,
+      },
+      { ...deps, fetchImpl },
+    );
+    const { html, text } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    for (const cuerpo of [html, text]) {
+      expect(cuerpo).toMatch(/ya salió al cliente/i);
+      expect(cuerpo).not.toMatch(/correo al hotel no sali/i);
+    }
   });
 
   // El caso que el diseño llama "el fallo más caro de todo este flujo":
