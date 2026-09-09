@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
-import { previsualizarSchema } from '@/lib/validation';
+import { previsualizarSchema, previsualizarPendienteSchema } from '@/lib/validation';
 import { calcular } from '@/lib/cotizador/calcular';
 import { CATALOGO } from '@/lib/cotizador/catalogo';
+import { supabaseAdmin } from '@/lib/supabase/server';
+import { autorizarSuperadmin } from '@/lib/cotizador/equipo';
+import { previsualizarPendiente, SIN_PERMISO_APROBAR } from '@/lib/cotizador/aprobacion';
 
 export const runtime = 'nodejs';
 
@@ -26,6 +29,49 @@ export async function POST(request: Request) {
   const auth = await autenticarPeticion(request, crudo, { requiereCsrf: false });
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+  }
+
+  // I3, cabo suelto: dos vistas previas distintas viven en esta ruta.
+  //
+  //   - Sin `cotizacionId` (VistaCrear): el vendedor está ARMANDO una
+  //     cotización nueva, así que el precio correcto es el de HOY --
+  //     `CATALOGO`, como siempre.
+  //   - Con `cotizacionId` (VistaAprobaciones): el superadmin está mirando
+  //     una solicitud que puede llevar días esperando, y el precio correcto
+  //     es el CONGELADO en esa fila -- el mismo que va a usar `aprobar()`.
+  //     Si acá se usara `CATALOGO`, el total que el superadmin mira antes de
+  //     decidir y el que sale en el PDF serían dos números distintos.
+  //
+  // La fila se lee de la base por su id: nunca se confía en unas `lineas`
+  // que mande el navegador (ver el comentario de `previsualizarPendiente`).
+  const conId = crudo as { cotizacionId?: unknown };
+  if (typeof conId?.cotizacionId === 'string') {
+    const db = supabaseAdmin();
+    // Ver una cotización ajena pendiente -- con sus totales -- es lo mismo
+    // que puede hacer `/pendientes`, y exige lo mismo: superadmin releído
+    // de la base, nunca el rol de la cookie.
+    const autorizacion = await autorizarSuperadmin(auth.id, db);
+    if (!autorizacion.ok) {
+      return NextResponse.json({ ok: false, error: SIN_PERMISO_APROBAR }, { status: 403 });
+    }
+
+    const parseadoPendiente = previsualizarPendienteSchema.safeParse(crudo);
+    if (!parseadoPendiente.success) {
+      return NextResponse.json(
+        { ok: false, error: parseadoPendiente.error.issues[0]?.message ?? 'Datos inválidos.' },
+        { status: 400 },
+      );
+    }
+
+    const resultado = await previsualizarPendiente(
+      parseadoPendiente.data.cotizacionId,
+      parseadoPendiente.data.descuentoPersonalizado,
+      db,
+    );
+    if (!resultado.ok) {
+      return NextResponse.json({ ok: false, error: resultado.error }, { status: 400 });
+    }
+    return NextResponse.json({ ok: true, cotizacion: resultado.cotizacion });
   }
 
   const parseado = previsualizarSchema.safeParse(crudo);

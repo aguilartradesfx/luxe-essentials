@@ -49,6 +49,22 @@ describe('POST /api/cotizacion/previsualizar', () => {
     process.env.LUXE_SESION_SECRETO = 'secreta';
   });
 
+  // I3, cabo suelto: la vía con `cotizacionId` lee una cotización AJENA de
+  // la base y devuelve sus totales -- lo mismo que /pendientes, así que
+  // exige lo mismo: superadmin releído de la base. El doble de arriba
+  // devuelve rol 'vendedor', así que esto ancla que la autorización existe.
+  // Sin ella, cualquiera con sesión de vendedor podría pedir los totales de
+  // la solicitud de descuento de cualquier otro.
+  it('con cotizacionId, un vendedor no pasa (403)', async () => {
+    const res = await POST(
+      peticionAutenticada({
+        cotizacionId: 'bbbbbbbb-0000-4000-8000-000000000002',
+        descuentoPersonalizado: { general: 12 },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   it('rechaza sin sesión', async () => {
     const res = await POST(peticion(valido));
     expect(res.status).toBe(401);

@@ -160,10 +160,25 @@ function mockFetch(opciones: OpcionesFetch = {}) {
         return new Response(JSON.stringify(opciones.previsualizarRespuesta), { status: 200 });
       }
       const cuerpo = JSON.parse((init?.body as string) ?? '{}');
+      // I3, cabo suelto: el servidor ya no acepta `lineas` del navegador --
+      // lee la fila por `cotizacionId` y recalcula con el precio congelado
+      // en ella. Este doble hace lo mismo: resuelve la fila entre las
+      // pendientes que la prueba declaró. Si la pantalla dejara de mandar
+      // el id, acá no habría fila y la vista previa fallaría, que es
+      // exactamente lo que debe pasar.
+      const filaPrevia = (opciones.pendientes ?? [FILA_GENERAL]).find(
+        (f) => (f as { id: string }).id === cuerpo.cotizacionId,
+      ) as (typeof FILA_GENERAL) | undefined;
+      if (!filaPrevia) {
+        return new Response(
+          JSON.stringify({ ok: false, error: 'La cotización no existe.' }),
+          { status: 400 },
+        );
+      }
       try {
-        const cotizacion = calcular(cuerpo.lineas ?? [], CATALOGO, {
-          tasaIva: cuerpo.tasaIva,
-          bordadoEspecial: cuerpo.bordadoEspecial,
+        const cotizacion = calcular(filaPrevia.lineas, CATALOGO, {
+          tasaIva: filaPrevia.totales.tasaIva,
+          bordadoEspecial: filaPrevia.totales.bordadoEspecial,
           descuentoPersonalizado: cuerpo.descuentoPersonalizado,
         });
         return new Response(JSON.stringify({ ok: true, cotizacion }), { status: 200 });
@@ -437,7 +452,7 @@ describe('VistaAprobaciones', () => {
   // anclan el arreglo: pedirle el total al SERVIDOR (nunca recalcularlo en
   // el navegador) y mostrarlo antes de aprobar.
   describe('vista previa del total al cambiar el porcentaje', () => {
-    it('escribir un porcentaje nuevo pide el total a /previsualizar (con las mismas líneas) y lo muestra', async () => {
+    it('escribir un porcentaje nuevo pide el total a /previsualizar por ID -- sin mandar las líneas -- y lo muestra', async () => {
       const fetchEspiado = mockFetch({ pendientes: [FILA_GENERAL] });
       const usuario = userEvent.setup();
       renderVista();
@@ -462,12 +477,16 @@ describe('VistaAprobaciones', () => {
       );
       expect(llamadaPrevia).toBeDefined();
       const cuerpo = JSON.parse((llamadaPrevia![1] as RequestInit).body as string);
+      // I3, cabo suelto: el cuerpo lleva el ID y el porcentaje, NADA MÁS.
+      // `toEqual` con el objeto exacto es lo que hace que esto sea una
+      // prueba y no un adorno: si la pantalla volviera a mandar `lineas`
+      // (con las que el servidor calcularía contra el catálogo de HOY en
+      // vez del precio congelado), esta afirmación se cae.
       expect(cuerpo).toEqual({
-        lineas: FILA_GENERAL.lineas,
-        tasaIva: FILA_GENERAL.totales.tasaIva,
-        bordadoEspecial: FILA_GENERAL.totales.bordadoEspecial,
+        cotizacionId: FILA_GENERAL.id,
         descuentoPersonalizado: { general: 12 },
       });
+      expect(cuerpo).not.toHaveProperty('lineas');
     });
 
     // El caso concreto de la revisión: 48 uniformes, pedido 20%, aprobado

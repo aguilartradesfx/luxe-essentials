@@ -244,10 +244,14 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
       fetch('/api/cotizacion/previsualizar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // I3, cabo suelto: se manda el ID, no las líneas. El servidor lee
+        // la fila y recalcula con el precio CONGELADO en ella -- el mismo
+        // que va a usar `aprobar()`. Mandar `fila.lineas` desde acá hacía
+        // que la vista previa se calculara con el catálogo de HOY, así que
+        // con la lista de precios cambiada el total que se ve en pantalla y
+        // el que sale en el PDF podían ser dos números distintos.
         body: JSON.stringify({
-          lineas: fila.lineas,
-          ...(fila.totales.tasaIva !== undefined ? { tasaIva: fila.totales.tasaIva } : {}),
-          ...(fila.totales.bordadoEspecial !== undefined ? { bordadoEspecial: fila.totales.bordadoEspecial } : {}),
+          cotizacionId: fila.id,
           descuentoPersonalizado: editado,
         }),
         signal: controlador.signal,

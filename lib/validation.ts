@@ -217,4 +217,13 @@ export const previsualizarSchema = z.object({
   descuentoPersonalizado: descuentoPersonalizadoSchema.optional(),
 });
 
+// I3, cabo suelto: la vista previa de una solicitud que ESPERA aprobación.
+// Deliberadamente NO acepta `lineas` ni `tasaIva` ni `bordadoEspecial`: todo
+// eso sale de la fila que el servidor lee por `cotizacionId`. Lo único que
+// aporta el navegador es el porcentaje que el superadmin está escribiendo.
+export const previsualizarPendienteSchema = z.object({
+  cotizacionId: z.uuid('El id de la cotización no es válido.'),
+  descuentoPersonalizado: descuentoPersonalizadoSchema.optional(),
+});
+
 export type PrevisualizarInput = z.infer<typeof previsualizarSchema>;

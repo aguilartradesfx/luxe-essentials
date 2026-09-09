@@ -121,6 +121,63 @@ function precioListaDesactualizado(lineas: LineaFilaGuardada[]): boolean {
   return lineas.some((l) => vigentePorId.get(l.skuId) !== l.precioLista);
 }
 
+// I3, cabo suelto: la vista previa que el superadmin ve al escribir otro
+// porcentaje (`/api/cotizacion/previsualizar`, disparada desde
+// VistaAprobaciones) calculaba con `CATALOGO` -- el de HOY -- mientras que
+// `aprobar()` ya usa el congelado. Con la lista de precios cambiada, el
+// total que el superadmin MIRA antes de decidir y el que sale en el PDF son
+// dos números distintos: exactamente el defecto que el arreglo del Crítico 2
+// (mostrar el total real antes de aprobar) existe para evitar, colado por la
+// puerta de atrás.
+//
+// Vive acá y no en la ruta a propósito: recalcula con el MISMO
+// `catalogoCongelado` y las MISMAS opciones (`tasaIva`, `bordadoEspecial`)
+// que `aprobar()` -- si algún día se separan, se separan las dos juntas.
+//
+// La fila se lee de la base por su id; NUNCA se confía en unas `lineas` que
+// mande el navegador. La pantalla ya recibe `lineas` con `precioLista` desde
+// /pendientes, así que dejarla mandarlas de vuelta habría sido dejarla
+// elegir el precio con el que se previsualiza -- un total en pantalla que no
+// se corresponde con nada de lo que la base va a calcular al aprobar.
+export async function previsualizarPendiente(
+  id: string,
+  nuevoDescuento: DescuentoPersonalizado | undefined,
+  db: Db,
+): Promise<{ ok: true; cotizacion: ReturnType<typeof calcular> } | { ok: false; error: string }> {
+  const { data, error } = await db
+    .from('cotizaciones')
+    .select(COLUMNAS_PENDIENTE)
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: 'La cotización no existe.' };
+
+  const fila = data as FilaPendiente;
+  // Sólo se previsualiza lo que de verdad está esperando aprobación: una
+  // fila ya aprobada o rechazada no tiene ningún porcentaje que el
+  // superadmin pueda seguir moviendo, y devolverla acá sería una vía para
+  // recalcular cotizaciones ya cerradas.
+  if (fila.estado !== ESTADO_PENDIENTE) {
+    return { ok: false, error: 'La cotización ya no está esperando aprobación.' };
+  }
+
+  try {
+    const cotizacion = calcular(
+      fila.lineas.map((l) => ({ skuId: l.skuId, cantidad: l.cantidad })),
+      catalogoCongelado(fila.lineas),
+      {
+        tasaIva: fila.totales.tasaIva,
+        bordadoEspecial: fila.totales.bordadoEspecial,
+        descuentoPersonalizado: nuevoDescuento ?? fila.descuento_personalizado,
+      },
+    );
+    return { ok: true, cotizacion };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'No se pudo calcular.' };
+  }
+}
+
 // La fila tal como la necesita este módulo -- ni la forma completa de la
 // tabla (`vendedor`, `pdf_ruta`, etc. no hacen falta acá) ni la recortada de
 // /listado (que a propósito no trae `lineas`, y acá sí hacen falta para

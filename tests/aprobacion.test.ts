@@ -162,7 +162,7 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
-const { listarPendientes, aprobar, rechazar, cancelar, descuentosIguales, avisarSolicitudAprobacion } = await import(
+const { listarPendientes, aprobar, rechazar, cancelar, descuentosIguales, avisarSolicitudAprobacion, previsualizarPendiente } = await import(
   '@/lib/cotizador/aprobacion'
 );
 const { crearEstimate } = await import('@/lib/cotizador/ghl');
@@ -321,6 +321,90 @@ describe('listarPendientes', () => {
       expect(r.ok).toBe(true);
       if (r.ok) expect(r.cotizaciones[0].precioListaDesactualizado).toBe(true);
     });
+  });
+});
+
+describe('previsualizarPendiente', () => {
+  // El cabo suelto de I3: `aprobar()` ya usa el precio CONGELADO en la fila,
+  // pero la vista previa que el superadmin mira mientras escribe otro
+  // porcentaje calculaba con `CATALOGO` -- el de HOY. Con la lista de
+  // precios cambiada, el número en pantalla y el del PDF eran dos números
+  // distintos: justo el defecto que la vista previa existe para evitar.
+  it('calcula con el precio congelado en la fila, no con el catálogo de hoy', async () => {
+    const skuReal = CATALOGO.find((s) => s.id === 'set-600-king')!;
+    const precioCongelado = skuReal.precioLista;
+    cotizaciones[0] = filaPendienteBase({
+      lineas: [
+        {
+          skuId: 'set-600-king',
+          cantidad: 16,
+          precioLista: precioCongelado,
+          grupo: skuReal.grupo,
+          nombre: skuReal.nombre,
+        },
+      ],
+    });
+
+    // Ahora el catálogo de HOY vale otra cosa: se simula subiendo el precio
+    // de la fila NO -- se compara contra lo que `calcular` da con cada uno.
+    const conCongelado = calcular([{ skuId: 'set-600-king', cantidad: 16 }], [
+      { ...skuReal, precioLista: precioCongelado },
+    ], { tasaIva: 0.13, bordadoEspecial: false, descuentoPersonalizado: { general: 12 } }).total;
+
+    const r = await previsualizarPendiente('cot-1', { general: 12 }, supabaseAdmin());
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.cotizacion.total).toBe(conCongelado);
+  });
+
+  // La prueba que de verdad separa las dos fuentes: el precio congelado se
+  // aleja del de hoy, y el total tiene que seguir al congelado. Si
+  // `previsualizarPendiente` volviera a usar `CATALOGO`, esto se cae.
+  it('cuando la lista de precios cambió, sigue al precio congelado y NO al de hoy', async () => {
+    const skuReal = CATALOGO.find((s) => s.id === 'set-600-king')!;
+    const precioCongelado = skuReal.precioLista + 25000;
+    cotizaciones[0] = filaPendienteBase({
+      lineas: [
+        {
+          skuId: 'set-600-king',
+          cantidad: 16,
+          precioLista: precioCongelado,
+          grupo: skuReal.grupo,
+          nombre: skuReal.nombre,
+        },
+      ],
+    });
+
+    const opciones = { tasaIva: 0.13, bordadoEspecial: false, descuentoPersonalizado: { general: 12 } } as const;
+    const conCongelado = calcular([{ skuId: 'set-600-king', cantidad: 16 }],
+      [{ ...skuReal, precioLista: precioCongelado }], opciones).total;
+    const conElDeHoy = calcular([{ skuId: 'set-600-king', cantidad: 16 }], CATALOGO, opciones).total;
+    expect(conCongelado).not.toBe(conElDeHoy); // si fueran iguales la prueba no probaría nada
+
+    const r = await previsualizarPendiente('cot-1', { general: 12 }, supabaseAdmin());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.cotizacion.total).toBe(conCongelado);
+      expect(r.cotizacion.total).not.toBe(conElDeHoy);
+    }
+  });
+
+  it('sin porcentaje nuevo usa el que la fila ya tenía pedido', async () => {
+    const r = await previsualizarPendiente('cot-1', undefined, supabaseAdmin());
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.cotizacion.total).toBe((cotizaciones[0].totales as { total: number }).total);
+  });
+
+  it('rechaza un id que no existe', async () => {
+    const r = await previsualizarPendiente('fantasma', { general: 12 }, supabaseAdmin());
+    expect(r).toEqual({ ok: false, error: 'La cotización no existe.' });
+  });
+
+  // Una fila ya aprobada no tiene ningún porcentaje que seguir moviendo:
+  // devolverla acá sería una vía para recalcular cotizaciones ya cerradas.
+  it('rechaza una cotización que ya no está esperando aprobación', async () => {
+    cotizaciones[0] = filaPendienteBase({ estado: 'enviada' });
+    const r = await previsualizarPendiente('cot-1', { general: 12 }, supabaseAdmin());
+    expect(r).toEqual({ ok: false, error: 'La cotización ya no está esperando aprobación.' });
   });
 });
 
