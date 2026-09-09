@@ -68,13 +68,20 @@ export function descuentosIguales(a: DescuentoPersonalizado, b: DescuentoPersona
 // tabla (`vendedor`, `pdf_ruta`, etc. no hacen falta acá) ni la recortada de
 // /listado (que a propósito no trae `lineas`, y acá sí hacen falta para
 // recalcular si el porcentaje cambia).
+//
+// `totales` lleva la forma COMPLETA (no sólo `tasaIva`/`bordadoEspecial`,
+// las dos que `calcular` necesita como opciones) porque, además de eso, este
+// módulo la usa para dos cosas más: guardar el total que de verdad se
+// recalculó (ver el comentario grande junto al compare-and-swap, más abajo)
+// y devolverle a la fila su valor pedido original si el envío revienta a
+// mitad de camino y hay que liberar la reclamación.
 type FilaPendiente = {
   id: string;
   estado: string;
   numero: string;
   cliente: ClienteCotizacion;
   lineas: Array<{ skuId: string; cantidad: number }>;
-  totales: { tasaIva: number; bordadoEspecial: boolean };
+  totales: { subtotal: number; ahorro: number; tasaIva: number; iva: number; total: number; bordadoEspecial: boolean };
   descuento_personalizado: DescuentoPersonalizado;
   solicitado_por: string | null;
   contact_id: string | null;
@@ -276,6 +283,21 @@ export async function aprobar(
   // corran las dos el envío pesado de abajo. `rechazar`, más abajo, hace el
   // mismo `.eq('estado', ESTADO_PENDIENTE)` en su propio update -- cualquiera
   // de los dos que gane la carrera dejará al otro sin filas que tocar.
+  //
+  // Hallazgo crítico (revisión final): antes de esto, ESTE update nunca
+  // tocaba `lineas`/`totales` -- la fila se quedaba con el precio que el
+  // vendedor PIDIÓ, aunque el superadmin hubiera aprobado con otro
+  // porcentaje y `enviarCotizacionAlHotel` (más abajo) mandara al cliente un
+  // PDF con el precio de verdad aprobado. Dos números distintos para la
+  // misma cotización: la fila que ve el equipo en el panel, y el documento
+  // que ya tiene el hotel. `cotizacion` es la MISMA que unas líneas más
+  // abajo arma el PDF y el Estimate de GoHighLevel -- guardar acá sus
+  // `lineas`/`totales`, dentro del mismo update que reclama la fila, es lo
+  // que garantiza que la fila JAMÁS pueda contradecir al documento: si este
+  // `update` falla, `errorReclamo` corta la función más abajo y no se envía
+  // nada (ni PDF ni correo) con un precio que la fila no llegó a registrar.
+  // No hay ninguna ventana en la que el correo ya haya salido y este update
+  // esté pendiente -- va ANTES de `enviarCotizacionAlHotel`, no después.
   const { data: reclamada, error: errorReclamo } = await db
     .from('cotizaciones')
     .update({
@@ -284,6 +306,15 @@ export async function aprobar(
       aprobado_por: params.aprobador,
       resuelto_at: new Date().toISOString(),
       descuento_aprobado: descuentoFinal,
+      lineas: cotizacion.lineas,
+      totales: {
+        subtotal: cotizacion.subtotal,
+        ahorro: cotizacion.ahorro,
+        tasaIva: cotizacion.tasaIva,
+        iva: cotizacion.iva,
+        total: cotizacion.total,
+        bordadoEspecial: cotizacion.bordadoEspecial,
+      },
     })
     .eq('id', params.id)
     .eq('estado', ESTADO_PENDIENTE)
@@ -324,6 +355,12 @@ export async function aprobar(
   // sí cierra cualquier excepción de JavaScript (de red, de un `throw` en
   // `crearEstimate`, lo que sea) que hoy dejaba la fila exactamente en ese
   // estado ambiguo sin ninguna salida.
+  //
+  // `lineas`/`totales` vuelven acá al valor pedido original (`fila.lineas`/
+  // `fila.totales`, tal como se leyeron al principio de esta función) --
+  // nunca al recálculo del intento que reventó. Nada salió al hotel: dejar
+  // escrito el precio del intento fallido mostraría en `/pendientes` un
+  // total que nadie vio ni aprobó de verdad.
   let resultadoEnvio;
   try {
     resultadoEnvio = await enviarCotizacionAlHotel({
@@ -348,6 +385,8 @@ export async function aprobar(
         aprobado_por: null,
         resuelto_at: null,
         descuento_aprobado: null,
+        lineas: fila.lineas,
+        totales: fila.totales,
       })
       .eq('id', params.id)
       .eq('estado', ESTADO_RECLAMADO);

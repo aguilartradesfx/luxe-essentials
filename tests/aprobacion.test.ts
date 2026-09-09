@@ -168,6 +168,7 @@ const { listarPendientes, aprobar, rechazar, cancelar, descuentosIguales, avisar
 const { crearEstimate } = await import('@/lib/cotizador/ghl');
 const { enviarCotizacion } = await import('@/lib/cotizador/correo');
 const { guardarPdf } = await import('@/lib/cotizador/almacen');
+const { renderizarCotizacion } = await import('@/lib/cotizador/documento');
 const { enviarSolicitudAprobacion: mockSolicitud, enviarResolucionAprobacion: mockResolucion } = await import(
   '@/lib/cotizador/correo-aprobacion'
 );
@@ -221,6 +222,7 @@ beforeEach(() => {
   vi.mocked(enviarCotizacion).mockResolvedValue({ ok: true, resendId: 're_1' });
   vi.mocked(guardarPdf).mockClear();
   vi.mocked(guardarPdf).mockResolvedValue({ ok: true, ruta: '2026/COT-1-abc.pdf' });
+  vi.mocked(renderizarCotizacion).mockClear();
   vi.mocked(mockSolicitud).mockClear();
   vi.mocked(mockSolicitud).mockResolvedValue({ ok: true, resendId: 're_sol' });
   vi.mocked(mockResolucion).mockClear();
@@ -321,6 +323,64 @@ describe('aprobar', () => {
     const [params] = vi.mocked(crearEstimate).mock.calls[0];
     expect(params.cotizacion.total).toBe(esperado12.total);
     expect(params.cotizacion.total).not.toBe(cotizacionConDescuento(20).total);
+  });
+
+  // Hallazgo crítico (revisión final): la fila quedaba guardada con el
+  // precio PEDIDO (20%) aunque el PDF y el correo que de verdad salieron al
+  // hotel llevaran el precio APROBADO (12%). Esta es la prueba que ata los
+  // dos: compara el total que quedó escrito en la fila contra el total que
+  // de verdad entró a `renderizarCotizacion` (quien construye el PDF que
+  // recibió el hotel). Verificación por mutación: si alguien borra
+  // `lineas`/`totales` del update que reclama la fila (o los vuelve a poner
+  // en base a `fila.descuento_personalizado` en vez de `cotizacion`), el
+  // total de la fila queda en 20% mientras el del PDF sigue en 12% -- las
+  // dos aserciones de más abajo se separan y la prueba se pone roja.
+  it('la fila queda con el mismo total que el PDF que de verdad se mandó al hotel -- nunca lo contradice', async () => {
+    await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano', nuevoDescuento: { general: 12 } });
+
+    const [paramsPdf] = vi.mocked(renderizarCotizacion).mock.calls[0];
+    const totalEnPdf = paramsPdf.cotizacion.total;
+    const lineasEnPdf = paramsPdf.cotizacion.lineas;
+
+    const fila = cotizaciones[0];
+    expect(fila.totales.total).toBe(totalEnPdf);
+    expect(fila.lineas).toEqual(lineasEnPdf);
+
+    // Y de verdad es el 12% aprobado, no el 20% pedido -- si esta prueba
+    // sólo comparara los dos entre sí (sin anclar contra el valor real
+    // esperado) un bug que rompiera los DOS por igual (p. ej. que ninguno
+    // recalculara nunca) seguiría en verde.
+    const esperado12 = cotizacionConDescuento(12);
+    expect(totalEnPdf).toBe(esperado12.total);
+    expect(fila.totales.total).not.toBe(cotizacionConDescuento(20).total);
+  });
+
+  // El otro lado del mismo hallazgo: si el correo falla (pero el PDF y la
+  // fila SÍ están de acuerdo entre sí en el precio que se intentó), el
+  // estado queda 'error' -- pero la fila igual debe reflejar el precio
+  // aprobado, no el pedido, porque ese fue el que de verdad se generó e
+  // intentó enviar.
+  it('aunque el correo al cliente falle, la fila queda con el total aprobado (12%), no el pedido (20%)', async () => {
+    vi.mocked(enviarCotizacion).mockResolvedValueOnce({ ok: false, error: 'dominio no verificado' });
+    const r = await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano', nuevoDescuento: { general: 12 } });
+    expect(r).toMatchObject({ ok: true, estadoFinal: 'error' });
+    expect(cotizaciones[0].totales.total).toBe(cotizacionConDescuento(12).total);
+  });
+
+  // Si el envío revienta a mitad de camino (antes de que salga nada), la
+  // reclamación se libera -- y con ella, `lineas`/`totales` también tienen
+  // que volver al valor PEDIDO original, no quedar con el recálculo del
+  // intento que nunca llegó a salir. Verificación por mutación: si el
+  // update de liberación deja de restaurar `lineas`/`totales` (o los deja
+  // en el 12% que se estaba probando), esta prueba se pone roja.
+  it('si el envío revienta a mitad de camino, también revierte lineas y totales al valor pedido original (20%), no al intento fallido (12%)', async () => {
+    vi.mocked(crearEstimate).mockRejectedValueOnce(new Error('ECONNRESET'));
+    await aprobar(supabaseAdmin(), deps, { id: 'cot-1', aprobador: 'Ana Solano', nuevoDescuento: { general: 12 } });
+
+    const fila = cotizaciones[0];
+    const cot20 = cotizacionConDescuento(20);
+    expect(fila.totales.total).toBe(cot20.total);
+    expect(fila.lineas).toEqual(cot20.lineas);
   });
 
   it('manda el aviso de resolución con cambioPorcentaje=true y los dos descuentos cuando el % cambió', async () => {
