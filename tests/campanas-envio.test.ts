@@ -1,6 +1,6 @@
 // tests/campanas-envio.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { crearCampana, enviarTanda, TAMANO_TANDA, MINUTOS_RESERVA_VENCIDA } from '@/lib/campanas/envio';
+import { crearCampana, enviarTanda, cancelarCampana, TAMANO_TANDA, MINUTOS_RESERVA_VENCIDA } from '@/lib/campanas/envio';
 import { filtrarPermitidosParaCampana } from '@/lib/campanas/exclusiones';
 import type { DestinatarioCampana } from '@/lib/campanas/contactos';
 
@@ -351,5 +351,227 @@ describe('enviarTanda', () => {
     expect(r).toEqual({ ok: true, procesados: 1, enviados: 1, fallidos: 0, terminada: true });
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  // Punto 1 del encargo ("cancelar"): la campaña ya viene cancelada -- ni
+  // siquiera se llega a llamar al rpc de reclamo, y mucho menos a Resend.
+  // Mata al mutante que borrara este chequeo entero (`if (campana.cancelada_at)`):
+  // sin él, esta prueba fallaría porque `db.rpc` SÍ se llamaría.
+  it('si la campaña ya está cancelada, no reclama nada ni llama a Resend', async () => {
+    const db = dbParaEnviar({
+      campana: { data: { ...campanaGuardada.data, cancelada_at: '2026-01-01T00:00:00.000Z' }, error: null },
+      reclamo: { data: [], error: null },
+    });
+    const fetchImpl = vi.fn();
+
+    const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(r).toEqual({ ok: true, procesados: 0, enviados: 0, fallidos: 0, terminada: true, cancelada: true });
+    expect(db.rpc).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+
+function mockCampanasUpdate(resultado: { error: any }) {
+  const eqUpdate = vi.fn().mockResolvedValue(resultado);
+  const update = vi.fn(() => ({ eq: eqUpdate }));
+  return { update, eqUpdate };
+}
+
+function dbParaCancelar(p: { campana: any; errorAlEscribir?: boolean }) {
+  const lectura = mockCampanasSelect(p.campana);
+  const escritura = mockCampanasUpdate(p.errorAlEscribir ? { error: { message: 'db caída' } } : { error: null });
+  const from = vi.fn((tabla: string) => {
+    if (tabla === 'campanas') return { ...lectura, ...escritura };
+    throw new Error(`tabla no mockeada en esta prueba: ${tabla}`);
+  });
+  return { from, rpc: vi.fn(), lectura, escritura };
+}
+
+describe('cancelarCampana', () => {
+  it('marca cancelada_at/cancelada_por y devuelve yaEstabaCancelada:false', async () => {
+    const db = dbParaCancelar({ campana: { data: { id: 'camp-1', cancelada_at: null }, error: null } });
+    const ahora = () => new Date('2026-09-08T12:00:00.000Z');
+
+    const r = await cancelarCampana('camp-1', 'Ana Solano', db as any, ahora);
+
+    expect(r).toEqual({ ok: true, yaEstabaCancelada: false });
+    expect(db.escritura.update).toHaveBeenCalledWith({
+      cancelada_at: '2026-09-08T12:00:00.000Z',
+      cancelada_por: 'Ana Solano',
+    });
+    expect(db.escritura.eqUpdate).toHaveBeenCalledWith('id', 'camp-1');
+  });
+
+  // Idempotente: cancelar una campaña ya cancelada no es un error, y no
+  // vuelve a escribir nada (no pisa quién/cuándo la canceló la primera
+  // vez). Mata al mutante que quitara el `if (campana.cancelada_at) return...`:
+  // sin él, `db.escritura.update` SÍ se llamaría acá.
+  it('si ya estaba cancelada, no vuelve a escribir y avisa yaEstabaCancelada:true', async () => {
+    const db = dbParaCancelar({
+      campana: { data: { id: 'camp-1', cancelada_at: '2026-01-01T00:00:00.000Z' }, error: null },
+    });
+
+    const r = await cancelarCampana('camp-1', 'Ana Solano', db as any);
+
+    expect(r).toEqual({ ok: true, yaEstabaCancelada: true });
+    expect(db.escritura.update).not.toHaveBeenCalled();
+  });
+
+  it('si la campaña no existe, devuelve un error con codigo "no_existe" y no escribe nada', async () => {
+    const db = dbParaCancelar({ campana: { data: null, error: null } });
+
+    const r = await cancelarCampana('camp-inexistente', 'Ana Solano', db as any);
+
+    expect(r).toEqual({ ok: false, error: expect.stringContaining('camp-inexistente'), codigo: 'no_existe' });
+    expect(db.escritura.update).not.toHaveBeenCalled();
+  });
+
+  it('si falla la lectura, devuelve el error de la base', async () => {
+    const db = dbParaCancelar({ campana: { data: null, error: { message: 'timeout' } } });
+
+    const r = await cancelarCampana('camp-1', 'Ana Solano', db as any);
+
+    expect(r).toEqual({ ok: false, error: expect.stringContaining('timeout') });
+  });
+
+  it('si falla la escritura, devuelve el error de la base', async () => {
+    const db = dbParaCancelar({
+      campana: { data: { id: 'camp-1', cancelada_at: null }, error: null },
+      errorAlEscribir: true,
+    });
+
+    const r = await cancelarCampana('camp-1', 'Ana Solano', db as any);
+
+    expect(r).toEqual({ ok: false, error: expect.stringContaining('db caída') });
+  });
+});
+
+// ---------------------------------------------------------------------
+// La carrera que el encargo pide resolver Y anclar con una prueba: "puede
+// haber una tanda en vuelo justo cuando se cancela". Un doble de Supabase
+// EN MEMORIA (a diferencia de `dbParaEnviar`, que devuelve siempre la misma
+// respuesta fija) -- porque acá `cancelarCampana` y `enviarTanda` tienen que
+// operar sobre el MISMO estado mutable para que la prueba tenga algo real
+// que demostrar: que cancelar a mitad de una llamada a Resend no le impide
+// a esa tanda terminar de mandarse, y que la tanda SIGUIENTE (la que
+// reclamaría lo que quedó) ya no reclama nada.
+//
+// El `rpc` de este doble reproduce, en JavaScript, el filtro que la
+// migración 0020 agrega DENTRO de `campanas_reclamar_pendientes`
+// (`and not exists (select 1 from campanas where ... cancelada_at is not
+// null)`) -- es la pieza que de verdad cierra la ventana de la carrera del
+// lado de la base; acá se reproduce su EFECTO (no reclama nada de una
+// campaña cancelada) para poder probar, sin un Postgres real, que
+// `enviarTanda` se comporta bien cuando la base se comporta así.
+function dbEnMemoria(campanaInicial: Record<string, any>, enviosIniciales: Record<string, any>[]) {
+  const campana = { ...campanaInicial };
+  const envios = enviosIniciales.map((e) => ({ ...e }));
+
+  function nodoCampanas() {
+    const filtros: [string, unknown][] = [];
+    const nodo: any = {
+      select() {
+        return nodo;
+      },
+      eq(c: string, v: unknown) {
+        filtros.push([c, v]);
+        return nodo;
+      },
+      maybeSingle: async () => {
+        const idPedido = filtros.find(([c]) => c === 'id')?.[1];
+        if (idPedido !== undefined && idPedido !== campana.id) return { data: null, error: null };
+        return { data: { ...campana }, error: null };
+      },
+      update: (cambios: Record<string, unknown>) => ({
+        eq: async (_c: string, v: unknown) => {
+          if (v === campana.id) Object.assign(campana, cambios);
+          return { error: null };
+        },
+      }),
+    };
+    return nodo;
+  }
+
+  function nodoEnvios() {
+    return {
+      update: (cambios: Record<string, unknown>) => ({
+        eq: async (_c: string, id: string) => {
+          const fila = envios.find((e) => e.id === id);
+          if (fila) Object.assign(fila, cambios);
+          return { error: null };
+        },
+      }),
+    };
+  }
+
+  const from = vi.fn((tabla: string) => {
+    if (tabla === 'campanas') return nodoCampanas();
+    if (tabla === 'campanas_envios') return nodoEnvios();
+    throw new Error(`tabla no mockeada en esta prueba: ${tabla}`);
+  });
+
+  const rpc = vi.fn(async (nombre: string, args: Record<string, unknown>) => {
+    if (nombre !== 'campanas_reclamar_pendientes') throw new Error(`rpc no soportada: ${nombre}`);
+    // Reproduce el `not exists (... cancelada_at is not null)` de la
+    // migración 0020: la propia sentencia de reclamo deja de entregar nada
+    // apenas la cancelación está escrita, sin que `enviarTanda` tenga que
+    // enterarse por su cuenta.
+    if (campana.cancelada_at) return { data: [], error: null };
+    const pendientes = envios.filter((e) => e.campana_id === args.p_campana_id && e.estado === 'pendiente');
+    const reclamadas = pendientes.slice(0, args.p_limite as number);
+    for (const f of reclamadas) f.actualizado_at = new Date().toISOString();
+    return { data: reclamadas.map((f) => ({ id: f.id, correo: f.correo, nombre_crm: f.nombre_crm })), error: null };
+  });
+
+  return { from, rpc, _campana: campana, _envios: envios };
+}
+
+describe('la carrera: cancelar mientras una tanda está en vuelo', () => {
+  it('una tanda ya reclamada termina de mandarse entera, pero ninguna tanda siguiente reclama lo que quedó', async () => {
+    // 101 pendientes -- uno más que TAMANO_TANDA -- para que la primera
+    // tanda reclame exactamente 100 y deje UNO sin reclamar, que es
+    // justamente el que tiene que quedar 'pendiente' para siempre después
+    // de cancelar.
+    const envios = Array.from({ length: TAMANO_TANDA + 1 }, (_, i) => ({
+      id: `e-${i}`,
+      campana_id: 'camp-1',
+      correo: `c${i}@hotel.cr`,
+      nombre_crm: 'Hotel de Prueba',
+      estado: 'pendiente',
+    }));
+    const db = dbEnMemoria(
+      { id: 'camp-1', asunto: 'Asunto', html: 'Hola{{nombre}}: {{unsubscribe_url}}', cancelada_at: null, cancelada_por: null },
+      envios,
+    );
+
+    // Se cancela A MITAD de la llamada a Resend -- la carrera exacta que
+    // pide el encargo: "puede haber una tanda en vuelo justo cuando se
+    // cancela".
+    const fetchImpl = vi.fn().mockImplementation(async () => {
+      await cancelarCampana('camp-1', 'Ana Solano', db as any);
+      return respuestaResend({ data: Array.from({ length: TAMANO_TANDA }, (_, i) => ({ id: `r-${i}` })) });
+    });
+
+    const r1 = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    // Lo ya reclamado se manda entero -- cancelar a mitad de vuelo no lo
+    // aborta ni lo deja a medias.
+    expect(r1).toMatchObject({ ok: true, procesados: TAMANO_TANDA, enviados: TAMANO_TANDA, terminada: false });
+    expect(db._envios.filter((e) => e.estado === 'enviado')).toHaveLength(TAMANO_TANDA);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    // La tanda SIGUIENTE -- la que reclamaría el único que quedó -- ya ve
+    // la campaña cancelada: no reclama nada, no llama a Resend de nuevo, y
+    // el que quedó se queda 'pendiente' para siempre (no se pierde, no se
+    // manda, no se reescribe).
+    const r2 = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(r2).toEqual({ ok: true, procesados: 0, enviados: 0, fallidos: 0, terminada: true, cancelada: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // sigue en 1: la segunda llamada nunca llegó a Resend
+    const sobrante = db._envios.find((e) => e.id === `e-${TAMANO_TANDA}`);
+    expect(sobrante?.estado).toBe('pendiente');
   });
 });

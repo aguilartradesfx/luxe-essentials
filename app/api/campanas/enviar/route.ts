@@ -66,5 +66,9 @@ export async function POST(request: Request) {
     enviados: resultado.enviados,
     fallidos: resultado.fallidos,
     terminada: resultado.terminada,
+    // Sólo va en el cuerpo (`JSON.stringify` descarta un `undefined`) cuando
+    // esta tanda encontró la campaña ya cancelada -- ver el comentario de
+    // `ResultadoTanda` en lib/campanas/envio.ts.
+    cancelada: resultado.cancelada,
   });
 }

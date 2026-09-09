@@ -64,6 +64,13 @@ export type FilaCampana = {
   creadoPor: string;
   creadoAt: string;
   progreso: ConteoEnvios;
+  // `null` mientras la campaña sigue activa. Cuándo y quién la canceló
+  // (punto 1 del encargo) -- lo que la pantalla de historial necesita para
+  // distinguir "interrumpida mientras tanto" (retomable) de "cancelada a
+  // propósito" (no retomable, y el resto se queda 'pendiente' para
+  // siempre -- ver el comentario grande de la migración 0020).
+  canceladaAt: string | null;
+  canceladaPor: string | null;
 };
 
 type FilaCampanaCruda = {
@@ -72,6 +79,8 @@ type FilaCampanaCruda = {
   asunto: string;
   creado_por: string;
   creado_at: string;
+  cancelada_at: string | null;
+  cancelada_por: string | null;
 };
 
 // El historial de campañas para la pantalla: más reciente primero, cada una
@@ -82,7 +91,7 @@ type FilaCampanaCruda = {
 export async function listarCampanas(db: Db): Promise<FilaCampana[]> {
   const { data, error } = await db
     .from('campanas')
-    .select('id, plantilla, asunto, creado_por, creado_at')
+    .select('id, plantilla, asunto, creado_por, creado_at, cancelada_at, cancelada_por')
     .order('creado_at', { ascending: false });
   if (error) throw new Error(`No se pudo listar las campañas: ${error.message}`);
 
@@ -95,6 +104,8 @@ export async function listarCampanas(db: Db): Promise<FilaCampana[]> {
       creadoPor: fila.creado_por,
       creadoAt: fila.creado_at,
       progreso: await progresoCampana(db, fila.id),
+      canceladaAt: fila.cancelada_at ?? null,
+      canceladaPor: fila.cancelada_por ?? null,
     })),
   );
 }

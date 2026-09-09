@@ -3,7 +3,15 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { progresoCampana, listarCampanas, type Db } from '@/lib/campanas/progreso';
 
 type FilaEnvio = { id: string; campana_id: string; estado: 'pendiente' | 'enviado' | 'error' };
-type FilaCampana = { id: string; plantilla: string; asunto: string; creado_por: string; creado_at: string };
+type FilaCampana = {
+  id: string;
+  plantilla: string;
+  asunto: string;
+  creado_por: string;
+  creado_at: string;
+  cancelada_at?: string | null;
+  cancelada_por?: string | null;
+};
 
 let envios: FilaEnvio[];
 let campanas: FilaCampana[];
@@ -137,6 +145,31 @@ describe('listarCampanas', () => {
   it('sin campañas, devuelve un arreglo vacío', async () => {
     const resultado = await listarCampanas(construirDb());
     expect(resultado).toEqual([]);
+  });
+
+  // Punto 1 del encargo ("cancelar"): el historial tiene que decir cuándo y
+  // quién canceló una campaña -- `null` en las dos para la que sigue
+  // activa, y los valores reales para la cancelada.
+  it('trae canceladaAt/canceladaPor -- null para una campaña activa, con valor para una cancelada', async () => {
+    campanas = [
+      { id: 'c1', plantilla: 'inicial', asunto: 'Activa', creado_por: 'Ana', creado_at: '2026-01-01T00:00:00Z', cancelada_at: null, cancelada_por: null },
+      {
+        id: 'c2',
+        plantilla: 'inicial',
+        asunto: 'Cancelada',
+        creado_por: 'Beto',
+        creado_at: '2026-02-01T00:00:00Z',
+        cancelada_at: '2026-02-02T00:00:00Z',
+        cancelada_por: 'Ana Solano',
+      },
+    ];
+    const resultado = await listarCampanas(construirDb());
+    const activa = resultado.find((f) => f.id === 'c1')!;
+    const cancelada = resultado.find((f) => f.id === 'c2')!;
+    expect(activa.canceladaAt).toBeNull();
+    expect(activa.canceladaPor).toBeNull();
+    expect(cancelada.canceladaAt).toBe('2026-02-02T00:00:00Z');
+    expect(cancelada.canceladaPor).toBe('Ana Solano');
   });
 
   it('un error al listar se propaga', async () => {

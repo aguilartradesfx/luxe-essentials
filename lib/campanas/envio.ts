@@ -12,13 +12,31 @@ import { renderizarPlantilla } from '@/lib/campanas/marcadores';
 
 const RESEND_BATCH_URL = 'https://api.resend.com/emails/batch';
 
-// Las cuatro plantillas (Tarea 2 de la bandeja de campañas -- todavía sin
-// el texto real, ver el reporte de esta tarea): la inicial y tres
-// seguimientos. Mismo valor que el `check` de `campanas.plantilla`
-// (migración 0019) -- vive acá también para que escribir una quinta sea un
-// error de TypeScript en vez de un 23514 de Postgres recién al desplegar.
+// Las cuatro plantillas fijas (Tarea 2 de la bandeja de campañas): la
+// inicial y tres seguimientos, cada una con su .html en
+// lib/campanas/plantillas/. Vive acá también para que escribir una quinta
+// FIJA sea un error de TypeScript en vez de un 23514 de Postgres recién al
+// desplegar. Sigue siendo el arreglo que usa lib/campanas/plantillas.ts
+// para saber qué cuatro archivos cargar de disco -- por eso NO incluye
+// 'personalizada' (más abajo): esa quinta opción no tiene ningún archivo
+// que cargar, así que mezclarla acá rompería `ARCHIVOS`/`CARGADAS` en ese
+// módulo.
 export const PLANTILLAS = ['inicial', 'seguimiento_1', 'seguimiento_2', 'seguimiento_3'] as const;
-export type PlantillaCampana = (typeof PLANTILLAS)[number];
+export type PlantillaFija = (typeof PLANTILLAS)[number];
+
+// La quinta opción (encargo del dueño): HTML pegado a mano por quien arma
+// la campaña, en vez de una de las cuatro fijas. Aparte de `PLANTILLAS` por
+// el motivo de arriba -- plantillas.ts sigue iterando sólo `PLANTILLAS`
+// para cargar los cuatro .html de disco, sin ningún cambio. El html, el
+// asunto y el preview_text de una campaña 'personalizada' los aporta CADA
+// campaña (lib/campanas/plantilla-personalizada.ts los sanea y valida antes
+// de que lleguen a `crearCampana`), no el repositorio.
+export const PLANTILLA_PERSONALIZADA = 'personalizada' as const;
+
+// Mismo valor que el `check` de `campanas.plantilla` (migraciones 0019 y
+// 0021) -- las cinco opciones válidas para una fila de `campanas`.
+export const TODAS_LAS_PLANTILLAS = [...PLANTILLAS, PLANTILLA_PERSONALIZADA] as const;
+export type PlantillaCampana = (typeof TODAS_LAS_PLANTILLAS)[number];
 
 // El tamaño de tanda es el máximo que acepta el endpoint de LOTE de Resend
 // (`POST /emails/batch`, hasta 100 correos por llamada -- ver
@@ -129,6 +147,51 @@ export async function crearCampana(
   return { ok: true, campanaId: campana.id as string, destinatarios: (insertados ?? []).length };
 }
 
+export type ResultadoCancelarCampana =
+  | { ok: true; yaEstabaCancelada: boolean }
+  | { ok: false; error: string; codigo?: 'no_existe' };
+
+// Cancela una campaña -- lo que "cancelar", punto 1 del encargo, necesita
+// del lado de escritura. Deliberadamente angosto: sólo marca `campanas`
+// (`cancelada_at`/`cancelada_por`). NUNCA toca `campanas_envios` -- ni las
+// filas 'pendiente' (se quedan 'pendiente' para siempre; ver el comentario
+// grande de la migración 0020 sobre por qué), ni por supuesto las
+// 'enviado'/'error' (lo ya mandado no se deshace ni se oculta, pedido
+// explícito). Todo lo que hace falta para que "cancelada" de verdad frene
+// tandas futuras vive en `enviarTanda` (el chequeo de abajo) y en el propio
+// rpc `campanas_reclamar_pendientes` (migración 0020) -- acá sólo se
+// escribe el hecho.
+//
+// Idempotente por diseño, mismo criterio que `registrarBaja`
+// (lib/campanas/exclusiones.ts): cancelar una campaña ya cancelada no es un
+// error -- devuelve `ok:true` con `yaEstabaCancelada:true` en vez de
+// quejarse, porque dos superadmins que cancelan la misma campaña casi a la
+// vez (o un doble clic) no tienen por qué ver un error por algo que de
+// todas formas ya se cumplió.
+export async function cancelarCampana(
+  campanaId: string,
+  canceladoPor: string,
+  db: ClienteCampanas,
+  ahora: () => Date = () => new Date(),
+): Promise<ResultadoCancelarCampana> {
+  const { data: campana, error: errorLeer } = await db
+    .from('campanas')
+    .select('id, cancelada_at')
+    .eq('id', campanaId)
+    .maybeSingle();
+  if (errorLeer) return { ok: false, error: `No se pudo leer la campaña: ${errorLeer.message}` };
+  if (!campana) return { ok: false, error: `No existe la campaña ${campanaId}.`, codigo: 'no_existe' };
+  if (campana.cancelada_at) return { ok: true, yaEstabaCancelada: true };
+
+  const { error: errorEscribir } = await db
+    .from('campanas')
+    .update({ cancelada_at: ahora().toISOString(), cancelada_por: canceladoPor })
+    .eq('id', campanaId);
+  if (errorEscribir) return { ok: false, error: `No se pudo cancelar la campaña: ${errorEscribir.message}` };
+
+  return { ok: true, yaEstabaCancelada: false };
+}
+
 export type DepsEnvioCampana = {
   resendApiKey: string;
   remitente: string;
@@ -139,7 +202,23 @@ export type DepsEnvioCampana = {
 };
 
 export type ResultadoTanda =
-  | { ok: true; procesados: number; enviados: number; fallidos: number; terminada: boolean }
+  | {
+      ok: true;
+      procesados: number;
+      enviados: number;
+      fallidos: number;
+      terminada: boolean;
+      // Sólo presente (y en `true`) cuando esta llamada encontró la
+      // campaña YA cancelada y por eso no reclamó nada -- `undefined` en
+      // cualquier otro caso, a propósito: con `undefined` (no `false`),
+      // `toEqual` en las pruebas existentes de este módulo (que no
+      // conocían este campo) lo sigue tratando como ausente, así que no
+      // hay que tocarlas. Ver el comentario grande, más abajo, sobre la
+      // ventana angosta en la que una tanda puede terminar en `terminada:
+      // true` sin este flag aunque la causa real haya sido una
+      // cancelación -- documentado y aceptado, no un bug.
+      cancelada?: true;
+    }
   | { ok: false; error: string };
 
 type FilaEnvio = { id: string; correo: string; nombre_crm: string };
@@ -185,11 +264,27 @@ export async function enviarTanda(
 
   const { data: campana, error: errorCampana } = await db
     .from('campanas')
-    .select('asunto, html')
+    .select('asunto, html, cancelada_at')
     .eq('id', campanaId)
     .maybeSingle();
   if (errorCampana) return { ok: false, error: `No se pudo leer la campaña: ${errorCampana.message}` };
   if (!campana) return { ok: false, error: `No existe la campaña ${campanaId}.` };
+
+  // Cancelada ANTES de intentar reclamar nada: ni siquiera se llama al rpc.
+  // Cubre el caso común (alguien cancela, y la próxima tanda -- del mismo
+  // "retomar" en curso, o de una sesión que vuelve más tarde -- ve esto y
+  // se detiene sola). El caso menos común -- la cancelación se escribe
+  // justo ENTRE esta lectura y el rpc de abajo -- lo cubre el propio rpc
+  // `campanas_reclamar_pendientes` (migración 0020), que repite este mismo
+  // filtro dentro de su única sentencia atómica: en esa ventana angosta,
+  // `filas.length === 0` más abajo sigue impidiendo que se llame a Resend,
+  // sólo que esta llamada en particular vuelve con `terminada: true` sin
+  // `cancelada: true` (no se vuelve a leer `cancelada_at` sólo para afinar
+  // un mensaje) -- de todas formas no sale ningún correo de más, que es la
+  // garantía que importa.
+  if (campana.cancelada_at) {
+    return { ok: true, procesados: 0, enviados: 0, fallidos: 0, terminada: true, cancelada: true };
+  }
 
   const vencidoDesde = new Date(ahora().getTime() - MINUTOS_RESERVA_VENCIDA * 60_000).toISOString();
 

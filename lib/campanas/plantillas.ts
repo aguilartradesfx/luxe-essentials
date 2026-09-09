@@ -2,7 +2,7 @@ import 'server-only';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { PLANTILLAS, type PlantillaCampana } from '@/lib/campanas/envio';
+import { PLANTILLAS, type PlantillaFija } from '@/lib/campanas/envio';
 
 // Lee los cuatro .html de lib/campanas/plantillas/ (los originales de Luxe
 // -- ver el README de esa carpeta sobre por qué no se tocan) y les extrae
@@ -23,7 +23,7 @@ import { PLANTILLAS, type PlantillaCampana } from '@/lib/campanas/envio';
 // trabajo desde el que arranque el proceso.
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'plantillas');
 
-const ARCHIVOS: Record<PlantillaCampana, string> = {
+const ARCHIVOS: Record<PlantillaFija, string> = {
   inicial: 'inicial.html',
   seguimiento_1: 'seguimiento_1.html',
   seguimiento_2: 'seguimiento_2.html',
@@ -31,7 +31,7 @@ const ARCHIVOS: Record<PlantillaCampana, string> = {
 };
 
 export type PlantillaCargada = {
-  plantilla: PlantillaCampana;
+  plantilla: PlantillaFija;
   // El <title> literal del archivo -- es el asunto del correo. Los cuatro
   // originales vienen sin tildes en el título a propósito (decisión del
   // autor); se extrae tal cual, sin "corregirlo".
@@ -76,7 +76,7 @@ function extraerVistaPrevia(html: string, archivo: string): string {
   return html.slice(aperturaDiv, cierreDiv).trim();
 }
 
-function cargar(plantilla: PlantillaCampana): PlantillaCargada {
+function cargar(plantilla: PlantillaFija): PlantillaCargada {
   const archivo = ARCHIVOS[plantilla];
   const html = readFileSync(path.join(DIR, archivo), 'utf8');
   return {
@@ -91,16 +91,16 @@ function cargar(plantilla: PlantillaCampana): PlantillaCargada {
 // del repositorio, no cambian durante la vida del proceso, y son chicos (7
 // a 9 KB cada uno): no hay ningún motivo para releerlos del disco en cada
 // llamada.
-const CARGADAS: Record<PlantillaCampana, PlantillaCargada> = Object.fromEntries(
+const CARGADAS: Record<PlantillaFija, PlantillaCargada> = Object.fromEntries(
   PLANTILLAS.map((p) => [p, cargar(p)]),
-) as Record<PlantillaCampana, PlantillaCargada>;
+) as Record<PlantillaFija, PlantillaCargada>;
 
 // Lo que la pantalla (parte 2) necesita para armar el editor: elegir una
 // plantilla y partir de su asunto, su vista previa y su html (con los
 // párrafos del cuerpo, que son lo único editable por campaña -- el resto
 // del armazón, incluido el bloque destacado y el botón, es fijo por
 // plantilla).
-export function plantillaCargada(plantilla: PlantillaCampana): PlantillaCargada {
+export function plantillaCargada(plantilla: PlantillaFija): PlantillaCargada {
   return CARGADAS[plantilla];
 }
 
