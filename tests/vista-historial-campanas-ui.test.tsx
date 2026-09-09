@@ -264,6 +264,22 @@ describe('VistaHistorialCampanas', () => {
       expect(restante).toBeDisabled();
     });
 
+    // Caso 15 (revisión final, punto 5): esta prueba prometía "Retomar/
+    // Cancelar de las OTRAS filas queda deshabilitado" y sólo consultaba
+    // Retomar -- poner `disabled={false}` en el botón Cancelar sobrevivía
+    // acá. La fila "Otra" (la que NO se está retomando) tiene que tener su
+    // Cancelar deshabilitado también; la fila que SÍ se está retomando
+    // (Beto) sigue con el suyo habilitado -- cancelar la misma campaña que
+    // se está mandando sigue permitido, a propósito (ver el comentario
+    // grande del encabezado del componente).
+    const filaOtra = screen.getByText('Otra').closest('tr');
+    expect(filaOtra).not.toBeNull();
+    expect(within(filaOtra as HTMLElement).getByRole('button', { name: /^cancelar$/i })).toBeDisabled();
+
+    const filaBeto = screen.getByText('Beto').closest('tr');
+    expect(filaBeto).not.toBeNull();
+    expect(within(filaBeto as HTMLElement).getByRole('button', { name: /^cancelar$/i })).toBeEnabled();
+
     resolverEnviar!(undefined);
     await waitFor(() => expect(screen.getByText(/la campaña terminó de enviarse/i)).toBeInTheDocument());
   });

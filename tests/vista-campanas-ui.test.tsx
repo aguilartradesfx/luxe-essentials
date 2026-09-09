@@ -641,6 +641,12 @@ describe('VistaCampanas — plantilla "personalizada"', () => {
     const fetchImpl = mockFetchCampanas();
     const usuario = await elegirPersonalizadaConSeleccion();
     await usuario.type(screen.getByLabelText(/^asunto$/i), 'Mi asunto');
+    // Casos 15/16 (revisión final, punto 5): esta prueba se llama
+    // "...previewText..." pero nunca escribía nada en ese campo NI
+    // aseguraba `cuerpo.previewText` -- el nombre prometía algo que la
+    // prueba no comprobaba, y sobrevivía a un mutante que borrara
+    // `previewText` del cuerpo entero. Ahora sí lo escribe y lo confirma.
+    await usuario.type(screen.getByLabelText(/vista previa de bandeja/i), 'Mi vista previa');
     // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
     // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
     // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
@@ -658,6 +664,7 @@ describe('VistaCampanas — plantilla "personalizada"', () => {
       const cuerpo = JSON.parse((llamada as any)[1].body);
       expect(cuerpo.plantilla).toBe('personalizada');
       expect(cuerpo.asunto).toBe('Mi asunto');
+      expect(cuerpo.previewText).toBe('Mi vista previa');
       expect(cuerpo.html).toContain('unsubscribe_url');
       expect(cuerpo.parrafos).toBeUndefined();
     });
@@ -668,6 +675,9 @@ describe('VistaCampanas — plantilla "personalizada"', () => {
     mockFetchCampanas({ onCrear: (c) => (cuerpoRecibido = c) });
     const usuario = await elegirPersonalizadaConSeleccion();
     await usuario.type(screen.getByLabelText(/^asunto$/i), 'Mi asunto');
+    // Casos 15/16 -- ver el comentario de la prueba anterior: mismo arreglo
+    // acá, del lado de "crear".
+    await usuario.type(screen.getByLabelText(/vista previa de bandeja/i), 'Mi vista previa');
     // `fireEvent.change`, no `usuario.type`: userEvent interpreta `{` como
     // el inicio de una tecla especial (`{enter}`, etc.) -- escribir
     // "{{unsubscribe_url}}" carácter por carácter lo corrompería. Un pegado
@@ -687,6 +697,7 @@ describe('VistaCampanas — plantilla "personalizada"', () => {
     await waitFor(() => expect(cuerpoRecibido).not.toBeNull());
     expect(cuerpoRecibido.plantilla).toBe('personalizada');
     expect(cuerpoRecibido.asunto).toBe('Mi asunto');
+    expect(cuerpoRecibido.previewText).toBe('Mi vista previa');
     expect(cuerpoRecibido.html).toContain('unsubscribe_url');
     expect(cuerpoRecibido.firmaPrevisualizacion).toBe('firma(Mi asunto|<a href="{{unsubscribe_url}}">Baja</a>)');
     expect(cuerpoRecibido.parrafos).toBeUndefined();
