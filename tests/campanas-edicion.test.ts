@@ -115,6 +115,35 @@ describe('aplicarParrafosEditados', () => {
     expect(resultado).toContain('Línea uno.<br>Línea dos.');
   });
 
+  // Hallazgo menor (revisión final): `.replace(interiorCrudo, texto)` con un
+  // STRING de reemplazo interpreta patrones especiales de `String.replace`
+  // (`$&`, `$'`, `$1`...) aunque el patrón de búsqueda sea un string plano,
+  // no una `RegExp`. Un párrafo editado que por casualidad contenga uno de
+  // esos patrones reinyectaba el texto original o rompía el `</p>` de cierre.
+  it('un párrafo editado que contiene $& no reinyecta el texto original (patrón especial de String.replace)', () => {
+    const { html } = plantillaCargada('inicial');
+    const original = extraerParrafosEditables(html)[0].texto;
+    const resultado = aplicarParrafosEditados(html, ['Precio: $& especial.', 'x', 'y']);
+    // El texto editado va tal cual -- "$&" es literal, no "sustituí acá lo
+    // que se estaba reemplazando".
+    expect(resultado).toContain('Precio: $&amp; especial.');
+    // Y el texto ORIGINAL del primer párrafo no aparece colado en ningún
+    // lado -- si el bug reaparece, `.replace` lo reinserta acá.
+    expect(resultado).not.toContain(original);
+  });
+
+  it("un párrafo editado que contiene $' no rompe el cierre </p> (patrón especial de String.replace)", () => {
+    const { html } = plantillaCargada('inicial');
+    const resultado = aplicarParrafosEditados(html, ["Oferta$' especial.", 'x', 'y']);
+    // El texto editado va tal cual -- "$'" es literal, no "lo que sigue
+    // después del texto reemplazado" (que acá sería el `</p>` de cierre).
+    expect(resultado).toContain("Oferta$' especial.</p>");
+    // Sin el fix, el `</p>` se duplica y deja texto colgando afuera de la
+    // etiqueta: "<p ...>Oferta</p> especial.</p>".
+    expect(resultado).not.toContain('</p></p>');
+    expect(resultado).not.toMatch(/<p style="margin:0 0 18px 0;[^"]*">Oferta<\/p>/);
+  });
+
   it('nunca toca el párrafo del saludo, aunque se le pase un texto para esa posición', () => {
     const { html } = plantillaCargada('inicial');
     // Si `aplicarParrafosEditados` contara el saludo como editable por

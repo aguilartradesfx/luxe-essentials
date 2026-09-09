@@ -166,6 +166,16 @@ export function aplicarParrafosEditados(html: string, textos: readonly string[])
     if (nuevoTexto === undefined) return coincidenciaCompleta;
     // Sólo se reemplaza el INTERIOR -- la etiqueta `<p style="...">` y su
     // cierre `</p>` (el armazón de este párrafo puntual) quedan tal cual.
-    return coincidenciaCompleta.replace(interiorCrudo, construirInterior(nuevoTexto));
+    //
+    // El segundo argumento va como FUNCIÓN, no como string: un string de
+    // reemplazo interpreta patrones especiales de `String.replace` (`$&` =
+    // el texto encontrado, `$'` = lo que sigue después del match, `$1`...) --
+    // aunque el patrón de búsqueda (`interiorCrudo`) sea un string plano, no
+    // una `RegExp`. Un párrafo editado que por casualidad contenga `$&`
+    // reinyecta el texto ORIGINAL que se estaba reemplazando; uno con `$'`
+    // cierra el `</p>` antes de tiempo y deja el resto del texto afuera de
+    // la etiqueta. Una función de reemplazo no interpreta nada de eso: el
+    // segundo argumento vuelve tal cual, sin importar qué caracteres traiga.
+    return coincidenciaCompleta.replace(interiorCrudo, () => construirInterior(nuevoTexto));
   });
 }
