@@ -3,6 +3,9 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Cotizador from '@/app/cotizador/Panel';
 import { VistaAprobaciones } from '@/app/cotizador/VistaAprobaciones';
+import { calcular } from '@/lib/cotizador/calcular';
+import { CATALOGO } from '@/lib/cotizador/catalogo';
+import { formatearColones } from '@/app/cotizador/formato';
 
 // Fase 5 (descuento con aprobación): la pestaña "Aprobaciones". Mismo
 // criterio de dos niveles que tests/equipo-ui.test.tsx:
@@ -89,7 +92,15 @@ const FILA_GENERAL = {
   numero: 'COT-2026-0001',
   created_at: '2026-08-25T12:00:00.000Z', // 1 día antes de AHORA
   cliente: { nombre: 'Ana Pérez', empresa: 'Hotel Papagayo', email: 'ana@hotel.com' },
-  totales: { total: 500000 },
+  // Hallazgo crítico (revisión final): /pendientes ya manda `lineas` (y
+  // `tasaIva`/`bordadoEspecial` dentro de `totales`) -- son las que la
+  // pantalla necesita para pedirle al servidor el total resultante al
+  // cambiar el porcentaje. `totales.total` sigue siendo un valor fijo de la
+  // prueba (el total PEDIDO, mostrado en el encabezado de la tarjeta), sin
+  // relación con `lineas` -- ninguna prueba de este archivo depende de que
+  // los dos calcen.
+  lineas: [{ skuId: 'set-600-king', cantidad: 16 }],
+  totales: { total: 500000, tasaIva: 0.13, bordadoEspecial: false },
   descuento_personalizado: { general: 20 },
   solicitado_por: 'Guillermo Rojas',
 };
@@ -99,7 +110,11 @@ const FILA_FAMILIAS = {
   numero: 'COT-2026-0002',
   created_at: '2026-08-26T09:00:00.000Z', // 3 horas antes de AHORA
   cliente: { nombre: 'Beto Ruiz', empresa: 'Hotel Beto', email: 'beto@hotel.com' },
-  totales: { total: 300000 },
+  lineas: [
+    { skuId: 'toalla-680-bano', cantidad: 40 },
+    { skuId: 'bata-blanca', cantidad: 20 },
+  ],
+  totales: { total: 300000, tasaIva: 0.13, bordadoEspecial: false },
   descuento_personalizado: { familias: { toallas: 10, bata: 5 } },
   solicitado_por: 'Marta Vargas',
 };
@@ -108,6 +123,12 @@ type OpcionesFetch = {
   pendientes?: unknown[];
   aprobarRespuesta?: unknown;
   rechazarRespuesta?: unknown;
+  // Hallazgo crítico: cuando falta, `/previsualizar` se simula con el motor
+  // REAL (`calcular` + `CATALOGO`, los mismos que usa el servidor) sobre lo
+  // que mandó el cuerpo de la petición -- así una prueba que no declara
+  // nada especial igual obtiene un total correcto, y una que sí lo declara
+  // puede forzar un error puntual.
+  previsualizarRespuesta?: unknown;
 };
 
 function mockFetch(opciones: OpcionesFetch = {}) {
@@ -133,6 +154,25 @@ function mockFetch(opciones: OpcionesFetch = {}) {
         JSON.stringify(opciones.rechazarRespuesta ?? { ok: true, numero: FILA_GENERAL.numero, avisoEnviado: true }),
         { status: 200 },
       );
+    }
+    if (url.endsWith('/api/cotizacion/previsualizar')) {
+      if (opciones.previsualizarRespuesta !== undefined) {
+        return new Response(JSON.stringify(opciones.previsualizarRespuesta), { status: 200 });
+      }
+      const cuerpo = JSON.parse((init?.body as string) ?? '{}');
+      try {
+        const cotizacion = calcular(cuerpo.lineas ?? [], CATALOGO, {
+          tasaIva: cuerpo.tasaIva,
+          bordadoEspecial: cuerpo.bordadoEspecial,
+          descuentoPersonalizado: cuerpo.descuentoPersonalizado,
+        });
+        return new Response(JSON.stringify({ ok: true, cotizacion }), { status: 200 });
+      } catch (err) {
+        return new Response(
+          JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'No se pudo calcular.' }),
+          { status: 400 },
+        );
+      }
     }
     throw new Error(`Fetch no simulado en la prueba: ${url}`);
   });
@@ -293,6 +333,103 @@ describe('VistaAprobaciones', () => {
     expect((llamada[1] as RequestInit & { headers: Record<string, string> }).headers['x-csrf-token']).toBe(
       CSRF_TOKEN,
     );
+  });
+
+  // Hallazgo crítico (revisión final): "Cambiar % y aprobar" mostraba el
+  // total del descuento PEDIDO y nunca cambiaba -- el superadmin aprobaba un
+  // porcentaje sin ver nunca a cuánto quedaba la cotización. Estas pruebas
+  // anclan el arreglo: pedirle el total al SERVIDOR (nunca recalcularlo en
+  // el navegador) y mostrarlo antes de aprobar.
+  describe('vista previa del total al cambiar el porcentaje', () => {
+    it('escribir un porcentaje nuevo pide el total a /previsualizar (con las mismas líneas) y lo muestra', async () => {
+      const fetchEspiado = mockFetch({ pendientes: [FILA_GENERAL] });
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await usuario.click(await screen.findByRole('button', { name: /cambiar % y aprobar/i }));
+      const campo = screen.getByLabelText(/nuevo porcentaje general/i);
+      await usuario.clear(campo);
+      await usuario.type(campo, '12');
+
+      const totalReal = calcular(FILA_GENERAL.lineas, CATALOGO, {
+        tasaIva: FILA_GENERAL.totales.tasaIva,
+        bordadoEspecial: FILA_GENERAL.totales.bordadoEspecial,
+        descuentoPersonalizado: { general: 12 },
+      }).total;
+
+      expect(
+        await screen.findByText(`Total con este porcentaje: ${formatearColones(totalReal)}`),
+      ).toBeInTheDocument();
+
+      const llamadaPrevia = fetchEspiado.mock.calls.find(([entrada]) =>
+        (typeof entrada === 'string' ? entrada : entrada.toString()).endsWith('/api/cotizacion/previsualizar'),
+      );
+      expect(llamadaPrevia).toBeDefined();
+      const cuerpo = JSON.parse((llamadaPrevia![1] as RequestInit).body as string);
+      expect(cuerpo).toEqual({
+        lineas: FILA_GENERAL.lineas,
+        tasaIva: FILA_GENERAL.totales.tasaIva,
+        bordadoEspecial: FILA_GENERAL.totales.bordadoEspecial,
+        descuentoPersonalizado: { general: 12 },
+      });
+    });
+
+    // El caso concreto de la revisión: 48 uniformes, pedido 20%, aprobado
+    // 12% -- el total en pantalla tiene que ser el de 12%, no el de 20%.
+    it('el total que se muestra es el del NUEVO porcentaje, no el pedido', async () => {
+      mockFetch({ pendientes: [FILA_GENERAL] });
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await usuario.click(await screen.findByRole('button', { name: /cambiar % y aprobar/i }));
+      const campo = screen.getByLabelText(/nuevo porcentaje general/i);
+      await usuario.clear(campo);
+      await usuario.type(campo, '12');
+
+      const total12 = calcular(FILA_GENERAL.lineas, CATALOGO, {
+        tasaIva: FILA_GENERAL.totales.tasaIva,
+        bordadoEspecial: FILA_GENERAL.totales.bordadoEspecial,
+        descuentoPersonalizado: { general: 12 },
+      }).total;
+      const total20 = calcular(FILA_GENERAL.lineas, CATALOGO, {
+        tasaIva: FILA_GENERAL.totales.tasaIva,
+        bordadoEspecial: FILA_GENERAL.totales.bordadoEspecial,
+        descuentoPersonalizado: { general: 20 },
+      }).total;
+      expect(total12).not.toBe(total20); // si fueran iguales la prueba no probaría nada
+
+      expect(await screen.findByText(`Total con este porcentaje: ${formatearColones(total12)}`)).toBeInTheDocument();
+      expect(screen.queryByText(`Total con este porcentaje: ${formatearColones(total20)}`)).not.toBeInTheDocument();
+    });
+
+    it('un error del servidor al previsualizar se muestra tal cual, sin inventar un total', async () => {
+      mockFetch({ pendientes: [FILA_GENERAL], previsualizarRespuesta: { ok: false, error: 'No se pudo calcular.' } });
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await usuario.click(await screen.findByRole('button', { name: /cambiar % y aprobar/i }));
+      const campo = screen.getByLabelText(/nuevo porcentaje general/i);
+      await usuario.clear(campo);
+      await usuario.type(campo, '12');
+
+      expect(await screen.findByText('No se pudo calcular.')).toBeInTheDocument();
+      expect(screen.queryByText(/^Total con este porcentaje:/)).not.toBeInTheDocument();
+    });
+
+    it('cerrar la edición borra la vista previa -- no sobrevive a la fila siguiente', async () => {
+      mockFetch({ pendientes: [FILA_GENERAL] });
+      const usuario = userEvent.setup();
+      renderVista();
+
+      await usuario.click(await screen.findByRole('button', { name: /cambiar % y aprobar/i }));
+      const campo = screen.getByLabelText(/nuevo porcentaje general/i);
+      await usuario.clear(campo);
+      await usuario.type(campo, '12');
+      await screen.findByText(/^Total con este porcentaje:/);
+
+      await usuario.click(screen.getByRole('button', { name: /^cancelar$/i }));
+      expect(screen.queryByText(/^Total con este porcentaje:/)).not.toBeInTheDocument();
+    });
   });
 
   it('un 401 avisa que la sesión venció', async () => {

@@ -24,7 +24,13 @@ type FilaPendiente = {
   numero: string;
   created_at: string;
   cliente: ClienteFila;
-  totales: { total?: number };
+  // `lineas`, y `tasaIva`/`bordadoEspecial` dentro de `totales`: /pendientes
+  // ya las manda (ver el comentario de esa ruta -- "para mostrar el efecto
+  // de cambiar el porcentaje"), y son justo lo que hace falta para pedirle
+  // al servidor la previsualización de más abajo cuando el superadmin
+  // cambia el porcentaje antes de aprobar.
+  lineas: Array<{ skuId: string; cantidad: number }>;
+  totales: { total?: number; tasaIva?: number; bordadoEspecial?: boolean };
   descuento_personalizado: DescuentoPersonalizado;
   solicitado_por: string | null;
 };
@@ -92,6 +98,19 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
   // más común) no tenga que mirar un formulario que no le hace falta.
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [valoresEdicion, setValoresEdicion] = useState<Partial<Record<GrupoDescuento | 'general', string>>>({});
+
+  // Hallazgo crítico (revisión final): antes de esto, cambiar el porcentaje
+  // no mostraba nunca a cuánto quedaba la cotización -- el superadmin
+  // aprobaba un número abstracto, sin ver el precio. `previaTotal` es el
+  // total que de verdad devuelve `/api/cotizacion/previsualizar` (el mismo
+  // motor y el mismo catálogo que usa el envío real) para el porcentaje que
+  // se está escribiendo AHORA MISMO -- nunca un cálculo hecho en el
+  // navegador: los precios de lista no bajan acá (restricción del proyecto,
+  // anclada en tests/api-cotizacion-catalogo.test.ts -- "precioLista" no
+  // puede aparecer en ningún SKU que /catalogo devuelva al cliente).
+  const [previaTotal, setPreviaTotal] = useState<number | null>(null);
+  const [previaCargando, setPreviaCargando] = useState(false);
+  const [previaError, setPreviaError] = useState('');
 
   // Qué fila tiene abierto el formulario de rechazo, con su motivo.
   const [rechazandoId, setRechazandoId] = useState<string | null>(null);
@@ -175,6 +194,73 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
     }
     return { familias };
   }
+
+  // Vista previa del total resultante, con rebote de 300ms -- mismo patrón
+  // que el `useEffect` de previsualización en VistaCrear.tsx (Tarea 8):
+  // cada tecla reinicia el temporizador en vez de disparar una llamada por
+  // carácter, y un `AbortController` corta una respuesta que llegue tarde
+  // para que no pise un resultado más nuevo (p. ej. si el superadmin sigue
+  // escribiendo). Corre mientras haya una fila en edición Y lo que el
+  // formulario armaría sea un descuento válido (`editado !== undefined`) --
+  // sin eso no hay nada que previsualizar. Ruta de solo lectura
+  // (`/previsualizar` no persiste nada): no lleva el token anti-CSRF.
+  useEffect(() => {
+    const fila = (pendientes ?? []).find((f) => f.id === editandoId);
+    if (!fila) {
+      setPreviaTotal(null);
+      setPreviaError('');
+      setPreviaCargando(false);
+      return;
+    }
+    const editado = descuentoEditado(fila);
+    if (editado === undefined) {
+      setPreviaTotal(null);
+      setPreviaError('');
+      setPreviaCargando(false);
+      return;
+    }
+
+    const controlador = new AbortController();
+    const temporizador = setTimeout(() => {
+      setPreviaCargando(true);
+      fetch('/api/cotizacion/previsualizar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lineas: fila.lineas,
+          ...(fila.totales.tasaIva !== undefined ? { tasaIva: fila.totales.tasaIva } : {}),
+          ...(fila.totales.bordadoEspecial !== undefined ? { bordadoEspecial: fila.totales.bordadoEspecial } : {}),
+          descuentoPersonalizado: editado,
+        }),
+        signal: controlador.signal,
+      })
+        .then(async (res) => {
+          const datos = await res.json();
+          if (!res.ok || !datos.ok) {
+            setPreviaError(datos.error ?? `Error ${res.status}`);
+            setPreviaTotal(null);
+            return;
+          }
+          setPreviaTotal(datos.cotizacion.total);
+          setPreviaError('');
+        })
+        .catch((e) => {
+          if (e instanceof DOMException && e.name === 'AbortError') return;
+          // Nunca `e.message`: para un fallo de red eso es "Failed to
+          // fetch" en inglés, sin sentido para quien aprueba. Mismo
+          // criterio que VistaCrear.tsx.
+          setPreviaError('Fallo de red.');
+          setPreviaTotal(null);
+        })
+        .finally(() => setPreviaCargando(false));
+    }, 300);
+
+    return () => {
+      clearTimeout(temporizador);
+      controlador.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pendientes` y `descuentoEditado` se recrean cada render; lo que de verdad hace falta reaccionar es a cuál fila se edita y a lo que el superadmin escribió.
+  }, [editandoId, JSON.stringify(valoresEdicion)]);
 
   async function enviarAprobacion(fila: FilaPendiente, nuevoDescuento?: DescuentoPersonalizado) {
     setProcesandoId(fila.id);
@@ -388,6 +474,27 @@ export function VistaAprobaciones({ obtenerCsrf, onSesionInvalida }: Props) {
                           />
                         </label>
                       ))
+                    )}
+
+                    {/* Hallazgo crítico (revisión final): sin esto, cambiar
+                        el porcentaje no mostraba nunca a cuánto quedaba la
+                        cotización -- se aprobaba un número abstracto. Se
+                        pide al servidor (nunca se recalcula acá: los
+                        precios de lista no bajan al navegador), con rebote
+                        de 300ms mientras se escribe. Sin `role="alert"` a
+                        propósito -- el aviso de "cambio de porcentaje" de
+                        más abajo ya usa ese rol, y `getByRole('alert')` en
+                        las pruebas espera encontrar uno solo. */}
+                    {editado && (
+                      <p className="text-xs text-teal" aria-live="polite">
+                        {previaCargando
+                          ? 'Calculando el total…'
+                          : previaError
+                            ? previaError
+                            : previaTotal !== null
+                              ? `Total con este porcentaje: ${formatearColones(previaTotal)}`
+                              : ''}
+                      </p>
                     )}
 
                     {/* El requisito central del diseño, en pantalla: un
