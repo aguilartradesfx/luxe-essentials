@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { plantillaCargada, todasLasPlantillas } from '@/lib/campanas/plantillas';
+import { plantillaCargada, todasLasPlantillas, construirPlantillaCargada } from '@/lib/campanas/plantillas';
 import { renderizarPlantilla } from '@/lib/campanas/marcadores';
 import { PLANTILLAS } from '@/lib/campanas/envio';
 
@@ -57,6 +57,46 @@ describe('plantillaCargada', () => {
     for (const plantilla of PLANTILLAS) {
       expect(plantillaCargada(plantilla).html).not.toMatch(/,\s*\{\{nombre\}\}/);
     }
+  });
+
+  // Hallazgo importante (revisión final, punto 4): la plantilla
+  // PERSONALIZADA ya exigía {{unsubscribe_url}} (validarMarcadorBaja, con
+  // sus propias pruebas) -- las cuatro FIJAS no tenían ni la comprobación
+  // ni una prueba, así que una edición en caliente (el botón de WhatsApp,
+  // las imágenes -- ya pasó dos veces) que se llevara por delante el pie
+  // del correo no lo habría notado nadie hasta mandar una campaña sin baja.
+  // Esta prueba confirma que los CUATRO archivos reales siguen trayendo el
+  // marcador -- la que de verdad ancla la exigencia (que `cargar` REVIENTE
+  // si algún día falta) es la siguiente, contra `construirPlantillaCargada`.
+  it('las cuatro plantillas reales pasan validarMarcadorBaja -- el pie con el enlace de baja sigue ahí', () => {
+    for (const plantilla of PLANTILLAS) {
+      const { html } = plantillaCargada(plantilla);
+      expect(html).toContain('{{unsubscribe_url}}');
+    }
+  });
+});
+
+describe('construirPlantillaCargada: la misma exigencia que la plantilla personalizada', () => {
+  // Mata al mutante que borrara (o vaciara) el chequeo de
+  // `validarMarcadorBaja` dentro de `construirPlantillaCargada`: sin él,
+  // esta prueba fallaría porque NO lanzaría con un html sin el marcador --
+  // y una edición futura que se lo lleve por delante pasaría desapercibida
+  // hasta que ya se mandó una campaña sin baja.
+  it('un html sin {{unsubscribe_url}} no carga -- revienta con el mismo error que validarMarcadorBaja', () => {
+    expect(() =>
+      construirPlantillaCargada('inicial', 'prueba.html', '<html><body>Sin enlace de baja.</body></html>'),
+    ).toThrow(/\{\{unsubscribe_url\}\}/);
+  });
+
+  it('un html CON el marcador carga normalmente (no revienta de más)', () => {
+    const html =
+      '<html><head><title>Asunto de prueba</title></head><body>' +
+      `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#E9ECF0;opacity:0;">Vista previa</div>` +
+      '<a href="{{unsubscribe_url}}">Baja</a></body></html>';
+    const cargada = construirPlantillaCargada('inicial', 'prueba.html', html);
+    expect(cargada.asunto).toBe('Asunto de prueba');
+    expect(cargada.previewText).toBe('Vista previa');
+    expect(cargada.html).toBe(html);
   });
 });
 

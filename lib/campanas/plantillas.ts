@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { PLANTILLAS, type PlantillaFija } from '@/lib/campanas/envio';
+import { validarMarcadorBaja } from '@/lib/campanas/plantilla-personalizada';
 
 // Lee los cuatro .html de lib/campanas/plantillas/ (los originales de Luxe
 // -- ver el README de esa carpeta sobre por qué no se tocan) y les extrae
@@ -59,7 +60,13 @@ function extraerAsunto(html: string, archivo: string): string {
 // abajo es idéntico en las cuatro plantillas (es parte del armazón fijo,
 // no del texto editable) -- así que se ubica por esa firma en vez de tomar
 // "el primer div oculto que aparezca", que sería más frágil si el armazón
-// alguna vez suma otro elemento oculto.
+// alguna vez suma otro elemento oculto. Mismo valor, exportado, que
+// `FIRMA_PREHEADER` en lib/campanas/marcadores.ts -- vive DUPLICADO acá (no
+// importado desde ahí) para no crear un import circular: este módulo ya
+// importa `PLANTILLAS`/`PlantillaFija` de lib/campanas/envio.ts, y
+// marcadores.ts es hoja (no depende de nada de campañas), así que es ese
+// módulo, no éste, el punto neutral que lib/campanas/envio.ts usa para leer
+// la misma firma sin depender de plantillas.ts.
 const FIRMA_PREHEADER =
   'style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#E9ECF0;opacity:0;"';
 
@@ -76,15 +83,40 @@ function extraerVistaPrevia(html: string, archivo: string): string {
   return html.slice(aperturaDiv, cierreDiv).trim();
 }
 
-function cargar(plantilla: PlantillaFija): PlantillaCargada {
-  const archivo = ARCHIVOS[plantilla];
-  const html = readFileSync(path.join(DIR, archivo), 'utf8');
+// Hallazgo importante (revisión final, punto 4): `validarMarcadorBaja`
+// (lib/campanas/plantilla-personalizada.ts) ya exige `{{unsubscribe_url}}`
+// en la plantilla PERSONALIZADA, con dos pruebas -- pero las cuatro
+// plantillas FIJAS no tenían ni esta comprobación ni una prueba: se
+// confiaba en que el marcador seguía en el archivo. Esos cuatro .html ya se
+// editaron en caliente dos veces (el botón de WhatsApp, las imágenes) -- una
+// edición que se lleve por delante el pie del correo es una campaña sin
+// baja, y eso hunde la reputación del dominio del que también salen las
+// cotizaciones. Misma exigencia, ahora también acá: revienta al CARGAR el
+// módulo (import time, no al mandar la primera campaña) si a cualquiera de
+// los cuatro .html le falta el marcador -- un error de arranque del
+// servidor es muchísimo más barato de notar que una campaña ya mandada sin
+// forma de darse de baja.
+//
+// Separada de `cargar` (que sí toca disco) para poder probarla con un html
+// armado a mano, sin depender de que los archivos reales estén rotos --
+// exportada por eso mismo.
+export function construirPlantillaCargada(plantilla: PlantillaFija, archivo: string, html: string): PlantillaCargada {
+  const validacionBaja = validarMarcadorBaja(html);
+  if (!validacionBaja.ok) {
+    throw new Error(`${archivo}: ${validacionBaja.error}`);
+  }
   return {
     plantilla,
     asunto: extraerAsunto(html, archivo),
     previewText: extraerVistaPrevia(html, archivo),
     html,
   };
+}
+
+function cargar(plantilla: PlantillaFija): PlantillaCargada {
+  const archivo = ARCHIVOS[plantilla];
+  const html = readFileSync(path.join(DIR, archivo), 'utf8');
+  return construirPlantillaCargada(plantilla, archivo, html);
 }
 
 // Se cargan una sola vez al importar el módulo -- son archivos estáticos
