@@ -56,6 +56,10 @@ const ETIQUETAS_PLANTILLA: Record<PlantillaCampana, string> = {
 type ProgresoCampana = { total: number; enviados: number; fallidos: number; pendientes: number };
 type FilaCampana = {
   id: string;
+  // Punto 2 del encargo (hallazgo importante, revisión final): `null` para
+  // una campaña creada antes de la migración 0022 -- se pinta "—" en ese
+  // caso, ver la columna "Zona" más abajo.
+  zona: string | null;
   plantilla: PlantillaCampana;
   asunto: string;
   creadoPor: string;
@@ -265,9 +269,15 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
 
       {campanas && campanas.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-[var(--carta-border)]">
-          <table className="w-full min-w-[760px] text-left text-sm">
+          <table className="w-full min-w-[900px] text-left text-sm">
             <thead className="bg-[var(--carta-fill)] text-xs uppercase tracking-wide text-teal">
               <tr>
+                {/* Hallazgo importante (revisión final, punto 2): con trece
+                    zonas y campañas que se retoman días después, "Plantilla"
+                    y "Fecha" solas no alcanzan para saber a qué zona ya se
+                    le escribió -- dos "Primer seguimiento" de la misma
+                    semana se ven idénticas sin esta columna. */}
+                <th className="px-3 py-2">Zona</th>
                 <th className="px-3 py-2">Plantilla</th>
                 <th className="px-3 py-2">Creada por</th>
                 <th className="px-3 py-2">Fecha</th>
@@ -287,7 +297,15 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
 
                 return (
                   <tr key={c.id}>
-                    <td className="px-3 py-2 align-top text-navy">{ETIQUETAS_PLANTILLA[c.plantilla]}</td>
+                    <td className="px-3 py-2 align-top text-navy">{c.zona ?? '—'}</td>
+                    <td className="px-3 py-2 align-top text-navy">
+                      <p>{ETIQUETAS_PLANTILLA[c.plantilla]}</p>
+                      {/* El asunto ya viajaba en la respuesta de /listado
+                          (`FilaCampana.asunto`) pero esta pantalla nunca lo
+                          pintaba -- hallazgo importante, revisión final,
+                          punto 2. */}
+                      <p className="mt-0.5 text-xs text-teal">{c.asunto}</p>
+                    </td>
                     <td className="px-3 py-2 align-top text-teal">{c.creadoPor}</td>
                     <td className="px-3 py-2 align-top text-teal">{formatearFecha(c.creadoAt)}</td>
                     <td className="px-3 py-2 align-top text-teal">

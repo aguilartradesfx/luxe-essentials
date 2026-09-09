@@ -69,6 +69,16 @@ export type ClienteCampanas = {
 };
 
 export type ParamsCrearCampana = {
+  // Punto 2 del encargo (hallazgo importante, revisión final): a qué zona
+  // comercial se le escribe -- una de las trece de ZONAS_COMERCIALES
+  // (lib/campanas/contactos.ts). Se guarda tal cual la validó
+  // `Entrada.zona` (`z.enum(ZONAS_COMERCIALES)`) en
+  // app/api/campanas/crear/route.ts -- este módulo no vuelve a validarla
+  // contra esa lista (sería duplicar el enum acá) -- ver el comentario
+  // grande de la migración 0022 sobre por qué la columna no lleva su
+  // propio `check`. Sin esto no había forma de saber, mirando el
+  // historial, a qué zonas ya se les escribió.
+  zona: string;
   plantilla: PlantillaCampana;
   asunto: string;
   previewText?: string;
@@ -107,6 +117,7 @@ export async function crearCampana(
   const { data: campana, error: errorCampana } = await db
     .from('campanas')
     .insert({
+      zona: p.zona,
       plantilla: p.plantilla,
       asunto: p.asunto,
       preview_text: p.previewText ?? null,

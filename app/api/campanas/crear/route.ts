@@ -210,6 +210,7 @@ export async function POST(request: Request) {
 
   const resultado = await crearCampana(
     {
+      zona,
       plantilla,
       asunto: asuntoFinal,
       previewText: previewTextFinal,

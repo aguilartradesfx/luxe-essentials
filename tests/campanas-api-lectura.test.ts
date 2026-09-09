@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 type FilaUsuario = { id: string; rol: 'vendedor' | 'superadmin'; activo: boolean };
 let usuarios: FilaUsuario[];
-type FilaCampana = { id: string; plantilla: string; asunto: string; creado_por: string; creado_at: string };
+type FilaCampana = { id: string; zona?: string | null; plantilla: string; asunto: string; creado_por: string; creado_at: string };
 type FilaEnvio = { id: string; campana_id: string; estado: 'pendiente' | 'enviado' | 'error' };
 let campanas: FilaCampana[];
 let envios: FilaEnvio[];
@@ -403,7 +403,7 @@ describe('POST /api/campanas/listado', () => {
   });
 
   it('devuelve las campañas con su progreso', async () => {
-    campanas = [{ id: 'c1', plantilla: 'inicial', asunto: 'Asunto', creado_por: 'Ana', creado_at: '2026-01-01T00:00:00Z' }];
+    campanas = [{ id: 'c1', zona: 'GAM Oeste', plantilla: 'inicial', asunto: 'Asunto', creado_por: 'Ana', creado_at: '2026-01-01T00:00:00Z' }];
     envios = [
       { id: 'e1', campana_id: 'c1', estado: 'enviado' },
       { id: 'e2', campana_id: 'c1', estado: 'pendiente' },
@@ -414,5 +414,15 @@ describe('POST /api/campanas/listado', () => {
     expect(cuerpo.ok).toBe(true);
     expect(cuerpo.campanas).toHaveLength(1);
     expect(cuerpo.campanas[0].progreso).toEqual({ total: 2, enviados: 1, fallidos: 0, pendientes: 1 });
+    // Punto 2 del encargo (hallazgo importante, revisión final).
+    expect(cuerpo.campanas[0].zona).toBe('GAM Oeste');
+  });
+
+  it('una campaña vieja sin zona (creada antes de la migración 0022) trae zona: null, no undefined ni un error', async () => {
+    campanas = [{ id: 'c1', plantilla: 'inicial', asunto: 'Asunto', creado_por: 'Ana', creado_at: '2026-01-01T00:00:00Z' }];
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postListado(peticion({}, { cookie, 'x-csrf-token': csrf }));
+    const cuerpo = await res.json();
+    expect(cuerpo.campanas[0].zona).toBeNull();
   });
 });

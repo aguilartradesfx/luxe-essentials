@@ -45,6 +45,7 @@ function dbParaCrear(resultadoCampana: any, resultadoEnvios: any) {
 }
 
 const paramsCampana = {
+  zona: 'GAM Oeste',
   plantilla: 'inicial' as const,
   asunto: 'Asunto de prueba',
   html: 'Buenos días{{nombre}}: de parte de {{empresa}}. {{unsubscribe_url}}',
@@ -64,6 +65,7 @@ describe('crearCampana', () => {
 
     expect(db.campanas.insert).toHaveBeenCalledWith(
       expect.objectContaining({
+        zona: 'GAM Oeste',
         plantilla: 'inicial',
         asunto: 'Asunto de prueba',
         creado_por: 'guillermo',

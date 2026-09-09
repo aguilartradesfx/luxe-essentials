@@ -56,6 +56,7 @@ describe('Panel — pestaña historial de campañas', () => {
 
 type FilaCampana = {
   id: string;
+  zona: string | null;
   plantilla: string;
   asunto: string;
   creadoPor: string;
@@ -98,6 +99,7 @@ function obtenerCsrf() {
 
 const CAMPANA_TERMINADA: FilaCampana = {
   id: 'camp-terminada',
+  zona: 'GAM Oeste',
   plantilla: 'inicial',
   asunto: 'Asunto',
   creadoPor: 'Ana Solano',
@@ -109,6 +111,7 @@ const CAMPANA_TERMINADA: FilaCampana = {
 
 const CAMPANA_INTERRUMPIDA: FilaCampana = {
   id: 'camp-interrumpida',
+  zona: 'Guanacaste Costa',
   plantilla: 'seguimiento_1',
   asunto: 'Asunto seguimiento',
   creadoPor: 'Beto',
@@ -120,6 +123,7 @@ const CAMPANA_INTERRUMPIDA: FilaCampana = {
 
 const CAMPANA_CANCELADA: FilaCampana = {
   id: 'camp-cancelada',
+  zona: 'Caribe',
   plantilla: 'inicial',
   asunto: 'Asunto cancelada',
   creadoPor: 'Ana Solano',
@@ -147,6 +151,22 @@ describe('VistaHistorialCampanas', () => {
     expect(screen.getByText(/terminada\./i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retomar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /cancelar/i })).not.toBeInTheDocument();
+  });
+
+  // Hallazgo importante (revisión final, punto 2): sin esto no había forma
+  // de saber, mirando el historial, a qué zona se le escribió, ni de leer
+  // el asunto (viajaba en la respuesta pero la pantalla nunca lo pintaba).
+  it('muestra la zona y el asunto de cada campaña', async () => {
+    mockFetchHistorial({ campanas: [CAMPANA_INTERRUMPIDA] });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText('Guanacaste Costa')).toBeInTheDocument();
+    expect(screen.getByText('Asunto seguimiento')).toBeInTheDocument();
+  });
+
+  it('una campaña vieja sin zona (creada antes de tener este dato) muestra "—", no vacío ni un error', async () => {
+    mockFetchHistorial({ campanas: [{ ...CAMPANA_TERMINADA, zona: null }] });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText('—')).toBeInTheDocument();
   });
 
   it('una campaña interrumpida ofrece Retomar y Cancelar, con el conteo de pendientes', async () => {

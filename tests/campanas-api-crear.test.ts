@@ -12,7 +12,7 @@ let usuarios: FilaUsuario[];
 type FilaBaja = { correo: string };
 let bajas: FilaBaja[];
 type FilaEnvioInsertada = { campana_id: string; correo: string; contacto_id: string; nombre_crm: string };
-let campanasCreadas: { id: string; plantilla: string; asunto: string; html: string; creado_por: string }[];
+let campanasCreadas: { id: string; zona: string; plantilla: string; asunto: string; html: string; creado_por: string }[];
 let enviosInsertados: FilaEnvioInsertada[];
 let siguienteId = 0;
 
@@ -501,5 +501,9 @@ describe('el html guardado', () => {
     expect(campanasCreadas[0].html).toContain('Uno especial.');
     expect(campanasCreadas[0].asunto).toBe('Uniformes y textiles en 30-35 dias | Luxe Essentials');
     expect(campanasCreadas[0].creado_por).toBe('Ana Solano');
+    // Punto 2 del encargo (hallazgo importante, revisión final): sin esto
+    // no había forma de saber, mirando el historial, a qué zona se le
+    // escribió. Mata al mutante que dejara de pasar `zona` a `crearCampana`.
+    expect(campanasCreadas[0].zona).toBe('GAM Oeste');
   });
 });

@@ -5,6 +5,7 @@ import { progresoCampana, listarCampanas, type Db } from '@/lib/campanas/progres
 type FilaEnvio = { id: string; campana_id: string; estado: 'pendiente' | 'enviado' | 'error' };
 type FilaCampana = {
   id: string;
+  zona?: string | null;
   plantilla: string;
   asunto: string;
   creado_por: string;
@@ -145,6 +146,20 @@ describe('listarCampanas', () => {
   it('sin campañas, devuelve un arreglo vacío', async () => {
     const resultado = await listarCampanas(construirDb());
     expect(resultado).toEqual([]);
+  });
+
+  // Punto 2 del encargo (hallazgo importante, revisión final): sin esto no
+  // había forma de saber, mirando el historial, a qué zona se le escribió.
+  // `null` para una campaña vieja (creada antes de la migración 0022, que
+  // no tiene el dato) -- nunca una cadena vacía ni un valor inventado.
+  it('trae la zona de cada campaña -- null para una campaña vieja sin ese dato', async () => {
+    campanas = [
+      { id: 'c1', zona: 'GAM Oeste', plantilla: 'inicial', asunto: 'A', creado_por: 'Ana', creado_at: '2026-01-01T00:00:00Z' },
+      { id: 'c2', plantilla: 'inicial', asunto: 'B', creado_por: 'Beto', creado_at: '2026-02-01T00:00:00Z' },
+    ];
+    const resultado = await listarCampanas(construirDb());
+    expect(resultado.find((f) => f.id === 'c1')!.zona).toBe('GAM Oeste');
+    expect(resultado.find((f) => f.id === 'c2')!.zona).toBeNull();
   });
 
   // Punto 1 del encargo ("cancelar"): el historial tiene que decir cuándo y

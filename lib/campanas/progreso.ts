@@ -59,6 +59,12 @@ export async function progresoCampana(db: Db, campanaId: string): Promise<Conteo
 
 export type FilaCampana = {
   id: string;
+  // Punto 2 del encargo (hallazgo importante, revisión final): a qué zona
+  // comercial se le escribió -- `null` para una campaña creada ANTES de la
+  // migración 0022, que no guardaba este dato (no hay forma de reconstruirlo
+  // para esas filas viejas). El historial (VistaHistorialCampanas.tsx)
+  // muestra "—" en ese caso, en vez de fallar.
+  zona: string | null;
   plantilla: PlantillaCampana;
   asunto: string;
   creadoPor: string;
@@ -75,6 +81,7 @@ export type FilaCampana = {
 
 type FilaCampanaCruda = {
   id: string;
+  zona: string | null;
   plantilla: PlantillaCampana;
   asunto: string;
   creado_por: string;
@@ -91,7 +98,7 @@ type FilaCampanaCruda = {
 export async function listarCampanas(db: Db): Promise<FilaCampana[]> {
   const { data, error } = await db
     .from('campanas')
-    .select('id, plantilla, asunto, creado_por, creado_at, cancelada_at, cancelada_por')
+    .select('id, zona, plantilla, asunto, creado_por, creado_at, cancelada_at, cancelada_por')
     .order('creado_at', { ascending: false });
   if (error) throw new Error(`No se pudo listar las campañas: ${error.message}`);
 
@@ -99,6 +106,7 @@ export async function listarCampanas(db: Db): Promise<FilaCampana[]> {
   return Promise.all(
     filas.map(async (fila) => ({
       id: fila.id,
+      zona: fila.zona ?? null,
       plantilla: fila.plantilla,
       asunto: fila.asunto,
       creadoPor: fila.creado_por,

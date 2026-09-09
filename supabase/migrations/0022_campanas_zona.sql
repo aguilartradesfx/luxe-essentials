@@ -1,0 +1,28 @@
+-- supabase/migrations/0022_campanas_zona.sql
+-- Hallazgo importante (revisión final, punto 2): una campaña no guardaba a
+-- qué zona comercial se le escribió. Con trece zonas (ZONAS_COMERCIALES,
+-- lib/campanas/contactos.ts) y campañas que se retoman días después, no
+-- había forma de saber, mirando el historial, a cuáles ya se les escribió
+-- ni de elegir con seguridad cuál cancelar -- dos campañas "seguimiento_1"
+-- creadas el mismo día se ven idénticas sin este dato.
+--
+-- Nullable, NO `not null`: a diferencia de `plantilla` (que siempre existió
+-- desde la migración 0019), esta columna llega después de que la bandeja de
+-- campañas ya está en producción con filas reales. Un `not null` acá
+-- rompería la migración contra esas filas viejas (no hay ningún valor
+-- correcto que inventarles con un `default` -- la zona real de esas
+-- campañas no quedó guardada en ningún lado). Mismo criterio que
+-- `preview_text` (migración 0019): nullable, y el historial (parte de
+-- aplicación) muestra "—" para una campaña vieja sin zona, en vez de que la
+-- migración falle o invente un dato.
+--
+-- Sin `check`: a diferencia de `plantilla` (un enum fijo del propio
+-- esquema), `ZONAS_COMERCIALES` vive en lib/campanas/contactos.ts, en
+-- código de aplicación -- ponerle acá un `check` con las trece cadenas
+-- duplicaría esa lista en dos lugares que se desincronizan en cuanto
+-- alguien edite una sola zona en el código sin acordarse de la migración.
+-- La validación real (que `zona` sea una de las trece) ya la hace
+-- `Entrada.zona` en app/api/campanas/crear/route.ts (`z.enum(ZONAS_COMERCIALES)`)
+-- antes de que el valor llegue hasta acá.
+alter table public.campanas
+  add column if not exists zona text;
