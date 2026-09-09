@@ -7,6 +7,20 @@ import { enviarTanda } from '@/lib/campanas/envio';
 
 export const runtime = 'nodejs';
 
+// Hallazgo importante (revisión final, punto 1): esta era la única ruta
+// pesada de app/api/campanas/* sin `maxDuration` -- mismo criterio, exacto,
+// que ya explica app/api/cotizacion/route.ts: sin esto la función corre con
+// el límite por defecto de Vercel (10 s), corto de sobra para una tanda que
+// hace un rpc de reclamo, una llamada de LOTE a Resend con hasta cien
+// destinatarios, y el rpc de cierre (migración 0023) -- y si esa llamada de
+// Resend en particular tarda (no es infrecuente con lotes grandes), un
+// corte a los 10s dejaría la reserva de esos cien 'pendiente' hasta que
+// venza sola. `enviarTanda` ya es retomable ante eso (por diseño), pero no
+// hay motivo para regalarle ese riesgo a cada tanda cuando alcanza con
+// declarar el mismo límite que el resto de las rutas que hacen trabajo real
+// contra un servicio externo.
+export const maxDuration = 60;
+
 const Entrada = z.object({ campanaId: z.string().min(1, 'Falta el id de la campaña.') });
 
 // Bandeja de campañas (parte 2): manda UNA tanda (hasta 100 destinatarios,

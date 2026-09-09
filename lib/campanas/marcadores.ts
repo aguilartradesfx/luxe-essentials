@@ -144,6 +144,17 @@ export function marcadorNombre(nombreCrm: string): string {
   return `, ${escaparHtml(capitalizar(primerNombre))}`;
 }
 
+// El estilo en línea EXACTO del `<div>` de vista previa (preheader) que
+// traen las cuatro plantillas fijas -- mismo valor, duplicado a propósito,
+// que `FIRMA_PREHEADER` en lib/campanas/plantillas.ts (ver el comentario
+// grande junto a esa constante sobre el import circular que evita
+// duplicarla acá en vez de importarla). Vive en este módulo -- hoja, sin
+// depender de nada de campañas -- para que `inyectarVistaPrevia`, más
+// abajo, y plantillas.ts puedan compartir la misma firma sin que
+// lib/campanas/envio.ts tenga que importar plantillas.ts.
+export const FIRMA_PREHEADER =
+  'style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#E9ECF0;opacity:0;"';
+
 export type DatosDestinatario = {
   // El nombre tal cual viene del CRM -- fuente de `{{empresa}}` (sin
   // heurística, tal cual) y de `{{nombre}}` (con la heurística de arriba).
@@ -162,4 +173,39 @@ export function renderizarPlantilla(html: string, datos: DatosDestinatario): str
     .split('{{empresa}}').join(escaparHtml(datos.nombreCrm))
     .split('{{nombre}}').join(marcadorNombre(datos.nombreCrm))
     .split('{{unsubscribe_url}}').join(escaparHtml(datos.unsubscribeUrl));
+}
+
+// Menor (revisión final): `preview_text` se guardaba en `campanas` y nunca
+// se leía -- el texto de vista previa que alguien tecleó para una campaña
+// 'personalizada' (`app/cotizador/VistaCampanas.tsx`, campo "Vista previa de
+// bandeja") no salía nunca en el correo real. Esto lo USA -- la otra opción
+// aceptable (dejar de guardarlo) habría tirado una función que el propio
+// formulario sigue ofreciendo.
+//
+// Las cuatro plantillas fijas YA traen su preheader horneado en el .html
+// (lib/campanas/plantillas.ts) -- de ahí el chequeo de `FIRMA_PREHEADER`:
+// si el html que llega ya tiene ese div (siempre el caso de las cuatro
+// fijas), no se inyecta un segundo -- se devuelve tal cual, para no
+// duplicar el mismo texto dos veces en el correo. Sólo una plantilla
+// 'personalizada' sin preheader propio (el caso común: no es parte del
+// armazón que sanitizarHtmlPersonalizado conserva) llega a inyectar algo.
+//
+// Se inyecta SIEMPRE justo después de `<body...>` (o al principio del html
+// si no hay `<body>`) -- a diferencia del enlace de baja (que NUNCA se
+// inyecta solo, porque tiene que ser un lugar VISIBLE que decide quien pega
+// el HTML), acá no hay esa tensión: un preheader es, por definición,
+// invisible (`display:none`), así que el único lugar que de verdad importa
+// es "cerca del principio del body" -- es la técnica estándar, la MISMA que
+// ya usan los cuatro .html del repositorio.
+export function inyectarVistaPrevia(html: string, previewText: string | null | undefined): string {
+  const texto = (previewText ?? '').trim();
+  if (!texto) return html;
+  if (html.includes(FIRMA_PREHEADER)) return html;
+
+  const div = `<div ${FIRMA_PREHEADER}>${escaparHtml(texto)}</div>`;
+  const aperturaBody = html.match(/<body[^>]*>/i);
+  if (!aperturaBody) return div + html;
+
+  const indice = html.indexOf(aperturaBody[0]) + aperturaBody[0].length;
+  return html.slice(0, indice) + div + html.slice(indice);
 }

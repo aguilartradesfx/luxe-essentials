@@ -60,39 +60,42 @@ function nodoCampanas(): any {
   return nodo;
 }
 
-function nodoCampanasEnvios(): any {
-  return {
-    update: (cambios: Partial<FilaEnvio>) => ({
-      eq: async (_c: string, id: string) => {
-        const fila = envios.find((e) => e.id === id);
-        if (fila) Object.assign(fila, cambios);
-        return { error: null };
-      },
-    }),
-  };
-}
+// `campanas_envios` ya no se toca por `.from().update()` -- cerrar una
+// tanda pasó a ser el rpc `campanas_cerrar_tanda` (migración 0023, hallazgo
+// importante de la revisión final, punto 1), reproducido más abajo junto a
+// `campanas_reclamar_pendientes`. No queda nada que mockear para esa tabla.
 
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => ({
     from: (tabla: string) => {
       if (tabla === 'usuarios_panel') return nodoUsuarios();
       if (tabla === 'campanas') return nodoCampanas();
-      if (tabla === 'campanas_envios') return nodoCampanasEnvios();
       throw new Error(`tabla no mockeada: ${tabla}`);
     },
-    // `campanas_reclamar_pendientes`: mismo criterio simplificado que
-    // documenta tests/equipo-api.test.ts para la rpc de cambiar estado --
-    // reimplementación en JS de "tomar hasta `p_limite` pendientes", sin
-    // pretender demostrar el `for update skip locked` de Postgres (eso es
-    // un paso manual documentado aparte, igual que las otras rpc de este
+    // `campanas_reclamar_pendientes`/`campanas_cerrar_tanda`: mismo criterio
+    // simplificado que documenta tests/equipo-api.test.ts para la rpc de
+    // cambiar estado -- reimplementación en JS de lo que hace cada
+    // sentencia, sin pretender demostrar el `for update skip locked` ni el
+    // `update ... from jsonb_to_recordset` de Postgres (eso es un paso
+    // manual documentado aparte, igual que las otras rpc de este
     // repositorio).
     rpc: async (nombre: string, args: Record<string, unknown>) => {
-      if (nombre !== 'campanas_reclamar_pendientes') throw new Error(`rpc no soportada: ${nombre}`);
-      const limite = args.p_limite as number;
-      const pendientes = envios.filter((e) => e.campana_id === args.p_campana_id && e.estado === 'pendiente');
-      const reclamadas = pendientes.slice(0, limite);
-      for (const f of reclamadas) f.actualizado_at = new Date().toISOString();
-      return { data: reclamadas, error: null };
+      if (nombre === 'campanas_reclamar_pendientes') {
+        const limite = args.p_limite as number;
+        const pendientes = envios.filter((e) => e.campana_id === args.p_campana_id && e.estado === 'pendiente');
+        const reclamadas = pendientes.slice(0, limite);
+        for (const f of reclamadas) f.actualizado_at = new Date().toISOString();
+        return { data: reclamadas, error: null };
+      }
+      if (nombre === 'campanas_cerrar_tanda') {
+        const resultados = args.p_resultados as Array<{ id: string; estado: string; resend_id: string | null; error: string | null; actualizado_at: string }>;
+        for (const r of resultados) {
+          const fila = envios.find((e) => e.id === r.id);
+          if (fila) Object.assign(fila, { estado: r.estado, actualizado_at: r.actualizado_at });
+        }
+        return { data: resultados.length, error: null };
+      }
+      throw new Error(`rpc no soportada: ${nombre}`);
     },
   }),
 }));
@@ -172,6 +175,17 @@ describe('validación', () => {
     const { cookie, csrf } = sesionSuperadmin();
     const res = await postEnviar(peticion({}, { cookie, 'x-csrf-token': csrf }));
     expect(res.status).toBe(400);
+  });
+});
+
+// Hallazgo importante (revisión final, punto 1): era la única ruta pesada
+// de app/api/campanas/* sin `maxDuration` -- mismo criterio que
+// tests/api-cotizacion.test.ts para app/api/cotizacion/route.ts.
+describe('app/api/campanas/enviar/route.ts declara un maxDuration', () => {
+  it('declara maxDuration', async () => {
+    const modulo = await import('@/app/api/campanas/enviar/route');
+    expect(typeof modulo.maxDuration).toBe('number');
+    expect(modulo.maxDuration).toBeGreaterThanOrEqual(30);
   });
 });
 

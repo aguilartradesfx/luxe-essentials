@@ -2,7 +2,7 @@ import 'server-only';
 import type { Permitido } from '@/lib/campanas/exclusiones';
 import type { DestinatarioCampana } from '@/lib/campanas/contactos';
 import { normalizarCorreo, enlacePaginaBaja, cabecerasListaBaja } from '@/lib/campanas/baja';
-import { renderizarPlantilla } from '@/lib/campanas/marcadores';
+import { renderizarPlantilla, inyectarVistaPrevia } from '@/lib/campanas/marcadores';
 
 // Crea una campaña (con su lista fija de destinatarios) y la manda por
 // tandas, retomables -- ver el comentario grande de la migración 0019
@@ -57,6 +57,10 @@ export const TAMANO_TANDA = 100;
 export const MINUTOS_RESERVA_VENCIDA = 15;
 
 const RPC_RECLAMAR = 'campanas_reclamar_pendientes';
+// Migración 0023 -- ver el comentario grande junto a su única llamada, más
+// abajo en `enviarTanda`, sobre por qué cerrar una tanda es esta única
+// llamada y no cien `.update()` sueltos.
+const RPC_CERRAR_TANDA = 'campanas_cerrar_tanda';
 
 // Mismo tipo laxo que `Db` en lib/cotizador/usuarios.ts: alcanza con
 // `.from()` y `.rpc()` para poder probar este módulo con un doble de
@@ -262,7 +266,12 @@ type FilaEnvio = { id: string; correo: string; nombre_crm: string };
 //     el problema fue de lectura de la respuesta y no de que Resend lo
 //     haya rechazado de verdad. "Un fallo de un destinatario no tumba la
 //     tanda: se registra y se sigue" -- el resto de `enviados` sigue su
-//     curso normal.
+//     curso normal. Y este cierre -- marcar el resultado de los hasta cien
+//     destinatarios de la tanda -- es, él mismo, UNA sola llamada
+//     (`campanas_cerrar_tanda`, migración 0023), no cien peticiones sueltas
+//     que puedan cortarse a la mitad: ver el comentario grande, más abajo,
+//     junto a esa llamada, sobre la garantía exacta que resuelve (hallazgo
+//     importante de la revisión final, punto 1).
 export async function enviarTanda(
   campanaId: string,
   deps: DepsEnvioCampana,
@@ -275,7 +284,7 @@ export async function enviarTanda(
 
   const { data: campana, error: errorCampana } = await db
     .from('campanas')
-    .select('asunto, html, cancelada_at')
+    .select('asunto, html, preview_text, cancelada_at')
     .eq('id', campanaId)
     .maybeSingle();
   if (errorCampana) return { ok: false, error: `No se pudo leer la campaña: ${errorCampana.message}` };
@@ -311,11 +320,19 @@ export async function enviarTanda(
     return { ok: true, procesados: 0, enviados: 0, fallidos: 0, terminada: true };
   }
 
+  // Menor (revisión final): `preview_text` no varía por destinatario --
+  // igual que `asunto` -- así que se resuelve UNA sola vez acá, no dentro
+  // del `.map` de abajo. Ver el comentario grande de `inyectarVistaPrevia`
+  // (lib/campanas/marcadores.ts) sobre por qué es seguro inyectarla siempre
+  // (no duplica nada en las cuatro plantillas fijas, que ya la traen
+  // horneada).
+  const htmlConVistaPrevia = inyectarVistaPrevia(campana.html as string, campana.preview_text as string | null);
+
   const payload = filas.map((f) => ({
     from: remitente,
     to: [f.correo],
     subject: campana.asunto as string,
-    html: renderizarPlantilla(campana.html as string, {
+    html: renderizarPlantilla(htmlConVistaPrevia, {
       nombreCrm: f.nombre_crm,
       unsubscribeUrl: enlacePaginaBaja(f.correo),
     }),
@@ -352,31 +369,67 @@ export async function enviarTanda(
   const resultados = datos.data ?? [];
   let enviados = 0;
   let fallidos = 0;
+  const ahoraCierre = new Date().toISOString();
 
-  await Promise.all(
-    filas.map(async (f, i) => {
-      const resendId = resultados[i]?.id;
-      const cambios = resendId
-        ? { estado: 'enviado', resend_id: resendId, error: null, actualizado_at: new Date().toISOString() }
-        : {
-            estado: 'error',
-            error: 'Resend no confirmó el envío para este destinatario.',
-            actualizado_at: new Date().toISOString(),
-          };
-      if (resendId) enviados++;
-      else fallidos++;
+  // Hallazgo importante (revisión final, punto 1): esto ANTES era hasta
+  // CIEN `.update().eq('id', ...)` sueltos, uno por destinatario, todos en
+  // paralelo con `Promise.all` -- cien viajes HTTP independientes a
+  // Supabase. Si la función se cortaba a mitad de esos cien, las filas que
+  // no alcanzaron a marcarse quedaban 'pendiente' con la reserva vieja, y
+  // `campanas_reclamar_pendientes` las volvía a entregar solas pasados
+  // `MINUTOS_RESERVA_VENCIDA` -- pero Resend YA les había mandado el correo
+  // (el lote entero se aceptó en una única llamada, arriba): ese
+  // destinatario recibía el mismo correo dos veces. El índice único de la
+  // migración 0019 y el `skip locked` de `campanas_reclamar_pendientes` NO
+  // cubrían esto -- los dos evitan que DOS TANDAS le manden a la MISMA
+  // fila, ninguno evita que una fila YA MANDADA se vuelva a ofrecer porque
+  // nadie alcanzó a cerrarla.
+  //
+  // LA GARANTÍA ELEGIDA: cerrar la tanda entera es UNA sola llamada al rpc
+  // `campanas_cerrar_tanda` (migración 0023), que hace el `update` de las
+  // hasta cien filas en una única sentencia SQL -- dentro de una única
+  // transacción de Postgres: o se aplica ENTERA, o (si la conexión se
+  // corta a mitad de esta llamada) no se aplica NADA de ella. No queda un
+  // estado a medias ("50 de 100 marcadas") como sí podía quedar antes. Es
+  // el mismo principio que ya sostiene `campanas_reclamar_pendientes` para
+  // ABRIR la tanda (una sola sentencia atómica, no "leer, decidir,
+  // escribir" repartido en la aplicación) -- acá se aplica al otro
+  // extremo, cerrarla.
+  //
+  // Lo que esto NO elimina -- aceptado, y ya era un riesgo antes de este
+  // arreglo: si la conexión se corta ENTRE que Resend aceptó el lote y que
+  // este rpc corre, ninguna fila se cierra y las cien se vuelven a ofrecer
+  // solas. La diferencia es que antes había CIEN puntos de falla
+  // independientes (y un corte a mitad garantizaba un resultado a medias);
+  // ahora hay UNO solo, y si falla, falla entero -- sin duplicados
+  // parciales. Cerrar del todo ese riesgo exigiría una clave de
+  // idempotencia del lado de Resend, que la API de lote no ofrece hoy --
+  // fuera del alcance de este arreglo.
+  const cambios = filas.map((f, i) => {
+    const resendId = resultados[i]?.id;
+    if (resendId) {
+      enviados++;
+      return { id: f.id, estado: 'enviado', resend_id: resendId, error: null, actualizado_at: ahoraCierre };
+    }
+    fallidos++;
+    return {
+      id: f.id,
+      estado: 'error',
+      resend_id: null,
+      error: 'Resend no confirmó el envío para este destinatario.',
+      actualizado_at: ahoraCierre,
+    };
+  });
 
-      const { error } = await db.from('campanas_envios').update(cambios).eq('id', f.id);
-      if (error) {
-        // Ventana angosta y aceptada: si `resendId` existe, Resend YA
-        // mandó este correo -- no se puede "reintentar" desde acá sin
-        // arriesgar un envío duplicado si el problema fue sólo de
-        // escribir el resultado. Se deja constancia ruidosa para que
-        // alguien lo reconcilie a mano; ver el reporte de esta tarea.
-        console.error('[campanas] No se pudo cerrar el registro de un envío.', f.id, error.message);
-      }
-    }),
-  );
+  const { error: errorCierre } = await db.rpc(RPC_CERRAR_TANDA, { p_resultados: cambios });
+  if (errorCierre) {
+    // Ventana angosta y aceptada -- ver el comentario grande de arriba: los
+    // destinatarios con `resendId` YA recibieron el correo, así que no se
+    // puede "reintentar" este cierre desde acá sin arriesgar mandarlos de
+    // nuevo si el problema fue sólo de escribir el resultado. Se deja
+    // constancia ruidosa para que alguien lo reconcilie a mano.
+    console.error('[campanas] No se pudo cerrar la tanda.', campanaId, errorCierre.message);
+  }
 
   return {
     ok: true,

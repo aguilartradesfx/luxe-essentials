@@ -153,18 +153,31 @@ function mockCampanasSelect(resultado: any) {
   return { select, eq, maybeSingle };
 }
 
-function dbParaEnviar(p: { campana: any; reclamo: any; errorAlActualizar?: boolean }) {
+// Hallazgo importante (revisión final, punto 1): cerrar una tanda dejó de
+// ser cien `.update().eq()` sueltos contra `campanas_envios` -- ahora es UNA
+// sola llamada a `db.rpc('campanas_cerrar_tanda', ...)`, el mismo mecanismo
+// (`db.rpc`) que ya usa `campanas_reclamar_pendientes` para abrir la tanda.
+// Por eso `rpc` acá enruta por NOMBRE -- antes alcanzaba con
+// `vi.fn().mockResolvedValue(p.reclamo)` porque `rpc` sólo se llamaba para
+// una cosa; ahora se llama para dos, con formas de respuesta distintas.
+function dbParaEnviar(p: { campana: any; reclamo: any; errorAlCerrar?: boolean }) {
   const campanasMock = mockCampanasSelect(p.campana);
-  const eqUpdate = vi.fn().mockResolvedValue(p.errorAlActualizar ? { error: { message: 'db caída' } } : { error: null });
-  const update = vi.fn(() => ({ eq: eqUpdate }));
-  const enviosMock = { update };
   const from = vi.fn((tabla: string) => {
     if (tabla === 'campanas') return campanasMock;
-    if (tabla === 'campanas_envios') return enviosMock;
     throw new Error(`tabla no mockeada en esta prueba: ${tabla}`);
   });
-  const rpc = vi.fn().mockResolvedValue(p.reclamo);
-  return { from, rpc, campanasMock, enviosMock, update, eqUpdate };
+  const rpc = vi.fn((nombre: string, argumentos: Record<string, unknown>) => {
+    if (nombre === 'campanas_reclamar_pendientes') return Promise.resolve(p.reclamo);
+    if (nombre === 'campanas_cerrar_tanda') {
+      return Promise.resolve(
+        p.errorAlCerrar
+          ? { data: null, error: { message: 'db caída' } }
+          : { data: (argumentos.p_resultados as unknown[]).length, error: null },
+      );
+    }
+    throw new Error(`rpc no mockeada en esta prueba: ${nombre}`);
+  });
+  return { from, rpc, campanasMock };
 }
 
 const campanaGuardada = {
@@ -203,6 +216,27 @@ describe('enviarTanda', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.resend.com/emails/batch');
     expect(r).toEqual({ ok: true, procesados: 2, enviados: 2, fallidos: 0, terminada: true });
+  });
+
+  // Hallazgo importante (revisión final, punto 1): antes esto era hasta
+  // CIEN `.update().eq()` sueltos, uno por destinatario -- si la función se
+  // cortaba a mitad de esos cien, las filas sin marcar quedaban 'pendiente'
+  // y se volvían a mandar solas (Resend YA las había aceptado). Ahora es
+  // UNA sola llamada, con los resultados de TODA la tanda adentro -- mata
+  // al mutante que volviera a llamar al rpc de cierre una vez por fila (o
+  // que llamara a `.from('campanas_envios').update()` de nuevo).
+  it('cierra la tanda entera con UNA sola llamada a campanas_cerrar_tanda, no una por destinatario', async () => {
+    const filas = [filaReclamada(1), filaReclamada(2), filaReclamada(3)];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      respuestaResend({ data: [{ id: 'r-1' }, { id: 'r-2' }, { id: 'r-3' }] }),
+    );
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    const llamadasCierre = db.rpc.mock.calls.filter(([nombre]) => nombre === 'campanas_cerrar_tanda');
+    expect(llamadasCierre).toHaveLength(1);
+    expect(llamadasCierre[0][1].p_resultados).toHaveLength(3);
   });
 
   it('el cuerpo a Resend trae el asunto, el html con marcadores resueltos y las cabeceras de baja', async () => {
@@ -268,13 +302,15 @@ describe('enviarTanda', () => {
     const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
 
     expect(r).toEqual({ ok: true, procesados: 3, enviados: 2, fallidos: 1, terminada: true });
-    expect(db.update).toHaveBeenCalledWith(
-      expect.objectContaining({ estado: 'enviado', resend_id: 'r-1' }),
-    );
-    expect(db.update).toHaveBeenCalledWith(
-      expect.objectContaining({ estado: 'error' }),
-    );
-    expect(db.eqUpdate).toHaveBeenCalledWith('id', 'env-2');
+    // Las tres filas se cierran en UNA sola llamada -- no una por fila --
+    // con cada resultado correcto adentro del mismo arreglo.
+    expect(db.rpc).toHaveBeenCalledWith('campanas_cerrar_tanda', {
+      p_resultados: [
+        expect.objectContaining({ id: 'env-1', estado: 'enviado', resend_id: 'r-1' }),
+        expect.objectContaining({ id: 'env-2', estado: 'error', resend_id: null }),
+        expect.objectContaining({ id: 'env-3', estado: 'enviado', resend_id: 'r-3' }),
+      ],
+    });
   });
 
   // El corazón del diseño de "retomable ante un fallo de Resend": si la
@@ -288,7 +324,7 @@ describe('enviarTanda', () => {
     const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
 
     expect(r).toEqual({ ok: false, error: expect.stringContaining('sin red') });
-    expect(db.update).not.toHaveBeenCalled();
+    expect(db.rpc).not.toHaveBeenCalledWith('campanas_cerrar_tanda', expect.anything());
   });
 
   it('si Resend responde 4xx/5xx para la tanda entera, no marca ninguna fila', async () => {
@@ -299,7 +335,7 @@ describe('enviarTanda', () => {
     const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
 
     expect(r).toEqual({ ok: false, error: expect.stringContaining('401') });
-    expect(db.update).not.toHaveBeenCalled();
+    expect(db.rpc).not.toHaveBeenCalledWith('campanas_cerrar_tanda', expect.anything());
   });
 
   it('si Resend responde con JSON ilegible, no marca ninguna fila', async () => {
@@ -310,7 +346,7 @@ describe('enviarTanda', () => {
     const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
 
     expect(r.ok).toBe(false);
-    expect(db.update).not.toHaveBeenCalled();
+    expect(db.rpc).not.toHaveBeenCalledWith('campanas_cerrar_tanda', expect.anything());
   });
 
   it('sin RESEND_API_KEY, no llega ni a consultar la campaña', async () => {
@@ -345,7 +381,7 @@ describe('enviarTanda', () => {
   it('un fallo al escribir el resultado final se registra pero no rompe la tanda', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const filas = [filaReclamada(1)];
-    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null }, errorAlActualizar: true });
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null }, errorAlCerrar: true });
     const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
 
     const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
@@ -371,6 +407,60 @@ describe('enviarTanda', () => {
     expect(r).toEqual({ ok: true, procesados: 0, enviados: 0, fallidos: 0, terminada: true, cancelada: true });
     expect(db.rpc).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // Menor (revisión final): `preview_text` se guardaba y nunca se leía --
+  // el texto de vista previa de una campaña 'personalizada' no salía nunca
+  // en el correo real. Mata al mutante que dejara de seleccionar
+  // `preview_text` (o de usarlo): sin la columna en el `select`, esta
+  // prueba fallaría porque el div inyectado nunca aparecería.
+  it('preview_text se inyecta como preheader invisible justo después de <body>', async () => {
+    const db = dbParaEnviar({
+      campana: {
+        data: { asunto: 'Asunto', html: '<html><body><p>Hola{{nombre}}: {{unsubscribe_url}}</p></body></html>', preview_text: 'Mi vista previa' },
+        error: null,
+      },
+      reclamo: { data: [filaReclamada(1)], error: null },
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo[0].html).toContain('Mi vista previa');
+    expect(cuerpo[0].html.indexOf('Mi vista previa')).toBeLessThan(cuerpo[0].html.indexOf('<p>Hola'));
+  });
+
+  it('sin preview_text, no inyecta ningún div de más', async () => {
+    const db = dbParaEnviar({
+      campana: { data: { ...campanaGuardada.data, preview_text: null }, error: null },
+      reclamo: { data: [filaReclamada(1)], error: null },
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo[0].html).not.toContain('mso-hide:all');
+  });
+
+  // Las cuatro plantillas fijas ya traen su preheader horneado en el html
+  // (mismo estilo en línea, `FIRMA_PREHEADER`) -- inyectar de nuevo
+  // duplicaría el mismo texto dos veces en el correo.
+  it('si el html ya trae el preheader de las plantillas fijas, no inyecta un segundo', async () => {
+    const htmlConPreheader =
+      '<html><body><div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#E9ECF0;opacity:0;">Ya viene horneado</div><p>Hola</p></body></html>';
+    const db = dbParaEnviar({
+      campana: { data: { asunto: 'Asunto', html: htmlConPreheader, preview_text: 'Otro texto' }, error: null },
+      reclamo: { data: [filaReclamada(1)], error: null },
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo[0].html).not.toContain('Otro texto');
+    expect((cuerpo[0].html.match(/mso-hide:all/g) ?? []).length).toBe(1);
   });
 });
 
@@ -497,35 +587,45 @@ function dbEnMemoria(campanaInicial: Record<string, any>, enviosIniciales: Recor
     return nodo;
   }
 
-  function nodoEnvios() {
-    return {
-      update: (cambios: Record<string, unknown>) => ({
-        eq: async (_c: string, id: string) => {
-          const fila = envios.find((e) => e.id === id);
-          if (fila) Object.assign(fila, cambios);
-          return { error: null };
-        },
-      }),
-    };
-  }
-
+  // `campanas_envios` ya no se toca por `.from().update()` -- cerrar una
+  // tanda es el rpc `campanas_cerrar_tanda`, reproducido más abajo junto
+  // con `campanas_reclamar_pendientes`. No queda nada que este doble tenga
+  // que servir para esa tabla.
   const from = vi.fn((tabla: string) => {
     if (tabla === 'campanas') return nodoCampanas();
-    if (tabla === 'campanas_envios') return nodoEnvios();
     throw new Error(`tabla no mockeada en esta prueba: ${tabla}`);
   });
 
   const rpc = vi.fn(async (nombre: string, args: Record<string, unknown>) => {
-    if (nombre !== 'campanas_reclamar_pendientes') throw new Error(`rpc no soportada: ${nombre}`);
-    // Reproduce el `not exists (... cancelada_at is not null)` de la
-    // migración 0020: la propia sentencia de reclamo deja de entregar nada
-    // apenas la cancelación está escrita, sin que `enviarTanda` tenga que
-    // enterarse por su cuenta.
-    if (campana.cancelada_at) return { data: [], error: null };
-    const pendientes = envios.filter((e) => e.campana_id === args.p_campana_id && e.estado === 'pendiente');
-    const reclamadas = pendientes.slice(0, args.p_limite as number);
-    for (const f of reclamadas) f.actualizado_at = new Date().toISOString();
-    return { data: reclamadas.map((f) => ({ id: f.id, correo: f.correo, nombre_crm: f.nombre_crm })), error: null };
+    if (nombre === 'campanas_reclamar_pendientes') {
+      // Reproduce el `not exists (... cancelada_at is not null)` de la
+      // migración 0020: la propia sentencia de reclamo deja de entregar nada
+      // apenas la cancelación está escrita, sin que `enviarTanda` tenga que
+      // enterarse por su cuenta.
+      if (campana.cancelada_at) return { data: [], error: null };
+      const pendientes = envios.filter((e) => e.campana_id === args.p_campana_id && e.estado === 'pendiente');
+      const reclamadas = pendientes.slice(0, args.p_limite as number);
+      for (const f of reclamadas) f.actualizado_at = new Date().toISOString();
+      return { data: reclamadas.map((f) => ({ id: f.id, correo: f.correo, nombre_crm: f.nombre_crm })), error: null };
+    }
+    if (nombre === 'campanas_cerrar_tanda') {
+      // Reproduce, en JavaScript, el `update ... from jsonb_to_recordset`
+      // de la migración 0023: una sola "sentencia" que aplica los
+      // resultados de TODA la tanda de una vez.
+      const resultados = args.p_resultados as Array<{
+        id: string;
+        estado: string;
+        resend_id: string | null;
+        error: string | null;
+        actualizado_at: string;
+      }>;
+      for (const r of resultados) {
+        const fila = envios.find((e) => e.id === r.id);
+        if (fila) Object.assign(fila, { estado: r.estado, resend_id: r.resend_id, error: r.error, actualizado_at: r.actualizado_at });
+      }
+      return { data: resultados.length, error: null };
+    }
+    throw new Error(`rpc no soportada: ${nombre}`);
   });
 
   return { from, rpc, _campana: campana, _envios: envios };
