@@ -128,10 +128,17 @@ begin
 end;
 $$ language plpgsql;
 
--- Misma postura que el resto de las funciones de campañas (migraciones
--- 0019/0020/0023): sin esto queda ejecutable por `PUBLIC` -- el default de
--- Postgres -- y por lo tanto invocable por `anon` a través de PostgREST.
+-- Permisos. OJO con la trampa que documenta la migración 0024: el
+-- `revoke all ... from public` que traían 0019/0020/0023 **no hacía nada**
+-- contra `anon`. Supabase corre de fábrica un `alter default privileges in
+-- schema public grant all on functions to anon, authenticated,
+-- service_role`, así que toda función nueva nace con un permiso NOMINAL
+-- para `anon`; quitarle el permiso al pseudo-rol PUBLIC es otra cosa y deja
+-- ese grant intacto. Por eso acá se nombra a los dos roles de forma
+-- explícita, como quedó en 0024 -- si sólo se revocara de `public`, esta
+-- función quedaría invocable por la llave pública que va en el navegador.
 revoke all on function public.campanas_reservar_cupo_diario(date, integer, integer) from public;
+revoke execute on function public.campanas_reservar_cupo_diario(date, integer, integer) from anon, authenticated;
 grant execute on function public.campanas_reservar_cupo_diario(date, integer, integer) to service_role;
 
 -- 3) La marca que distingue una campaña que armó SOLO el cron de una que
