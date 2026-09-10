@@ -76,20 +76,25 @@ type ColaMock = {
   zonas?: Array<{
     zona: string;
     orden: number;
-    estado: 'terminada' | 'en_curso' | 'espera';
+    estado: 'terminada' | 'en_curso' | 'espera' | 'error';
     campanaId: string | null;
     direccionesTotal: number;
     direccionesEnviadas: number;
     direccionesFallidas: number;
     direccionesPendientes: number;
+    error?: string | null;
   }>;
   totales?: { direcciones: number; enviadas: number; fallidas: number; pendientes: number };
+  totalIncompleto?: boolean;
+  zonasConError?: string[];
   cupoHoy?: { dia: number; tope: number; reservado: number; disponible: number; diaHabilHoy: boolean };
   fechaEstimadaFin?: string | null;
 };
 const COLA_VACIA: Required<ColaMock> = {
   zonas: [],
   totales: { direcciones: 0, enviadas: 0, fallidas: 0, pendientes: 0 },
+  totalIncompleto: false,
+  zonasConError: [],
   cupoHoy: { dia: 1, tope: 25, reservado: 0, disponible: 25, diaHabilHoy: true },
   fechaEstimadaFin: null,
 };
@@ -475,6 +480,52 @@ describe('Cola del envío programado', () => {
     // servidor (135) -- nunca la pantalla suma las zonas por su cuenta.
     expect(screen.getByText('135')).toBeInTheDocument();
     expect(screen.getByText(/de 189 en total, únicas/)).toBeInTheDocument();
+  });
+
+  // Hallazgo de producción (2026-09-10): antes, un fallo de UNA zona
+  // tumbaba la pantalla entera ("No se pudo calcular la cola..."). Ahora la
+  // zona en error se ve por separado, con su motivo, y un aviso deja claro
+  // que los totales son un piso -- nunca un número que finja estar
+  // completo.
+  it('una zona en error se muestra con su motivo, y un aviso avisa que los totales son un mínimo', async () => {
+    mockFetchHistorial({
+      campanas: [],
+      cola: {
+        zonas: [
+          { zona: 'Guanacaste Interior', orden: 1, estado: 'espera', campanaId: null, direccionesTotal: 22, direccionesEnviadas: 0, direccionesFallidas: 0, direccionesPendientes: 22 },
+          {
+            zona: 'Pacífico Central',
+            orden: 2,
+            estado: 'error',
+            campanaId: null,
+            direccionesTotal: 0,
+            direccionesEnviadas: 0,
+            direccionesFallidas: 0,
+            direccionesPendientes: 0,
+            error: 'GHL búsqueda de contactos 400: Failed to fetch details. Please try again later',
+          },
+        ],
+        totales: { direcciones: 22, enviadas: 0, fallidas: 0, pendientes: 22 },
+        totalIncompleto: true,
+        zonasConError: ['Pacífico Central'],
+      },
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+
+    expect(await screen.findByText('No se pudo calcular')).toBeInTheDocument();
+    expect(screen.getByText(/failed to fetch details/i)).toBeInTheDocument();
+    // El aviso nombra la zona en error, y los totales quedan marcados como
+    // un mínimo (≥), nunca un número que finja estar completo.
+    const aviso = screen.getByRole('alert');
+    expect(aviso.textContent).toMatch(/pacífico central/i);
+    expect(aviso.textContent).toMatch(/son un mínimo, no el total real/i);
+  });
+
+  it('sin ninguna zona en error, no muestra ningún aviso de total incompleto', async () => {
+    mockFetchHistorial({ campanas: [], cola: { totalIncompleto: false, zonasConError: [] } });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    await screen.findByText(/ya no queda nada pendiente/i);
+    expect(screen.queryByText(/son un mínimo, no el total real/i)).not.toBeInTheDocument();
   });
 
   it('el cupo de hoy muestra disponible/tope y el día de rampa', async () => {

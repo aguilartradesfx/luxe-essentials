@@ -68,13 +68,15 @@ function peticion(cuerpo: unknown, cabeceras: Record<string, string> = {}) {
 }
 
 const ESTADO_EJEMPLO = {
-  zonas: [{ zona: 'Guanacaste Interior', orden: 1, estado: 'espera', campanaId: null, direccionesTotal: 22, direccionesEnviadas: 0, direccionesFallidas: 0, direccionesPendientes: 22 }],
+  zonas: [{ zona: 'Guanacaste Interior', orden: 1, estado: 'espera', campanaId: null, direccionesTotal: 22, direccionesEnviadas: 0, direccionesFallidas: 0, direccionesPendientes: 22, error: null }],
   totalDirecciones: 22,
   totalEnviadas: 0,
   totalFallidas: 0,
   totalPendientes: 22,
   cupoHoy: { dia: 1, tope: 25, reservado: 0, disponible: 25, diaHabilHoy: true },
   fechaEstimadaFin: '2026-09-09',
+  totalIncompleto: false,
+  zonasConError: [] as string[],
 };
 
 beforeEach(() => {
@@ -140,9 +142,27 @@ describe('POST /api/campanas/cola', () => {
       ok: true,
       zonas: ESTADO_EJEMPLO.zonas,
       totales: { direcciones: 22, enviadas: 0, fallidas: 0, pendientes: 22 },
+      totalIncompleto: false,
+      zonasConError: [],
       cupoHoy: ESTADO_EJEMPLO.cupoHoy,
       fechaEstimadaFin: '2026-09-09',
     });
+  });
+
+  // Hallazgo de producción (2026-09-10): si `estadoColaProgramada` marcó
+  // alguna zona en error, la ruta tiene que dejarlo pasar tal cual -- nunca
+  // esconderlo ni "completar" el total por su cuenta.
+  it('deja pasar totalIncompleto/zonasConError tal cual cuando estadoColaProgramada los trae', async () => {
+    estadoColaProgramadaMock.mockResolvedValue({
+      ...ESTADO_EJEMPLO,
+      totalIncompleto: true,
+      zonasConError: ['Pacífico Central'],
+    });
+    const { cookie, csrf } = sesionSuperadmin();
+    const res = await postCola(peticion({}, { cookie, 'x-csrf-token': csrf }));
+    const cuerpo = await res.json();
+    expect(cuerpo.totalIncompleto).toBe(true);
+    expect(cuerpo.zonasConError).toEqual(['Pacífico Central']);
   });
 
   it('500 si faltan las credenciales de GHL', async () => {

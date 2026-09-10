@@ -380,15 +380,100 @@ describe('estadoColaProgramada', () => {
     expect(r.fechaEstimadaFin).toBeNull();
   });
 
-  it('si UNA zona no se puede consultar contra GHL, la función entera falla (nunca un total a medias)', async () => {
+  // =====================================================================
+  // Hallazgo de producción (2026-09-10): "No se pudo calcular la cola del
+  // envío programado" -- un 502 a los 7 segundos -- porque UNA zona que
+  // fallaba contra GHL (un 400 pasajero, "Failed to fetch details. Please
+  // try again later") tumbaba la función ENTERA. Ahora una zona en 'espera'
+  // que no se puede consultar (ni con el reintento que ya hace
+  // `contactosPorZona`) queda en su propia fila 'error' -- las otras doce
+  // se siguen calculando y mostrando.
+  it('si UNA zona en espera no se puede consultar contra GHL (ni con reintento), queda en error -- las otras doce se calculan igual', async () => {
     const db = crearDbSoloLectura();
     const fetchImpl = vi.fn(async (_url: any, init: any) => {
       const cuerpo = JSON.parse((init?.body as string) ?? '{}');
       if (cuerpo.filters?.[0]?.value === ZONA_2) {
         return { ok: false, status: 500, text: async () => 'boom' } as unknown as Response;
       }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ contacts: cuerpo.filters?.[0]?.value === ZONA_1 ? [{ id: 'g-1', email: 'a@hotel.cr' }] : [] }),
+      } as unknown as Response;
+    });
+    const r = await estadoColaProgramada(db as any, { ...depsBase, fetchImpl }, ahoraMiercoles);
+
+    const filaZona2 = r.zonas.find((z) => z.zona === ZONA_2)!;
+    expect(filaZona2.estado).toBe('error');
+    expect(filaZona2.campanaId).toBeNull();
+    expect(filaZona2.direccionesTotal).toBe(0);
+    expect(filaZona2.error).toContain('500');
+
+    // Las otras doce, ZONA_1 incluida, se calcularon sin problema.
+    expect(r.zonas.filter((z) => z.zona !== ZONA_2)).toHaveLength(12);
+    const filaZona1 = r.zonas.find((z) => z.zona === ZONA_1)!;
+    expect(filaZona1.estado).toBe('espera');
+    expect(filaZona1.direccionesTotal).toBe(1);
+
+    // El total NUNCA fingе estar completo -- excluye lo de ZONA_2 (que no se
+    // pudo calcular) y la bandera lo dice.
+    expect(r.totalIncompleto).toBe(true);
+    expect(r.zonasConError).toEqual([ZONA_2]);
+    expect(r.totalDirecciones).toBe(1); // sólo lo de ZONA_1 -- nunca "0" (fingiendo que ZONA_2 no tiene nadie).
+    expect(r.totalPendientes).toBe(1);
+  });
+
+  it('sin ninguna zona en error, totalIncompleto es false y zonasConError vacío', async () => {
+    const db = crearDbSoloLectura();
+    const fetchImpl = fetchGhl({});
+    const r = await estadoColaProgramada(db as any, { ...depsBase, fetchImpl }, ahoraMiercoles);
+    expect(r.totalIncompleto).toBe(false);
+    expect(r.zonasConError).toEqual([]);
+  });
+
+  // Una zona que YA tiene campaña (progreso real, sacado de la base) no
+  // necesita el CRM para nada -- su fila se calcula igual aunque el CRM
+  // esté fallando para ELLA en particular (`contactosDeTodasLasZonas` trae
+  // las trece de todas formas, se usen o no). Mata al mutante que movería
+  // el chequeo de `!resultadoZona.ok` afuera del `if (existente)`, que
+  // volvería a tumbar zonas que ni falta les hace consultar el CRM.
+  it('una zona que YA tiene campaña no se ve afectada aunque su consulta al CRM haya fallado', async () => {
+    const db = crearDbSoloLectura({
+      campanas: [{ id: 'c-en-curso', zona: ZONA_1, plantilla: 'inicial', programada: true }],
+      campanas_envios: [{ id: 'e-1', campana_id: 'c-en-curso', correo: 'a@hotel.cr', estado: 'enviado' }],
+    });
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' }) as unknown as Response);
+    const r = await estadoColaProgramada(db as any, { ...depsBase, fetchImpl }, ahoraMiercoles);
+    const filaZona1 = r.zonas.find((z) => z.zona === ZONA_1)!;
+    expect(filaZona1.estado).toBe('terminada');
+    expect(filaZona1.direccionesTotal).toBe(1);
+    // El resto (zonas todavía en 'espera') sí necesitaban el CRM, y éste
+    // falló para todas -- quedan en error, pero eso no contamina a ZONA_1.
+    expect(r.zonasConError).not.toContain(ZONA_1);
+  });
+
+  // El reintento de `contactosPorZona` (lib/campanas/contactos.ts) vive un
+  // nivel más abajo -- se prueba a fondo en tests/campanas-contactos.test.ts
+  // -- pero acá se confirma la integración: un 400 pasajero (el que causó
+  // el hallazgo de producción) que se resuelve solo en el reintento NUNCA
+  // debería dejar a la zona en 'error'.
+  it('un 400 pasajero de GHL que se resuelve en el reintento nunca deja la zona en error', async () => {
+    const db = crearDbSoloLectura();
+    let primerIntento = true;
+    const fetchImpl = vi.fn(async (_url: any, init: any) => {
+      const cuerpo = JSON.parse((init?.body as string) ?? '{}');
+      if (cuerpo.filters?.[0]?.value === ZONA_2 && primerIntento) {
+        primerIntento = false;
+        return {
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ status: 400, message: 'Failed to fetch details. Please try again later' }),
+        } as unknown as Response;
+      }
       return { ok: true, status: 200, text: async () => JSON.stringify({ contacts: [] }) } as unknown as Response;
     });
-    await expect(estadoColaProgramada(db as any, { ...depsBase, fetchImpl }, ahoraMiercoles)).rejects.toThrow();
-  });
+    const r = await estadoColaProgramada(db as any, { ...depsBase, fetchImpl }, ahoraMiercoles);
+    expect(r.totalIncompleto).toBe(false);
+    expect(r.zonas.find((z) => z.zona === ZONA_2)!.estado).toBe('espera');
+  }, 10000);
 });

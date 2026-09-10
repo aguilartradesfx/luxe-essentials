@@ -58,7 +58,12 @@ const ETIQUETAS_PLANTILLA: Record<PlantillaCampana, string> = {
 // archivo: lib/campanas/cola.ts arranca con `import 'server-only'`, así
 // que este componente de cliente no puede importar sus tipos -- copia la
 // FORMA de lo que ya devuelve app/api/campanas/cola/route.ts.
-type EstadoZonaCola = 'terminada' | 'en_curso' | 'espera';
+// 'error' -- hallazgo de producción (2026-09-10): una zona que no se pudo
+// consultar contra el CRM (ni con reintento) ya no tumba la pantalla
+// entera -- queda en su propia fila, con su motivo, mientras las otras
+// doce se siguen mostrando. Ver el comentario grande de
+// lib/campanas/cola.ts para el criterio completo.
+type EstadoZonaCola = 'terminada' | 'en_curso' | 'espera' | 'error';
 type FilaZonaCola = {
   zona: string;
   orden: number;
@@ -68,11 +73,16 @@ type FilaZonaCola = {
   direccionesEnviadas: number;
   direccionesFallidas: number;
   direccionesPendientes: number;
+  error: string | null;
 };
 type CupoHoyCola = { dia: number; tope: number; reservado: number; disponible: number; diaHabilHoy: boolean };
 type ColaProgramadaDatos = {
   zonas: FilaZonaCola[];
   totales: { direcciones: number; enviadas: number; fallidas: number; pendientes: number };
+  // `true` si alguna zona quedó en 'error' -- en ese caso `totales` es un
+  // PISO, nunca la cifra completa (ver lib/campanas/cola.ts).
+  totalIncompleto: boolean;
+  zonasConError: string[];
   cupoHoy: CupoHoyCola;
   fechaEstimadaFin: string | null;
 };
@@ -81,6 +91,7 @@ const ETIQUETAS_ESTADO_ZONA: Record<EstadoZonaCola, string> = {
   terminada: 'Terminada',
   en_curso: 'En curso',
   espera: 'En espera',
+  error: 'No se pudo calcular',
 };
 
 // Miles con punto, sin decimales -- mismo criterio, exacto, que
@@ -134,6 +145,8 @@ function ColaProgramada({ onSesionInvalida }: Pick<Props, 'onSesionInvalida'>) {
       setDatos({
         zonas: cuerpo.zonas as FilaZonaCola[],
         totales: cuerpo.totales,
+        totalIncompleto: Boolean(cuerpo.totalIncompleto),
+        zonasConError: (cuerpo.zonasConError as string[] | undefined) ?? [],
         cupoHoy: cuerpo.cupoHoy,
         fechaEstimadaFin: cuerpo.fechaEstimadaFin ?? null,
       });
@@ -174,14 +187,32 @@ function ColaProgramada({ onSesionInvalida }: Pick<Props, 'onSesionInvalida'>) {
 
       {datos && (
         <>
+          {/* Hallazgo de producción (2026-09-10): si una zona no se pudo
+              calcular, los totales de abajo son un PISO -- nunca la cifra
+              completa (la zona en error podría sumar más). Nunca se
+              muestra un total que finja estar completo cuando falta una
+              zona -- este aviso es la forma de decirlo. */}
+          {datos.totalIncompleto && (
+            <p role="alert" className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              No se pudo calcular {datos.zonasConError.length === 1 ? 'la zona' : 'las zonas'}{' '}
+              <strong>{datos.zonasConError.join(', ')}</strong> -- los números de abajo NO las incluyen, así que son un
+              mínimo, no el total real.
+            </p>
+          )}
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg bg-[var(--carta-fill)] p-3">
               <p className="text-xs text-teal">Direcciones pendientes</p>
-              <p className="mt-1 font-display text-lg text-navy">{formatearNumero(datos.totales.pendientes)}</p>
+              <p className="mt-1 font-display text-lg text-navy">
+                {datos.totalIncompleto ? '≥ ' : ''}
+                {formatearNumero(datos.totales.pendientes)}
+              </p>
               {/* "únicas" -- la misma dirección puede vivir en dos zonas del
                   CRM; este número ya está deduplicado, nunca es la suma de
                   las trece zonas por separado. */}
-              <p className="text-[11px] text-teal/70">de {formatearNumero(datos.totales.direcciones)} en total, únicas</p>
+              <p className="text-[11px] text-teal/70">
+                de {datos.totalIncompleto ? '≥ ' : ''}
+                {formatearNumero(datos.totales.direcciones)} en total, únicas
+              </p>
             </div>
             <div className="rounded-lg bg-[var(--carta-fill)] p-3">
               <p className="text-xs text-teal">Cupo de hoy</p>
@@ -201,6 +232,7 @@ function ColaProgramada({ onSesionInvalida }: Pick<Props, 'onSesionInvalida'>) {
                   promesa, es una proyección que asume que nada cambia. */}
               <p className="text-[11px] text-teal/70">
                 Estimado -- asume que nadie pausa el envío ni cambia el cupo entre hoy y esa fecha.
+                {datos.totalIncompleto ? ' Con zonas sin calcular, además podría atrasarse.' : ''}
               </p>
             </div>
           </div>
@@ -227,14 +259,18 @@ function ColaProgramada({ onSesionInvalida }: Pick<Props, 'onSesionInvalida'>) {
                             ? 'bg-emerald-50 text-emerald-800'
                             : z.estado === 'en_curso'
                               ? 'bg-teal/10 text-teal'
-                              : 'bg-[var(--carta-fill)] text-teal/70'
+                              : z.estado === 'error'
+                                ? 'bg-red-50 text-red-800'
+                                : 'bg-[var(--carta-fill)] text-teal/70'
                         }`}
                       >
                         {ETIQUETAS_ESTADO_ZONA[z.estado]}
                       </span>
                     </td>
                     <td className="px-3 py-2 align-top text-teal">
-                      {z.estado === 'espera' ? (
+                      {z.estado === 'error' ? (
+                        <span className="text-red-800">{z.error ?? 'No se pudo consultar el CRM para esta zona.'}</span>
+                      ) : z.estado === 'espera' ? (
                         <span>{formatearNumero(z.direccionesTotal)} por mandar</span>
                       ) : (
                         <span>

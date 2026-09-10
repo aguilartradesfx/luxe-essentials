@@ -140,6 +140,98 @@ describe('contactosPorZona', () => {
     const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
     expect(r.ok).toBe(false);
   });
+
+  // =====================================================================
+  // El reintento -- hallazgo de producción (2026-09-10): "No se pudo
+  // calcular la cola del envío programado" era un 400 pasajero de GHL en
+  // esta misma llamada -- comprobado corriendo las trece zonas tres veces
+  // en paralelo y una en serie, sin cambiar nada más: las cuatro salieron
+  // limpias. Ver el comentario grande de `esFalloTransitorio` en
+  // lib/campanas/contactos.ts para el criterio completo (distinto del de
+  // lib/agente/conversacion.ts / acciones.ts, que nunca reintentan un 4xx).
+  describe('reintento ante un fallo transitorio', () => {
+    function respuestaCruda(status: number, cuerpo: unknown) {
+      return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(cuerpo) } as unknown as Response;
+    }
+
+    it('un 400 con "try again" en el cuerpo se reintenta UNA vez y sale adelante', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          respuestaCruda(400, { status: 400, message: 'Failed to fetch details. Please try again later' }),
+        )
+        .mockResolvedValueOnce(respuestaCruda(200, { contacts: [{ id: 'c-1', email: 'a@x.cr' }] }));
+      const r = await contactosPorZona('Pacífico Central', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(r).toEqual({ ok: true, contactos: [{ contactId: 'c-1', nombreCrm: '', correo: 'a@x.cr' }] });
+    });
+
+    // Mata al mutante que reintentara CUALQUIER 400 a ciegas: un 400 real
+    // (filtro mal armado, credencial rechazada con ese código) no mejora
+    // insistiendo -- sale con UN solo intento, no dos.
+    it('un 400 SIN "try again" -- un 400 de verdad -- no se reintenta', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(respuestaCruda(400, { status: 400, message: 'Invalid filter field' }));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(r).toEqual({ ok: false, error: expect.stringContaining('400') });
+    });
+
+    it('un 401 (permisos) nunca se reintenta -- un intento y listo', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(respuestaCruda(401, { message: 'no autorizado' }));
+      await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('un 500 se reintenta una vez y sale adelante', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(respuestaCruda(500, { message: 'boom' }))
+        .mockResolvedValueOnce(respuestaCruda(200, { contacts: [] }));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(r).toEqual({ ok: true, contactos: [] });
+    });
+
+    it('un 429 se reintenta una vez y sale adelante', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(respuestaCruda(429, { message: 'rate limited' }))
+        .mockResolvedValueOnce(respuestaCruda(200, { contacts: [] }));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(r).toEqual({ ok: true, contactos: [] });
+    });
+
+    it('un fallo de red se reintenta una vez y sale adelante', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('ECONNRESET'))
+        .mockResolvedValueOnce(respuestaCruda(200, { contacts: [] }));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(r).toEqual({ ok: true, contactos: [] });
+    });
+
+    // Mata al mutante que reintentara sin límite (un `for` sin corte, o un
+    // `intento < 3`): si el segundo intento TAMBIÉN falla, se rinde -- dos
+    // llamadas en total, nunca más, y devuelve el error del último intento.
+    it('si el reintento TAMBIÉN falla, se rinde con dos llamadas en total -- nunca un bucle', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(respuestaCruda(500, { message: 'siempre cae' }));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(r).toEqual({ ok: false, error: expect.stringContaining('500') });
+    });
+
+    it('si el reintento también es un fallo de red, se rinde con el mensaje de esa segunda falla', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('primer intento cae'))
+        .mockRejectedValueOnce(new Error('segundo intento tambien cae'));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(r).toEqual({ ok: false, error: expect.stringContaining('segundo intento tambien cae') });
+    });
+  });
 });
 
 describe('conCorreo', () => {

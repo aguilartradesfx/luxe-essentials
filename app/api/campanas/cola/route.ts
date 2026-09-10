@@ -72,6 +72,13 @@ export async function POST(request: Request) {
       fallidas: estado.totalFallidas,
       pendientes: estado.totalPendientes,
     },
+    // Hallazgo de producción (2026-09-10): si alguna zona quedó en 'error'
+    // (el CRM no respondió ni con reintento), los totales de arriba son un
+    // PISO -- nunca el número completo. La pantalla tiene que decirlo con
+    // estos dos campos, en vez de mostrar un total que finge estar
+    // completo. Ver lib/campanas/cola.ts para el criterio completo.
+    totalIncompleto: estado.totalIncompleto,
+    zonasConError: estado.zonasConError,
     cupoHoy: estado.cupoHoy,
     fechaEstimadaFin: estado.fechaEstimadaFin,
   });

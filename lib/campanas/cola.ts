@@ -69,7 +69,16 @@ import {
 // número inflado (una dirección "por duplicado") a costa de, en un caso
 // angosto, subestimar en un puñado lo que le tocará a una zona futura.
 
-export type EstadoZonaCola = 'terminada' | 'en_curso' | 'espera';
+// 'error': la zona todavía no tiene campaña Y no se pudo simular contra el
+// CRM -- ni siquiera después del reintento que ya hace `contactosPorZona`
+// (lib/campanas/contactos.ts). Hallazgo de producción (2026-09-10): antes,
+// UNA zona así hacía que `estadoColaProgramada` lanzara ENTERA -- la
+// pantalla no dibujaba ninguna de las trece filas, aunque las otras doce
+// se hubieran podido calcular sin problema. Mismo criterio que ya usaba
+// `app/api/campanas/zonas/route.ts` para esto mismo (el fallo de una zona
+// queda en su propia fila, nunca tumba a las demás) -- acá se aplica el
+// mismo criterio, no uno nuevo.
+export type EstadoZonaCola = 'terminada' | 'en_curso' | 'espera' | 'error';
 
 export type FilaZonaCola = {
   zona: ZonaComercial;
@@ -77,14 +86,20 @@ export type FilaZonaCola = {
   // envío, no el de `ZONAS_COMERCIALES` (que es alfabético/de origen).
   orden: number;
   estado: EstadoZonaCola;
-  // `null` si la zona todavía no tiene campaña ('espera').
+  // `null` si la zona todavía no tiene campaña ('espera' o 'error').
   campanaId: string | null;
   // Direcciones ÚNICAS que le tocan a esta zona -- real (`progresoCampana`)
-  // si ya tiene campaña, simulado si todavía no.
+  // si ya tiene campaña, simulado si todavía no. Siempre 0 en 'error': no
+  // hay ninguna cifra confiable que ofrecer para una zona que no se pudo
+  // consultar -- mostrar un 0 acá NUNCA se confunde con "esta zona no
+  // tiene destinatarios", porque `estado` ya lo distingue.
   direccionesTotal: number;
   direccionesEnviadas: number;
   direccionesFallidas: number;
   direccionesPendientes: number;
+  // El motivo, tal cual lo devolvió el CRM, cuando `estado === 'error'`.
+  // `null` en cualquier otro estado.
+  error: string | null;
 };
 
 export type CupoHoy = {
@@ -114,6 +129,17 @@ export type EstadoColaProgramada = {
   // 'YYYY-MM-DD', o `null` si ya no queda nada pendiente. Calculada con la
   // rampa y el cupo de 100 de lunes a viernes -- ver `fechaEstimadaFin`.
   fechaEstimadaFin: string | null;
+  // `true` si AL MENOS una zona quedó en 'error' -- en ese caso los cuatro
+  // totales de arriba son un PISO (lo que sí se pudo calcular con lo que
+  // respondió el CRM), nunca la cifra completa: la zona en error podría
+  // sumar más direcciones de las que este total ya trae. Nunca se muestra
+  // un total que finja estar completo cuando le falta una zona -- la
+  // pantalla tiene que decirlo con esta bandera, no adivinarlo.
+  totalIncompleto: boolean;
+  // Las zonas en 'error', en el mismo orden que `zonas` -- para que la
+  // pantalla pueda señalarlas por nombre sin tener que volver a filtrar
+  // `zonas`.
+  zonasConError: ZonaComercial[];
 };
 
 // --- Días hábiles (lunes a viernes), en UTC -- el mismo criterio de fecha
@@ -197,13 +223,19 @@ export async function estadoColaProgramada(
 
   // El camino compartido de ~47 peticiones a GHL (lib/campanas/contactos.ts)
   // -- el mismo que usa /api/campanas/zonas, nunca una copia aparte.
+  // `contactosPorZona` YA reintentó lo que valía la pena reintentar antes
+  // de volver acá (ver el comentario grande junto a `esFalloTransitorio`,
+  // en contactos.ts) -- si una entrada de `contactosTodas` sigue sin `ok`
+  // llegados a este punto, es porque el reintento tampoco alcanzó.
+  //
+  // A propósito, YA NO se revisan acá las trece de una sola pasada para
+  // lanzar si alguna falló: ese chequeo -- el que causó el hallazgo de
+  // producción del 2026-09-10 -- tumbaba la función ENTERA por una zona
+  // que ni siquiera hacía falta consultar (una que ya tiene campaña sólo
+  // necesita `progresoCampana`, nunca el CRM). Ahora cada zona decide por
+  // sí misma, más abajo, si el CRM le hace falta -- y si le hace falta y
+  // falló, esa fila queda 'error' sin tocar a las demás.
   const contactosTodas = await contactosDeTodasLasZonas(deps);
-  for (const zona of ORDEN_ZONAS_PROGRAMADO) {
-    const resultado = contactosTodas[zona];
-    if (!resultado.ok) {
-      throw new Error(`No se pudo consultar el CRM para ${zona}: ${resultado.error}`);
-    }
-  }
 
   // Arranca con quien YA recibió el inicial de verdad (global, cualquier
   // zona, cualquier campaña) -- la misma garantía 3 que usa
@@ -215,6 +247,8 @@ export async function estadoColaProgramada(
   let totalEnviadas = 0;
   let totalFallidas = 0;
   let totalPendientes = 0;
+  let totalIncompleto = false;
+  const zonasConError: ZonaComercial[] = [];
 
   for (let i = 0; i < ORDEN_ZONAS_PROGRAMADO.length; i++) {
     const zona = ORDEN_ZONAS_PROGRAMADO[i];
@@ -250,6 +284,7 @@ export async function estadoColaProgramada(
         direccionesEnviadas: progreso.enviados,
         direccionesFallidas: progreso.fallidos,
         direccionesPendientes: progreso.pendientes,
+        error: null,
       });
       totalDirecciones += progreso.total;
       totalEnviadas += progreso.enviados;
@@ -258,16 +293,37 @@ export async function estadoColaProgramada(
       continue;
     }
 
-    // Todavía no tiene campaña -- se simula qué le tocaría, con el MISMO
-    // criterio que `resolverObjetivo` usa para armarla de verdad: sus
-    // contactos con correo, sin repetir entre sí, sin nadie que ya esté
-    // `asignado` (a otra zona en este mismo recorrido, o ya enviado de
-    // verdad), y sin nadie de baja.
+    // Todavía no tiene campaña -- hace falta el CRM para simular qué le
+    // tocaría. Si esa consulta falló (aun con reintento), no hay ninguna
+    // cifra confiable que ofrecer para esta zona en particular: la fila
+    // queda 'error', con el motivo tal cual lo devolvió GHL, y el `for`
+    // sigue con la zona siguiente -- se prefiere mostrar las otras doce
+    // filas y avisar cuál falta, antes que tirar la pantalla entera por
+    // una sola.
     const resultadoZona = contactosTodas[zona];
     if (!resultadoZona.ok) {
-      // Inalcanzable: ya se validó arriba que las trece zonas vinieron
-      // bien, pero TypeScript no lo sabe desde este `for`.
-      throw new Error(`No se pudo consultar el CRM para ${zona}: ${resultadoZona.error}`);
+      totalIncompleto = true;
+      zonasConError.push(zona);
+      filas.push({
+        zona,
+        orden: i + 1,
+        estado: 'error',
+        campanaId: null,
+        direccionesTotal: 0,
+        direccionesEnviadas: 0,
+        direccionesFallidas: 0,
+        direccionesPendientes: 0,
+        error: resultadoZona.error,
+      });
+      // `asignado` NO se toca: sin los contactos de esta zona no hay nada
+      // que reservarle a las zonas futuras del recorrido. Costo aceptado,
+      // angosto y del mismo tipo que la simplificación deliberada de la
+      // zona en curso (ver el comentario grande del encabezado): una
+      // dirección que viva en ESTA zona y también en una zona futura
+      // podría, sólo mientras esta zona siga en error, contarse en la
+      // futura -- se prefiere seguir mostrando algo útil de las otras doce
+      // a dejar de mostrarlas por esto.
+      continue;
     }
     const conCorreoZona = conCorreo(resultadoZona.contactos);
 
@@ -292,6 +348,7 @@ export async function estadoColaProgramada(
       direccionesEnviadas: 0,
       direccionesFallidas: 0,
       direccionesPendientes: permitidos.length,
+      error: null,
     });
     totalDirecciones += permitidos.length;
     totalPendientes += permitidos.length;
@@ -321,6 +378,12 @@ export async function estadoColaProgramada(
     diaHabilHoy: esDiaHabil(fechaHoyDate),
   };
 
+  // La fecha estimada se sigue calculando con lo que sí se pudo contar --
+  // nunca `null` sólo porque una zona quedó en error: es información
+  // parcial pero real ("con lo que sabemos hoy, esto es lo que falta"), y
+  // la pantalla ya la marca "Estimado" con su propio descargo. Lo que
+  // `totalIncompleto` agrega es la advertencia de que ese "lo que sabemos"
+  // es, en este cálculo puntual, un piso -- nunca el total real.
   const estimado = fechaEstimadaFin(totalPendientes, dia, fechaHoyDate, reservadoHoy);
 
   return {
@@ -331,5 +394,7 @@ export async function estadoColaProgramada(
     totalPendientes,
     cupoHoy,
     fechaEstimadaFin: estimado,
+    totalIncompleto,
+    zonasConError,
   };
 }

@@ -113,6 +113,77 @@ function aContactoZona(c: ContactoCrudo): ContactoZona | null {
 // Antes de usar esto en producción: probarlo contra la location real con
 // una zona chica ("Guanacaste Interior", 27 contactos según
 // docs/ghl-smart-lists.md) y confirmar que el conteo coincide.
+
+// Cuánto esperar antes del reintento -- mismo valor (400ms) que ya usan
+// lib/agente/conversacion.ts (`pedir`) y lib/agente/acciones.ts
+// (`conReintento`) por el mismo motivo: un hipo pasajero de la API rara
+// vez tarda más que eso en resolverse solo.
+const ESPERA_REINTENTO_MS = 400;
+
+// Cuándo vale la pena reintentar UNA página de `/contacts/search`, contra
+// lo que se comprobó pasajero en producción (hallazgo del 2026-09-10): la
+// cola del envío programado devolvía 502 a los 7 segundos -- no un
+// timeout, una excepción -- porque `estadoColaProgramada` lanzaba entero
+// ante UN solo fallo de zona:
+//   Error: No se pudo consultar el CRM para Pacífico Central: GHL
+//   búsqueda de contactos 400: {"status":400,"message":"Failed to fetch
+//   details. Please try again later","name":"HttpException"}
+// Se corrieron las trece zonas tres veces en paralelo y una en serie, sin
+// cambiar nada más: las cuatro salieron limpias -- ese 400 puntual es un
+// hipo del lado de GHL, no un problema de la petición (el propio cuerpo lo
+// dice: "try again later"). Por eso este criterio difiere del de
+// lib/agente/conversacion.ts / lib/agente/acciones.ts, que NUNCA
+// reintentan un 4xx -- ahí un 4xx es de verdad un problema de permisos o
+// de parámetros, insistir no lo arregla. Acá se reintenta un 5xx o un 429
+// (transitorios en cualquier API), y ADEMÁS un 400 cuyo cuerpo trae la
+// frase "try again" -- nunca un 400 a secas (un filtro mal armado no
+// mejora insistiendo, y no hay por qué gastar el doble de peticiones en
+// ese caso).
+function esFalloTransitorio(status: number, cuerpo: string): boolean {
+  if (status >= 500) return true;
+  if (status === 429) return true;
+  if (status === 400 && /try again/i.test(cuerpo)) return true;
+  return false;
+}
+
+// Una página de `/contacts/search`, con un reintento y sólo uno -- mismo
+// número de intentos que el resto del proyecto, sólo que el criterio de
+// CUÁNDO reintentar es el de `esFalloTransitorio`, más amplio acá que en
+// cualquier otro lado (ver su comentario). Separada de `contactosPorZona`
+// para que el `for` de paginado no mezcle "cuántas páginas lleva la zona"
+// con "cuántos intentos lleva esta página".
+async function pedirPagina(
+  url: string,
+  init: { method: string; headers: Record<string, string>; body: string },
+  fetchImpl: typeof fetch,
+): Promise<{ ok: true; texto: string } | { ok: false; error: string }> {
+  for (let intento = 0; intento < 2; intento++) {
+    let res: Response;
+    try {
+      res = await fetchImpl(url, init);
+    } catch (err) {
+      if (intento === 0) {
+        await new Promise((r) => setTimeout(r, ESPERA_REINTENTO_MS));
+        continue;
+      }
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+
+    const texto = await res.text();
+    if (res.ok) return { ok: true, texto };
+
+    if (intento === 0 && esFalloTransitorio(res.status, texto)) {
+      await new Promise((r) => setTimeout(r, ESPERA_REINTENTO_MS));
+      continue;
+    }
+    return { ok: false, error: `GHL búsqueda de contactos ${res.status}: ${texto.slice(0, 300)}` };
+  }
+  // Inalcanzable -- la segunda vuelta del `for` (intento === 1) siempre
+  // retorna arriba, nunca vuelve a `continue`. TypeScript no lo sabe sin
+  // esto.
+  return { ok: false, error: 'No se pudo consultar el CRM.' };
+}
+
 export async function contactosPorZona(
   zona: ZonaComercial,
   deps: DepsGhlContactos,
@@ -122,9 +193,9 @@ export async function contactosPorZona(
   let page = 1;
 
   for (;;) {
-    let res: Response;
-    try {
-      res = await fetchImpl(`${BASE}/contacts/search`, {
+    const resultado = await pedirPagina(
+      `${BASE}/contacts/search`,
+      {
         method: 'POST',
         headers: cabeceras(apiKey),
         body: JSON.stringify({
@@ -133,15 +204,11 @@ export async function contactosPorZona(
           pageLimit: TAMANO_PAGINA,
           filters: [{ field: `customFields.${CAMPO_ZONA}`, operator: 'eq', value: zona }],
         }),
-      });
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-
-    const texto = await res.text();
-    if (!res.ok) {
-      return { ok: false, error: `GHL búsqueda de contactos ${res.status}: ${texto.slice(0, 300)}` };
-    }
+      },
+      fetchImpl,
+    );
+    if (!resultado.ok) return resultado;
+    const texto = resultado.texto;
 
     let datos: { contacts?: ContactoCrudo[] };
     try {
