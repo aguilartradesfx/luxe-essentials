@@ -62,6 +62,7 @@ type FilaCampana = {
   creadoPor: string;
   creadoAt: string;
   progreso: { total: number; enviados: number; fallidos: number; pendientes: number };
+  programada: boolean;
   canceladaAt: string | null;
   canceladaPor: string | null;
 };
@@ -156,6 +157,7 @@ const CAMPANA_TERMINADA: FilaCampana = {
   creadoPor: 'Ana Solano',
   creadoAt: '2026-01-01T10:00:00Z',
   progreso: { total: 10, enviados: 10, fallidos: 0, pendientes: 0 },
+  programada: false,
   canceladaAt: null,
   canceladaPor: null,
 };
@@ -168,6 +170,7 @@ const CAMPANA_INTERRUMPIDA: FilaCampana = {
   creadoPor: 'Beto',
   creadoAt: '2026-01-02T10:00:00Z',
   progreso: { total: 50, enviados: 30, fallidos: 0, pendientes: 20 },
+  programada: false,
   canceladaAt: null,
   canceladaPor: null,
 };
@@ -180,8 +183,26 @@ const CAMPANA_CANCELADA: FilaCampana = {
   creadoPor: 'Ana Solano',
   creadoAt: '2026-01-03T10:00:00Z',
   progreso: { total: 40, enviados: 15, fallidos: 0, pendientes: 25 },
+  programada: false,
   canceladaAt: '2026-01-03T11:00:00Z',
   canceladaPor: 'Ana Solano',
+};
+
+// Hallazgo de producción (2026-09-10): una campaña armada por el cron del
+// envío programado, con pendientes -- NO está interrumpida, espera cupo
+// diario. Ver el comentario grande de `programada` en
+// VistaHistorialCampanas.tsx.
+const CAMPANA_PROGRAMADA: FilaCampana = {
+  id: 'camp-programada',
+  zona: 'Caribe',
+  plantilla: 'inicial',
+  asunto: 'Asunto inicial',
+  creadoPor: 'cron-programado',
+  creadoAt: '2026-09-08T10:00:00Z',
+  progreso: { total: 50, enviados: 3, fallidos: 0, pendientes: 47 },
+  programada: true,
+  canceladaAt: null,
+  canceladaPor: null,
 };
 
 describe('VistaHistorialCampanas', () => {
@@ -226,6 +247,21 @@ describe('VistaHistorialCampanas', () => {
     expect(await screen.findByText(/30\/50 enviados/)).toBeInTheDocument();
     expect(screen.getByText(/interrumpida -- quedan 20/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^retomar$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^cancelar$/i })).toBeInTheDocument();
+  });
+
+  // Hallazgo de producción (2026-09-10): una campaña programada con
+  // pendientes NO es "interrumpida" (no falló nada, espera cupo diario), y
+  // NO ofrece "Retomar" -- ese botón mandaría de un tirón lo que la rampa
+  // reparte en semanas, saltándose el cupo. "Cancelar" se queda: pararla
+  // tiene que seguir siendo posible.
+  it('una campaña programada con pendientes dice "en cola" (no "interrumpida"), sin ofrecer Retomar -- pero sí Cancelar', async () => {
+    mockFetchHistorial({ campanas: [CAMPANA_PROGRAMADA] });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText(/3\/50 enviados/)).toBeInTheDocument();
+    expect(screen.getByText(/en cola del envío programado -- quedan 47/i)).toBeInTheDocument();
+    expect(screen.queryByText(/interrumpida/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^retomar$/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^cancelar$/i })).toBeInTheDocument();
   });
 

@@ -77,6 +77,13 @@ export type FilaCampana = {
   // siempre -- ver el comentario grande de la migración 0020).
   canceladaAt: string | null;
   canceladaPor: string | null;
+  // Hallazgo de producción (2026-09-10): la arma sola el cron del envío
+  // programado (`programada` en la tabla `campanas`, migración 0027), no
+  // una persona. La pantalla de historial la necesita para dos cosas: no
+  // llamarla "interrumpida" cuando en realidad espera cupo diario, y no
+  // ofrecerle "Retomar" (mandaría de un tirón lo que la rampa reparte en
+  // semanas) -- ver el comentario grande de VistaHistorialCampanas.tsx.
+  programada: boolean;
 };
 
 type FilaCampanaCruda = {
@@ -88,6 +95,7 @@ type FilaCampanaCruda = {
   creado_at: string;
   cancelada_at: string | null;
   cancelada_por: string | null;
+  programada: boolean;
 };
 
 // El historial de campañas para la pantalla: más reciente primero, cada una
@@ -98,7 +106,7 @@ type FilaCampanaCruda = {
 export async function listarCampanas(db: Db): Promise<FilaCampana[]> {
   const { data, error } = await db
     .from('campanas')
-    .select('id, zona, plantilla, asunto, creado_por, creado_at, cancelada_at, cancelada_por')
+    .select('id, zona, plantilla, asunto, creado_por, creado_at, cancelada_at, cancelada_por, programada')
     .order('creado_at', { ascending: false });
   if (error) throw new Error(`No se pudo listar las campañas: ${error.message}`);
 
@@ -114,6 +122,7 @@ export async function listarCampanas(db: Db): Promise<FilaCampana[]> {
       progreso: await progresoCampana(db, fila.id),
       canceladaAt: fila.cancelada_at ?? null,
       canceladaPor: fila.cancelada_por ?? null,
+      programada: Boolean(fila.programada),
     })),
   );
 }

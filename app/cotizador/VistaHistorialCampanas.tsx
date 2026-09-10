@@ -305,6 +305,18 @@ type FilaCampana = {
   progreso: ProgresoCampana;
   canceladaAt: string | null;
   canceladaPor: string | null;
+  // Hallazgo de producción (2026-09-10): armada por el cron del envío
+  // programado, no a mano -- una campaña así que quedó con pendientes NO
+  // está "interrumpida", está esperando su turno de cupo diario (la rampa
+  // de calentamiento). Esta pantalla usa el campo para dos cosas: cambiar
+  // el texto ("en cola", no "interrumpida") y, sobre todo, NO ofrecer
+  // "Retomar" -- ese botón, para una campaña programada, mandaría de un
+  // tirón lo que la rampa reparte en semanas, saltándose el cupo del día.
+  // `/api/campanas/enviar` lo rechaza aunque alguien llame la ruta
+  // directo (ver el comentario grande de esa ruta) -- esto es sólo la
+  // primera línea de defensa, la que evita que nadie tenga que toparse con
+  // ese rechazo en el uso normal.
+  programada: boolean;
 };
 
 type Mensaje = { tipo: 'ok' | 'error' | 'aviso'; texto: string };
@@ -689,7 +701,15 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
                             ? 'Terminada.'
                             : enviandoAhora
                               ? `Enviando… quedan ${progreso.pendientes}.`
-                              : `Interrumpida -- quedan ${progreso.pendientes}.`}
+                              : c.programada
+                                /* Hallazgo de producción (2026-09-10): NO está
+                                   interrumpida -- está esperando el cupo
+                                   diario de la rampa. "Interrumpida" describe
+                                   una falla que no ocurrió y asusta sin
+                                   motivo; ver el comentario de `programada`
+                                   en FilaCampana. */
+                                ? `En cola del envío programado -- quedan ${progreso.pendientes}, sigue cuando le toque cupo.`
+                                : `Interrumpida -- quedan ${progreso.pendientes}.`}
                       </p>
                       {enviandoAhora && (
                         <div className="mt-1 h-1.5 w-40 overflow-hidden rounded-full bg-[var(--carta-fill)]" aria-hidden="true">
@@ -705,7 +725,13 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
                     <td className="px-3 py-2 align-top">
                       {puedeAccionar && (
                         <div className="flex flex-wrap gap-2">
-                          {!enviandoAhora && (
+                          {/* Hallazgo de producción (2026-09-10): una campaña
+                              `programada` NO ofrece "Retomar" -- mandaría de
+                              un tirón lo que la rampa reparte en semanas,
+                              saltándose el cupo del día. "Cancelar" se queda:
+                              pararla tiene que seguir siendo posible. Ver el
+                              comentario de `programada` en FilaCampana. */}
+                          {!enviandoAhora && !c.programada && (
                             <button
                               type="button"
                               disabled={otraAccionActiva || cancelando}
