@@ -66,12 +66,19 @@ type FilaCampana = {
   canceladaPor: string | null;
 };
 
+type EstadoProgramadoMock = { pausado: boolean; pausadoPor: string | null; pausadoAt: string | null };
+
 function mockFetchHistorial(opciones: {
   campanas?: FilaCampana[];
   onCancelar?: (cuerpo: any) => void;
   enviarSecuencia?: Array<{ procesados: number; enviados: number; fallidos: number; terminada: boolean; cancelada?: boolean }>;
+  // El interruptor del envío programado (encargo, punto 6) -- estado
+  // inicial y quién lo tocó, si se llama a "Pausar"/"Reanudar".
+  programado?: EstadoProgramadoMock;
+  onPausar?: (cuerpo: any) => void;
 } = {}) {
   let llamadasEnviar = 0;
+  let estadoProgramado: EstadoProgramadoMock = opciones.programado ?? { pausado: false, pausadoPor: null, pausadoAt: null };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString();
     const cuerpo = init?.body ? JSON.parse(init.body as string) : {};
@@ -88,6 +95,14 @@ function mockFetchHistorial(opciones: {
     if (url.endsWith('/api/campanas/cancelar')) {
       opciones.onCancelar?.(cuerpo);
       return new Response(JSON.stringify({ ok: true, yaEstabaCancelada: false }), { status: 200 });
+    }
+    if (url.endsWith('/api/campanas/programado/pausar')) {
+      opciones.onPausar?.(cuerpo);
+      estadoProgramado = { pausado: cuerpo.pausado, pausadoPor: 'Ana Solano', pausadoAt: '2026-09-09T15:00:00.000Z' };
+      return new Response(JSON.stringify({ ok: true, pausado: cuerpo.pausado }), { status: 200 });
+    }
+    if (url.endsWith('/api/campanas/programado')) {
+      return new Response(JSON.stringify({ ok: true, ...estadoProgramado }), { status: 200 });
     }
     throw new Error(`Fetch no simulado en la prueba: ${url}`);
   });
@@ -325,5 +340,67 @@ describe('VistaHistorialCampanas', () => {
     );
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />);
     await waitFor(() => expect(onSesionInvalida).toHaveBeenCalled());
+  });
+});
+
+// ---------------------------------------------------------------------
+// El interruptor de apagado del envío programado (encargo, punto 6): "un
+// interruptor para parar todo, sin necesidad de desplegar; que sea
+// evidente en la pantalla si está parado". Vive arriba de todo en esta
+// misma pestaña -- ver el comentario grande de `InterruptorProgramado` en
+// VistaHistorialCampanas.tsx.
+describe('Interruptor del envío programado', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('activo: lo dice explícitamente y ofrece "Pausar"', async () => {
+    mockFetchHistorial({ campanas: [], programado: { pausado: false, pausadoPor: null, pausadoAt: null } });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText(/activo -- el cron manda/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^pausar$/i })).toBeInTheDocument();
+    expect(screen.queryByText(/pausado/i)).not.toBeInTheDocument();
+  });
+
+  // "Que sea evidente en la pantalla si está parado": el estado pausado
+  // muestra la palabra PAUSADO, quién lo pausó y cuándo -- no un texto
+  // ambiguo que haya que interpretar.
+  it('pausado: lo dice en mayúsculas, con quién y cuándo, y ofrece "Reanudar"', async () => {
+    mockFetchHistorial({
+      campanas: [],
+      programado: { pausado: true, pausadoPor: 'Beto Vargas', pausadoAt: '2026-09-01T15:00:00.000Z' },
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText(/pausado por beto vargas/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^reanudar$/i })).toBeInTheDocument();
+  });
+
+  it('tocar "Pausar" manda pausado:true a la ruta, y la pantalla pasa a mostrar PAUSADO', async () => {
+    const onPausar = vi.fn();
+    mockFetchHistorial({
+      campanas: [],
+      programado: { pausado: false, pausadoPor: null, pausadoAt: null },
+      onPausar,
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    const usuario = userEvent.setup();
+    await usuario.click(await screen.findByRole('button', { name: /^pausar$/i }));
+
+    await waitFor(() => expect(onPausar).toHaveBeenCalledWith({ pausado: true }));
+    expect(await screen.findByText(/pausado por ana solano/i)).toBeInTheDocument();
+  });
+
+  it('tocar "Reanudar" manda pausado:false a la ruta', async () => {
+    const onPausar = vi.fn();
+    mockFetchHistorial({
+      campanas: [],
+      programado: { pausado: true, pausadoPor: 'Beto', pausadoAt: '2026-09-01T15:00:00.000Z' },
+      onPausar,
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    const usuario = userEvent.setup();
+    await usuario.click(await screen.findByRole('button', { name: /^reanudar$/i }));
+
+    await waitFor(() => expect(onPausar).toHaveBeenCalledWith({ pausado: false }));
   });
 });

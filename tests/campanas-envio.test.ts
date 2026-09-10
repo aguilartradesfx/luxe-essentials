@@ -142,6 +142,35 @@ describe('crearCampana', () => {
     const r = await crearCampana(paramsCampana, dest, db as any);
     expect(r).toEqual({ ok: false, error: expect.stringContaining('constraint violada') });
   });
+
+  // Envío programado (lib/campanas/programado.ts): sin `programada` en los
+  // parámetros, la fila se inserta con `programada: false` -- toda campaña
+  // armada a mano desde la pantalla (que nunca manda este campo) se sigue
+  // viendo exactamente igual que antes de que existiera esta columna. Mata
+  // al mutante que dejara `programada` afuera del `insert` (rompería el
+  // `not null` de la migración 0027 contra la base real, aunque acá, con
+  // un doble en memoria, pasaría inadvertido si no se afirmara el valor
+  // exacto que se mandó).
+  it('sin "programada" en los parametros, inserta la fila con programada: false', async () => {
+    const dest = await permitidos(destinatariosCrudos);
+    const db = dbParaCrear({ data: { id: 'camp-1' }, error: null }, { data: [{ id: 'e-1' }], error: null });
+
+    await crearCampana(paramsCampana, dest, db as any);
+
+    expect(db.campanas.insert).toHaveBeenCalledWith(expect.objectContaining({ programada: false }));
+  });
+
+  // El envío programado SÍ manda `programada: true` -- es lo que
+  // `lib/campanas/programado.ts::campanaProgramadaDeZona` busca para
+  // encontrar "la campaña de la zona actual" sin adivinar por `creado_por`.
+  it('con "programada: true", inserta la fila con esa marca', async () => {
+    const dest = await permitidos(destinatariosCrudos);
+    const db = dbParaCrear({ data: { id: 'camp-1' }, error: null }, { data: [{ id: 'e-1' }], error: null });
+
+    await crearCampana({ ...paramsCampana, programada: true }, dest, db as any);
+
+    expect(db.campanas.insert).toHaveBeenCalledWith(expect.objectContaining({ programada: true }));
+  });
 });
 
 // ---------------------------------------------------------------------
@@ -285,6 +314,68 @@ describe('enviarTanda', () => {
 
     const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
     expect(r).toMatchObject({ ok: true, terminada: false, procesados: TAMANO_TANDA });
+  });
+
+  // Envío programado (lib/campanas/programado.ts): durante la rampa el
+  // cron pide MENOS de TAMANO_TANDA. Mata al mutante que ignorara
+  // `limiteTanda` y siguiera reclamando `TAMANO_TANDA` fijo -- sin este
+  // campo, el primer día de la rampa (tope 25) mandaría hasta 100 igual.
+  it('con limiteTanda, reclama ESE limite en vez de TAMANO_TANDA', async () => {
+    const filas = [filaReclamada(1)];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl, limiteTanda: 25 }, db as any);
+
+    expect(db.rpc).toHaveBeenCalledWith('campanas_reclamar_pendientes', expect.objectContaining({ p_limite: 25 }));
+  });
+
+  // Sin `limiteTanda`, el comportamiento de siempre -- ninguna llamada
+  // existente (la ruta /enviar, "Retomar" desde Historial) pasa este
+  // campo, así que ninguna cambia de comportamiento con este cambio.
+  it('sin limiteTanda, sigue reclamando TAMANO_TANDA (100) -- no rompe a quien ya llama a enviarTanda', async () => {
+    const filas = [filaReclamada(1)];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(db.rpc).toHaveBeenCalledWith(
+      'campanas_reclamar_pendientes',
+      expect.objectContaining({ p_limite: TAMANO_TANDA }),
+    );
+  });
+
+  // Tope duro: un `limiteTanda` mayor a TAMANO_TANDA (100) -- lo que
+  // acepta el endpoint de LOTE de Resend -- queda acotado a 100, nunca lo
+  // supera. Mata al mutante que usara `limiteTanda` tal cual, sin el
+  // `Math.min` contra TAMANO_TANDA.
+  it('un limiteTanda mayor a TAMANO_TANDA queda acotado a TAMANO_TANDA', async () => {
+    const filas = [filaReclamada(1)];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }] }));
+
+    await enviarTanda('camp-1', { ...depsEnvio, fetchImpl, limiteTanda: 500 }, db as any);
+
+    expect(db.rpc).toHaveBeenCalledWith(
+      'campanas_reclamar_pendientes',
+      expect.objectContaining({ p_limite: TAMANO_TANDA }),
+    );
+  });
+
+  // "terminada" se calcula contra EL LIMITE PEDIDO, no contra TAMANO_TANDA
+  // fijo -- con un cupo diario de 25 y 25 filas reclamadas (la tanda vino
+  // completa contra SU límite), no hay forma de saber, desde acá, si sobra
+  // más para mandar hoy -- por eso `terminada: false`, igual que pasaría
+  // con un `limiteTanda` de 100. Mata al mutante que siguiera comparando
+  // contra `TAMANO_TANDA` en vez de contra `limite`.
+  it('terminada se calcula contra limiteTanda, no contra TAMANO_TANDA', async () => {
+    const filas = Array.from({ length: 25 }, (_, i) => filaReclamada(i));
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: filas.map((_, i) => ({ id: `r-${i}` })) }));
+
+    const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl, limiteTanda: 25 }, db as any);
+    expect(r).toMatchObject({ ok: true, terminada: false, procesados: 25 });
   });
 
   // El destinatario cuyo índice no trae `id` en la respuesta de Resend se

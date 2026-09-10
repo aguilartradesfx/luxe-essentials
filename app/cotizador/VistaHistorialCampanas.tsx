@@ -80,6 +80,133 @@ type Props = {
   onSesionInvalida: () => void;
 };
 
+// El interruptor de apagado del envío programado (encargo, punto 6): "un
+// interruptor para parar todo, sin necesidad de desplegar; que sea
+// evidente en la pantalla si está parado". Vive arriba de todo en esta
+// pestaña -- lo primero que se ve al abrir Historial de campañas -- porque
+// es la pantalla que ya existe para controlar el envío en curso; separarlo
+// en una pestaña propia lo escondería justo cuando más urge encontrarlo (a
+// mitad de un problema, no en una exploración tranquila).
+//
+// Componente propio, con su propio `fetch` al montar: independiente del
+// listado de campañas de abajo (`cargarCampanas`) -- una falla al leer el
+// historial no debería tapar el estado del interruptor, ni viceversa.
+function InterruptorProgramado({ obtenerCsrf, onSesionInvalida }: Props) {
+  const [pausado, setPausado] = useState<boolean | null>(null);
+  const [pausadoPor, setPausadoPor] = useState<string | null>(null);
+  const [pausadoAt, setPausadoAt] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState('');
+  const [cambiando, setCambiando] = useState(false);
+
+  const cargarEstado = useCallback(async () => {
+    setCargando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/campanas/programado', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        if (res.status === 401) return onSesionInvalida();
+        setError(datos.error ?? `Error ${res.status}`);
+        return;
+      }
+      setPausado(Boolean(datos.pausado));
+      setPausadoPor(datos.pausadoPor ?? null);
+      setPausadoAt(datos.pausadoAt ?? null);
+    } catch {
+      setError('Fallo de red al consultar el envío programado.');
+    } finally {
+      setCargando(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `onSesionInvalida` es estable entre renders (viene de Panel).
+  }, []);
+
+  useEffect(() => {
+    void cargarEstado();
+  }, [cargarEstado]);
+
+  async function alternar() {
+    if (pausado === null) return;
+    setCambiando(true);
+    setError('');
+    try {
+      const csrf = obtenerCsrf();
+      const res = await fetch('/api/campanas/programado/pausar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
+        },
+        body: JSON.stringify({ pausado: !pausado }),
+      });
+      const datos = await res.json();
+      if (!res.ok || !datos.ok) {
+        if (res.status === 401) {
+          onSesionInvalida();
+          return;
+        }
+        setError(datos.error ?? `Error ${res.status}`);
+        return;
+      }
+      await cargarEstado();
+    } catch {
+      setError('Fallo de red al cambiar el envío programado.');
+    } finally {
+      setCambiando(false);
+    }
+  }
+
+  return (
+    <div
+      className={`rounded-xl border p-4 ${
+        pausado ? 'border-amber-300 bg-amber-50' : 'border-[var(--carta-border)] bg-white'
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display text-sm text-navy">Envío programado</h2>
+          {cargando && pausado === null && <p className="mt-1 text-xs text-teal/70">Consultando…</p>}
+          {pausado === true && (
+            <p className="mt-1 text-xs font-semibold text-amber-800" role="status">
+              PAUSADO{pausadoPor ? ` por ${pausadoPor}` : ''}
+              {pausadoAt ? ` el ${formatearFecha(pausadoAt)}` : ''} -- el cron de todos los días no va a mandar nada
+              hasta que se reanude.
+            </p>
+          )}
+          {pausado === false && (
+            <p className="mt-1 text-xs text-teal" role="status">
+              Activo -- el cron manda la zona que le toque de lunes a viernes, dentro del cupo diario.
+            </p>
+          )}
+        </div>
+        {pausado !== null && (
+          <button
+            type="button"
+            onClick={() => void alternar()}
+            disabled={cambiando}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40 ${
+              pausado
+                ? 'bg-navy text-beige hover:bg-navy/90'
+                : 'border-2 border-amber-600 bg-amber-50 text-amber-900 hover:bg-amber-100'
+            }`}
+          >
+            {cambiando ? 'Actualizando…' : pausado ? 'Reanudar' : 'Pausar'}
+          </button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props) {
   const [campanas, setCampanas] = useState<FilaCampana[] | null>(null);
   const [cargando, setCargando] = useState(false);
@@ -231,6 +358,8 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
 
   return (
     <div className="space-y-4">
+      <InterruptorProgramado obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-display text-sm text-navy">Historial de campañas</h2>
         <button

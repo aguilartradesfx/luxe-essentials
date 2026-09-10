@@ -91,6 +91,17 @@ export type ParamsCrearCampana = {
   // destinatario en `enviarTanda`.
   html: string;
   creadoPor: string;
+  // Envío programado (cron, lib/campanas/programado.ts): `true` cuando esta
+  // campaña la arma sola el cron diario, `false`/ausente para cualquier
+  // campaña armada a mano desde la pantalla -- que sigue siendo el caso de
+  // toda campaña de HOY, de seguimiento, o 'personalizada'. Es lo que deja
+  // a `lib/campanas/programado.ts` encontrar "la campaña de la zona actual"
+  // por columna (migración 0027) en vez de adivinar por `creado_por` (un
+  // texto libre que además ya identifica a un vendedor humano en el resto
+  // de las campañas). Por defecto `false` -- ninguna llamada existente
+  // (crear/route.ts, ni las pruebas de este módulo) pasa este campo, así
+  // que ninguna sigue creando campañas 'programada: true' por accidente.
+  programada?: boolean;
 };
 
 export type ResultadoCrearCampana =
@@ -127,6 +138,7 @@ export async function crearCampana(
       preview_text: p.previewText ?? null,
       html: p.html,
       creado_por: p.creadoPor,
+      programada: p.programada ?? false,
     })
     .select('id')
     .single();
@@ -214,6 +226,18 @@ export type DepsEnvioCampana = {
   // Inyectable para poder probar qué reserva cuenta como "vencida" sin
   // depender del reloj real.
   ahora?: () => Date;
+  // Envío programado (cron, lib/campanas/programado.ts): cuántos
+  // destinatarios reclamar como máximo EN ESTA llamada -- por defecto
+  // `TAMANO_TANDA` (100), el mismo valor de siempre, así que ninguna
+  // llamada existente (la ruta /enviar, la de retomar desde Historial) se
+  // entera de este campo ni cambia de comportamiento. El cron sí lo pasa:
+  // durante la rampa (días 1 a 5) el cupo diario es menor a 100
+  // (lib/campanas/programado.ts::topeParaDia), y `TAMANO_TANDA` fijo
+  // mandaría de más el primer día. Nunca puede ser mayor a `TAMANO_TANDA`
+  // -- ese es el máximo que acepta el endpoint de LOTE de Resend (ver el
+  // comentario de `TAMANO_TANDA`) -- así que quien llame con un número más
+  // grande igual queda acotado por Resend, no por esto.
+  limiteTanda?: number;
 };
 
 export type ResultadoTanda =
@@ -277,7 +301,12 @@ export async function enviarTanda(
   deps: DepsEnvioCampana,
   db: ClienteCampanas,
 ): Promise<ResultadoTanda> {
-  const { resendApiKey, remitente, fetchImpl = fetch, ahora = () => new Date() } = deps;
+  const { resendApiKey, remitente, fetchImpl = fetch, ahora = () => new Date(), limiteTanda } = deps;
+  // Acotado a `[1, TAMANO_TANDA]` -- nunca 0 ni negativo (eso reclamaría
+  // nada, distinto de "no había pendientes"), y nunca por encima de lo que
+  // Resend acepta en un solo lote.
+  const limite =
+    limiteTanda === undefined ? TAMANO_TANDA : Math.max(1, Math.min(TAMANO_TANDA, Math.trunc(limiteTanda)));
 
   if (!resendApiKey) return { ok: false, error: 'Falta RESEND_API_KEY: no se pudo enviar.' };
   if (!remitente) return { ok: false, error: 'Falta el remitente: no se pudo enviar.' };
@@ -310,7 +339,7 @@ export async function enviarTanda(
 
   const { data: reservados, error: errorReclamo } = await db.rpc(RPC_RECLAMAR, {
     p_campana_id: campanaId,
-    p_limite: TAMANO_TANDA,
+    p_limite: limite,
     p_vencido_desde: vencidoDesde,
   });
   if (errorReclamo) return { ok: false, error: `No se pudo reservar la tanda: ${errorReclamo.message}` };
@@ -438,7 +467,13 @@ export async function enviarTanda(
     fallidos,
     // Menos de una tanda completa reclamada sólo puede pasar cuando ya no
     // quedaba más para reclamar en este momento -- `campanas_reclamar_pendientes`
-    // siempre intenta llevarse hasta `TAMANO_TANDA`.
-    terminada: filas.length < TAMANO_TANDA,
+    // siempre intenta llevarse hasta `limite` (por defecto `TAMANO_TANDA`,
+    // salvo que el cron pida menos -- ver el comentario de `limiteTanda`
+    // más arriba). Con un `limite` acotado por el cupo diario del cron,
+    // esto puede dar `false` aunque la campaña ya no tenga MÁS pendientes
+    // que los que trajo esta tanda -- no es un error: sólo dice "esta
+    // llamada no agotó el límite que traía", que es la pregunta que le
+    // importa a quien la llamó.
+    terminada: filas.length < limite,
   };
 }
