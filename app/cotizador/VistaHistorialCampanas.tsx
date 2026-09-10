@@ -45,6 +45,41 @@ const PLANTILLAS = ['inicial', 'seguimiento_1', 'seguimiento_2', 'seguimiento_3'
 const PLANTILLA_PERSONALIZADA = 'personalizada' as const;
 type PlantillaCampana = (typeof PLANTILLAS)[number] | typeof PLANTILLA_PERSONALIZADA;
 
+// Reporte del dueño (2026-09-10): "esto está sobresaturado en texto... me
+// gustaría que se viera más sobrio". Tenía razón y el problema era
+// estructural, no de estilo: cada fila gastaba DOS renglones de prosa para
+// decir lo que el par `enviados/total` ya dice, y repetía el asunto de la
+// plantilla -- idéntico en todas las filas de la misma plantilla -- debajo
+// de su nombre.
+//
+// La regla de acá: el estado es UNA palabra en una pastilla, y el detalle
+// que no se deduce del número (quién canceló y cuándo) va aparte y sólo
+// cuando existe. Lo que sí se deduce -- "quedan 47" cuando arriba dice
+// 3/50 -- ya no se escribe.
+type Pastilla = { texto: string; clase: string };
+
+function pastillaDeEstado(
+  cancelada: boolean,
+  enviandoAhora: boolean,
+  pendientes: number,
+  fallidos: number,
+  programada: boolean,
+): Pastilla {
+  if (cancelada) return { texto: 'Cancelada', clase: 'bg-red-50 text-red-800' };
+  if (enviandoAhora) return { texto: 'Enviando', clase: 'bg-teal/15 text-teal' };
+  if (pendientes === 0) {
+    return fallidos > 0
+      ? { texto: 'Terminada con errores', clase: 'bg-amber-50 text-amber-800' }
+      : { texto: 'Terminada', clase: 'bg-emerald-50 text-emerald-800' };
+  }
+  // Programada con pendientes NO es "interrumpida": espera el cupo diario
+  // de la rampa (hallazgo de producción, 2026-09-10). Una manual con
+  // pendientes sí se quedó a medias de verdad.
+  return programada
+    ? { texto: 'En cola', clase: 'bg-[var(--carta-fill)] text-teal' }
+    : { texto: 'Interrumpida', clase: 'bg-amber-50 text-amber-800' };
+}
+
 const ETIQUETAS_PLANTILLA: Record<PlantillaCampana, string> = {
   inicial: 'Correo inicial',
   seguimiento_1: 'Primer seguimiento',
@@ -662,7 +697,7 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
 
       {campanas && campanas.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-[var(--carta-border)]">
-          <table className="w-full min-w-[900px] text-left text-sm">
+          <table className="w-full min-w-[760px] text-left text-sm">
             <thead className="bg-[var(--carta-fill)] text-xs uppercase tracking-wide text-teal">
               <tr>
                 {/* Hallazgo importante (revisión final, punto 2): con trece
@@ -672,9 +707,9 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
                     semana se ven idénticas sin esta columna. */}
                 <th className="px-3 py-2">Zona</th>
                 <th className="px-3 py-2">Plantilla</th>
-                <th className="px-3 py-2">Creada por</th>
-                <th className="px-3 py-2">Fecha</th>
-                <th className="px-3 py-2">Progreso</th>
+                <th className="px-3 py-2">Estado</th>
+                <th className="px-3 py-2 text-right">Enviados</th>
+                <th className="px-3 py-2">Creada</th>
                 <th className="px-3 py-2">
                   <span className="sr-only">Acciones</span>
                 </th>
@@ -688,43 +723,34 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
                 const otraAccionActiva = idEnviando !== null && idEnviando !== c.id;
                 const puedeAccionar = progreso.pendientes > 0 && !cancelada;
 
+                const pastilla = pastillaDeEstado(cancelada, enviandoAhora, progreso.pendientes, progreso.fallidos, c.programada);
+                // El asunto sólo se pinta cuando APORTA algo. En las cuatro
+                // plantillas fijas sale del archivo y es el mismo en todas
+                // las campañas de esa plantilla: repetirlo bajo su nombre
+                // era la mayor fuente de ruido del historial. En la
+                // personalizada, en cambio, lo escribe quien la arma y es lo
+                // único que distingue una de otra. En los dos casos viaja
+                // como `title`, así que no se pierde: se deja de gritar.
+                const asuntoAporta = c.plantilla === PLANTILLA_PERSONALIZADA;
+
                 return (
                   <tr key={c.id}>
-                    <td className="px-3 py-2 align-top text-navy">{c.zona ?? '—'}</td>
+                    <td className="px-3 py-2 align-top font-medium text-navy">{c.zona ?? '—'}</td>
                     <td className="px-3 py-2 align-top text-navy">
-                      <p>{ETIQUETAS_PLANTILLA[c.plantilla]}</p>
-                      {/* El asunto ya viajaba en la respuesta de /listado
-                          (`FilaCampana.asunto`) pero esta pantalla nunca lo
-                          pintaba -- hallazgo importante, revisión final,
-                          punto 2. */}
-                      <p className="mt-0.5 text-xs text-teal">{c.asunto}</p>
+                      <span title={c.asunto}>{ETIQUETAS_PLANTILLA[c.plantilla]}</span>
+                      {asuntoAporta && <p className="mt-0.5 text-xs text-teal">{c.asunto}</p>}
                     </td>
-                    <td className="px-3 py-2 align-top text-teal">{c.creadoPor}</td>
-                    <td className="px-3 py-2 align-top text-teal">{formatearFecha(c.creadoAt)}</td>
-                    <td className="px-3 py-2 align-top text-teal">
-                      <p>
-                        {progreso.enviados}/{progreso.total} enviados
-                        {progreso.fallidos > 0 ? `, ${progreso.fallidos} con error` : ''}
-                      </p>
-                      <p className="mt-0.5">
-                        {cancelada
-                          ? `Cancelada por ${c.canceladaPor ?? '—'} el ${c.canceladaAt ? formatearFecha(c.canceladaAt) : '—'} -- ${progreso.pendientes} sin mandar.`
-                          : progreso.pendientes === 0
-                            ? 'Terminada.'
-                            : enviandoAhora
-                              ? `Enviando… quedan ${progreso.pendientes}.`
-                              : c.programada
-                                /* Hallazgo de producción (2026-09-10): NO está
-                                   interrumpida -- está esperando el cupo
-                                   diario de la rampa. "Interrumpida" describe
-                                   una falla que no ocurrió y asusta sin
-                                   motivo; ver el comentario de `programada`
-                                   en FilaCampana. */
-                                ? `En cola del envío programado -- quedan ${progreso.pendientes}, sigue cuando le toque cupo.`
-                                : `Interrumpida -- quedan ${progreso.pendientes}.`}
-                      </p>
+                    <td className="px-3 py-2 align-top">
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${pastilla.clase}`}>
+                        {pastilla.texto}
+                      </span>
+                      {cancelada && (
+                        <p className="mt-1 text-xs text-teal/70">
+                          por {c.canceladaPor ?? '—'} el {c.canceladaAt ? formatearFecha(c.canceladaAt) : '—'}
+                        </p>
+                      )}
                       {enviandoAhora && (
-                        <div className="mt-1 h-1.5 w-40 overflow-hidden rounded-full bg-[var(--carta-fill)]" aria-hidden="true">
+                        <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-[var(--carta-fill)]" aria-hidden="true">
                           <div
                             className="h-full bg-teal transition-all"
                             style={{
@@ -733,6 +759,20 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
                           />
                         </div>
                       )}
+                    </td>
+                    <td className="px-3 py-2 align-top text-right tabular-nums text-navy">
+                      {progreso.enviados}/{progreso.total} enviados
+                      {progreso.fallidos > 0 && (
+                        <p className="mt-0.5 text-xs text-amber-800">{progreso.fallidos} con error</p>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 align-top text-xs text-teal">
+                      {/* "cron-programado" es el nombre interno con el que el
+                          cron firma sus campañas -- jerga, en una columna
+                          que el resto del tiempo trae el nombre de una
+                          persona. */}
+                      <p>{c.programada ? 'Automático' : c.creadoPor}</p>
+                      <p className="mt-0.5 whitespace-nowrap text-teal/70">{formatearFecha(c.creadoAt)}</p>
                     </td>
                     <td className="px-3 py-2 align-top">
                       {puedeAccionar && (

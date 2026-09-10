@@ -220,7 +220,7 @@ describe('VistaHistorialCampanas', () => {
     mockFetchHistorial({ campanas: [CAMPANA_TERMINADA] });
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
     expect(await screen.findByText(/10\/10 enviados/)).toBeInTheDocument();
-    expect(screen.getByText(/terminada\./i)).toBeInTheDocument();
+    expect(screen.getByText('Terminada')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retomar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /cancelar/i })).not.toBeInTheDocument();
   });
@@ -228,11 +228,29 @@ describe('VistaHistorialCampanas', () => {
   // Hallazgo importante (revisión final, punto 2): sin esto no había forma
   // de saber, mirando el historial, a qué zona se le escribió, ni de leer
   // el asunto (viajaba en la respuesta pero la pantalla nunca lo pintaba).
-  it('muestra la zona y el asunto de cada campaña', async () => {
+  // Reporte del dueño (2026-09-10): el historial estaba "sobresaturado en
+  // texto". En las cuatro plantillas FIJAS el asunto sale del archivo y es
+  // idéntico en todas las campañas de esa plantilla, así que repetirlo bajo
+  // su nombre era ruido puro. Sigue estando -- como `title`, para quien lo
+  // necesite -- pero ya no se grita. La ZONA, que es lo que de verdad
+  // distingue una campaña de otra, sí se muestra siempre.
+  it('muestra la zona siempre, y el asunto de una plantilla fija queda en el title (no a la vista)', async () => {
     mockFetchHistorial({ campanas: [CAMPANA_INTERRUMPIDA] });
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
     expect(await screen.findByText('Guanacaste Costa')).toBeInTheDocument();
-    expect(screen.getByText('Asunto seguimiento')).toBeInTheDocument();
+    expect(screen.queryByText('Asunto seguimiento')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Asunto seguimiento')).toBeInTheDocument();
+  });
+
+  // La otra mitad de la regla: en la plantilla personalizada el asunto lo
+  // escribe quien la arma y es lo ÚNICO que distingue una de otra, así que
+  // ahí sí se muestra. Sin esta prueba, esconderlo SIEMPRE pasaría.
+  it('el asunto de una plantilla personalizada SÍ se muestra -- es lo único que la identifica', async () => {
+    mockFetchHistorial({
+      campanas: [{ ...CAMPANA_INTERRUMPIDA, plantilla: 'personalizada', asunto: 'Promo de fin de año' }],
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText('Promo de fin de año')).toBeInTheDocument();
   });
 
   it('una campaña vieja sin zona (creada antes de tener este dato) muestra "—", no vacío ni un error', async () => {
@@ -245,7 +263,7 @@ describe('VistaHistorialCampanas', () => {
     mockFetchHistorial({ campanas: [CAMPANA_INTERRUMPIDA] });
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
     expect(await screen.findByText(/30\/50 enviados/)).toBeInTheDocument();
-    expect(screen.getByText(/interrumpida -- quedan 20/i)).toBeInTheDocument();
+    expect(screen.getByText('Interrumpida')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^retomar$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^cancelar$/i })).toBeInTheDocument();
   });
@@ -259,8 +277,13 @@ describe('VistaHistorialCampanas', () => {
     mockFetchHistorial({ campanas: [CAMPANA_PROGRAMADA] });
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
     expect(await screen.findByText(/3\/50 enviados/)).toBeInTheDocument();
-    expect(screen.getByText(/en cola del envío programado -- quedan 47/i)).toBeInTheDocument();
+    expect(screen.getByText('En cola')).toBeInTheDocument();
     expect(screen.queryByText(/interrumpida/i)).not.toBeInTheDocument();
+    // "cron-programado" es el nombre interno con el que el cron firma sus
+    // campañas: jerga en una columna que el resto del tiempo trae el nombre
+    // de una persona.
+    expect(screen.queryByText(/cron-programado/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Automático')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^retomar$/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^cancelar$/i })).toBeInTheDocument();
   });
@@ -268,8 +291,11 @@ describe('VistaHistorialCampanas', () => {
   it('una campaña cancelada muestra quién y cuándo, sin ofrecer acciones', async () => {
     mockFetchHistorial({ campanas: [CAMPANA_CANCELADA] });
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    expect(await screen.findByText(/cancelada por ana solano/i)).toBeInTheDocument();
-    expect(screen.getByText(/25 sin mandar/i)).toBeInTheDocument();
+    expect(await screen.findByText('Cancelada')).toBeInTheDocument();
+    expect(screen.getByText(/por ana solano el/i)).toBeInTheDocument();
+    // Lo que ya se deduce del par enviados/total ("15/40 enviados" -> 25 sin
+    // mandar) dejó de escribirse: era la prosa que saturaba cada fila.
+    expect(screen.getByText(/15\/40 enviados/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^retomar$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^cancelar$/i })).not.toBeInTheDocument();
   });
