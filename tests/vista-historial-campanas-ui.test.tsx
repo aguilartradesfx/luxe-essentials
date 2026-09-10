@@ -564,14 +564,32 @@ describe('Cola del envío programado', () => {
     expect(screen.queryByText(/son un mínimo, no el total real/i)).not.toBeInTheDocument();
   });
 
-  it('el cupo de hoy muestra disponible/tope y el día de rampa', async () => {
+  // Reporte de producción (2026-09-10): con el cupo AGOTADO esto decía
+  // "0 / 25" (disponible/tope) y se leyó como "0 enviados de 25" -- lo
+  // contrario de lo que pasaba. Ahora va en el mismo sentido que el resto
+  // de la pantalla: `usados / tope`. Los dos números de este caso (20 y 30)
+  // son distintos a propósito, para que mostrar el equivocado se note.
+  it('el cupo de hoy muestra USADOS/tope -- no lo que queda -- y el día de rampa', async () => {
     mockFetchHistorial({
       campanas: [],
       cola: { cupoHoy: { dia: 3, tope: 50, reservado: 20, disponible: 30, diaHabilHoy: true } },
     });
     render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
-    expect(await screen.findByText('30 / 50')).toBeInTheDocument();
-    expect(screen.getByText(/día 3 de la rampa/)).toBeInTheDocument();
+    expect(await screen.findByText('20 / 50 usados')).toBeInTheDocument();
+    expect(screen.queryByText('30 / 50')).not.toBeInTheDocument();
+    expect(screen.getByText(/quedan 30 -- día 3 de la rampa/)).toBeInTheDocument();
+  });
+
+  // El caso exacto del reporte: cupo agotado. Antes se leía "0 / 25", que
+  // parece "todavía no ha salido nada"; ahora dice que salieron los 25.
+  it('con el cupo agotado dice 25 / 25 usados y que no queda ninguno', async () => {
+    mockFetchHistorial({
+      campanas: [],
+      cola: { cupoHoy: { dia: 1, tope: 25, reservado: 25, disponible: 0, diaHabilHoy: true } },
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+    expect(await screen.findByText('25 / 25 usados')).toBeInTheDocument();
+    expect(screen.getByText(/quedan 0 -- día 1 de la rampa/)).toBeInTheDocument();
   });
 
   it('en fin de semana, el cupo de hoy avisa que hoy no corre', async () => {

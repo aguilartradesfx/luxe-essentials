@@ -216,11 +216,23 @@ function ColaProgramada({ onSesionInvalida }: Pick<Props, 'onSesionInvalida'>) {
             </div>
             <div className="rounded-lg bg-[var(--carta-fill)] p-3">
               <p className="text-xs text-teal">Cupo de hoy</p>
+              {/* Reporte de producción (2026-09-10): acá decía
+                  `disponible / tope`, o sea "0 / 25" con el cupo AGOTADO --
+                  y se leyó como "0 enviados de 25", es decir lo contrario
+                  de lo que pasaba. El error es del rótulo, no de quien lo
+                  leyó: TODO el resto de esta pantalla usa `hechos / total`
+                  ("22/22 enviadas", "3/50 enviadas"), así que un
+                  `disponible / total` en el mismo tablero se lee al revés.
+                  Ahora es `usados / tope`, en el mismo sentido que el
+                  resto, y lo que queda se dice aparte y con todas las
+                  letras. */}
               <p className="mt-1 font-display text-lg text-navy">
-                {formatearNumero(datos.cupoHoy.disponible)} / {formatearNumero(datos.cupoHoy.tope)}
+                {formatearNumero(datos.cupoHoy.reservado)} / {formatearNumero(datos.cupoHoy.tope)} usados
               </p>
               <p className="text-[11px] text-teal/70">
-                {datos.cupoHoy.diaHabilHoy ? `día ${datos.cupoHoy.dia} de la rampa` : 'hoy no corre -- fin de semana'}
+                {datos.cupoHoy.diaHabilHoy
+                  ? `quedan ${formatearNumero(datos.cupoHoy.disponible)} -- día ${datos.cupoHoy.dia} de la rampa`
+                  : 'hoy no corre -- fin de semana'}
               </p>
             </div>
             <div className="rounded-lg bg-[var(--carta-fill)] p-3 sm:col-span-2">
