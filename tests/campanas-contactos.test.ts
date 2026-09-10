@@ -202,7 +202,7 @@ describe('contactosPorZona', () => {
       expect(r).toEqual({ ok: true, contactos: [] });
     });
 
-    it('un fallo de red se reintenta una vez y sale adelante', async () => {
+    it('un fallo de red se reintenta y sale adelante', async () => {
       const fetchImpl = vi
         .fn()
         .mockRejectedValueOnce(new Error('ECONNRESET'))
@@ -212,24 +212,43 @@ describe('contactosPorZona', () => {
       expect(r).toEqual({ ok: true, contactos: [] });
     });
 
+    // El tercer intento existe por una medición contra producción, no por
+    // gusto: con dos intentos, una de cada tres cargas de la pantalla de la
+    // cola dejaba una zona sin calcular. Esta prueba ancla que el TERCERO
+    // de verdad ocurre -- sin ella, volver a `INTENTOS_MAXIMOS = 2` pasaría
+    // desapercibido.
+    it('si el segundo intento tambien falla, hay un TERCERO que salva la zona', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(respuestaCruda(400, { message: 'Failed to fetch details. Please try again later' }))
+        .mockResolvedValueOnce(respuestaCruda(400, { message: 'Failed to fetch details. Please try again later' }))
+        .mockResolvedValueOnce(respuestaCruda(200, { contacts: [] }));
+      const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(r).toEqual({ ok: true, contactos: [] });
+    });
+
     // Mata al mutante que reintentara sin límite (un `for` sin corte, o un
-    // `intento < 3`): si el segundo intento TAMBIÉN falla, se rinde -- dos
-    // llamadas en total, nunca más, y devuelve el error del último intento.
-    it('si el reintento TAMBIÉN falla, se rinde con dos llamadas en total -- nunca un bucle', async () => {
+    // `intento < 10`): si los tres intentos fallan, se rinde -- TRES
+    // llamadas en total, nunca más, y devuelve el error del último. Es el
+    // contrapeso de la prueba de arriba: una ancla el piso (que el tercero
+    // ocurra), ésta el techo (que no haya un cuarto).
+    it('si los TRES intentos fallan, se rinde con tres llamadas en total -- nunca un bucle', async () => {
       const fetchImpl = vi.fn().mockResolvedValue(respuestaCruda(500, { message: 'siempre cae' }));
       const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
-      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
       expect(r).toEqual({ ok: false, error: expect.stringContaining('500') });
     });
 
-    it('si el reintento también es un fallo de red, se rinde con el mensaje de esa segunda falla', async () => {
+    it('si los reintentos también son fallos de red, se rinde con el mensaje de la ÚLTIMA falla', async () => {
       const fetchImpl = vi
         .fn()
         .mockRejectedValueOnce(new Error('primer intento cae'))
-        .mockRejectedValueOnce(new Error('segundo intento tambien cae'));
+        .mockRejectedValueOnce(new Error('segundo intento tambien cae'))
+        .mockRejectedValueOnce(new Error('tercer intento tambien cae'));
       const r = await contactosPorZona('GAM Oeste', { ...deps, fetchImpl });
-      expect(fetchImpl).toHaveBeenCalledTimes(2);
-      expect(r).toEqual({ ok: false, error: expect.stringContaining('segundo intento tambien cae') });
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(r).toEqual({ ok: false, error: expect.stringContaining('tercer intento tambien cae') });
     });
   });
 });

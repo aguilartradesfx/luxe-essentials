@@ -120,6 +120,21 @@ function aContactoZona(c: ContactoCrudo): ContactoZona | null {
 // vez tarda más que eso en resolverse solo.
 const ESPERA_REINTENTO_MS = 400;
 
+// Tres intentos, no dos. Medido contra producción el 2026-09-10, con la
+// pantalla de la cola ya desplegada: de tres cargas seguidas (trece zonas,
+// ~47 peticiones cada una), UNA terminó con una zona caída aun después de
+// su reintento. Un aviso de "no se pudo calcular una zona" en un tercio de
+// las cargas es demasiado ruido para una pantalla que se mira seguido, y
+// el fallo de GHL es pasajero de verdad -- el mismo pedido sale limpio al
+// repetirlo. El tercer intento cuesta 800 ms más SÓLO en el camino que ya
+// venía fallando dos veces; el camino feliz no paga nada.
+//
+// Sigue siendo un número FIJO y chico: lo que no puede pasar es un bucle
+// sin corte contra un GHL caído de verdad, que convertiría una pantalla
+// rota en 47 peticiones en curso por cada carga. Las pruebas anclan que
+// son exactamente tres.
+const INTENTOS_MAXIMOS = 3;
+
 // Cuándo vale la pena reintentar UNA página de `/contacts/search`, contra
 // lo que se comprobó pasajero en producción (hallazgo del 2026-09-10): la
 // cola del envío programado devolvía 502 a los 7 segundos -- no un
@@ -157,13 +172,13 @@ async function pedirPagina(
   init: { method: string; headers: Record<string, string>; body: string },
   fetchImpl: typeof fetch,
 ): Promise<{ ok: true; texto: string } | { ok: false; error: string }> {
-  for (let intento = 0; intento < 2; intento++) {
+  for (let intento = 0; intento < INTENTOS_MAXIMOS; intento++) {
     let res: Response;
     try {
       res = await fetchImpl(url, init);
     } catch (err) {
-      if (intento === 0) {
-        await new Promise((r) => setTimeout(r, ESPERA_REINTENTO_MS));
+      if (intento < INTENTOS_MAXIMOS - 1) {
+        await new Promise((r) => setTimeout(r, ESPERA_REINTENTO_MS * (intento + 1)));
         continue;
       }
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -172,15 +187,15 @@ async function pedirPagina(
     const texto = await res.text();
     if (res.ok) return { ok: true, texto };
 
-    if (intento === 0 && esFalloTransitorio(res.status, texto)) {
-      await new Promise((r) => setTimeout(r, ESPERA_REINTENTO_MS));
+    if (intento < INTENTOS_MAXIMOS - 1 && esFalloTransitorio(res.status, texto)) {
+      await new Promise((r) => setTimeout(r, ESPERA_REINTENTO_MS * (intento + 1)));
       continue;
     }
     return { ok: false, error: `GHL búsqueda de contactos ${res.status}: ${texto.slice(0, 300)}` };
   }
-  // Inalcanzable -- la segunda vuelta del `for` (intento === 1) siempre
-  // retorna arriba, nunca vuelve a `continue`. TypeScript no lo sabe sin
-  // esto.
+  // Inalcanzable -- la última vuelta del `for` (intento ===
+  // INTENTOS_MAXIMOS - 1) siempre retorna arriba, nunca vuelve a
+  // `continue`. TypeScript no lo sabe sin esto.
   return { ok: false, error: 'No se pudo consultar el CRM.' };
 }
 
