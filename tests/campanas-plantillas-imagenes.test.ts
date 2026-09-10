@@ -16,7 +16,15 @@ import { plantillaCargada } from '@/lib/campanas/plantillas';
 const IMAGEN: Record<'inicial' | 'seguimiento_1' | 'seguimiento_2', { id: string; altContiene: string }> = {
   inicial: { id: 'seccion-uniformes', altContiene: 'uniforme corporativo' },
   seguimiento_1: { id: 'seccion-telas', altContiene: 'azul marino, blanco y crudo' },
-  seguimiento_2: { id: 'seccion-bordado', altContiene: 'logo sobre tela azul' },
+  // El alt decía "aplicando un logo ... en la planta de Luxe Essentials", y
+  // las dos cosas eran falsas: la imagen es una bordadora cosiendo un diseño
+  // abstracto sobre tela azul marino en un bastidor, y no es la planta de
+  // nadie (es una de las generadas con IA). El alt es lo único que lee quien
+  // tiene las imágenes bloqueadas -- común en hoteles con Outlook
+  // corporativo -- así que era una afirmación falsa dicha sólo a esas
+  // personas. Se ancla ahora contra el bastidor: es lo que de verdad se ve
+  // y lo que distingue esta foto de las otras dos.
+  seguimiento_2: { id: 'seccion-bordado', altContiene: 'bordadora cosiendo un dise' },
 };
 
 const PLANTILLAS_CON_CTA = ['inicial', 'seguimiento_1', 'seguimiento_2'] as const;
