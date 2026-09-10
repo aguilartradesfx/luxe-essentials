@@ -1,6 +1,12 @@
 // tests/campanas-contactos.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { contactosPorZona, conCorreo, ZONAS_COMERCIALES, type ContactoZona } from '@/lib/campanas/contactos';
+import {
+  contactosPorZona,
+  contactosDeTodasLasZonas,
+  conCorreo,
+  ZONAS_COMERCIALES,
+  type ContactoZona,
+} from '@/lib/campanas/contactos';
 
 const deps = { apiKey: 'llave', locationId: 'loc-1' };
 
@@ -156,5 +162,43 @@ describe('conCorreo', () => {
 
   it('lista vacía entra y sale vacía', () => {
     expect(conCorreo([])).toEqual([]);
+  });
+});
+
+// El camino compartido de ~47 peticiones que usa tanto
+// app/api/campanas/zonas/route.ts como lib/campanas/cola.ts -- un solo
+// lugar que lanza las trece consultas, en paralelo, sin dejar a ninguna
+// esperando a otra.
+describe('contactosDeTodasLasZonas', () => {
+  it('trae las trece zonas, cada una con su propio resultado, en paralelo', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (_url: any, opciones: any) => {
+      const cuerpo = JSON.parse(opciones.body);
+      const zona = cuerpo.filters[0].value as string;
+      if (zona === 'Guanacaste Interior') {
+        return respuesta({ contacts: [{ id: 'c-1', email: 'a@x.cr' }] });
+      }
+      return respuesta({ contacts: [] });
+    });
+    const r = await contactosDeTodasLasZonas({ ...deps, fetchImpl });
+    expect(Object.keys(r)).toHaveLength(13);
+    expect(fetchImpl).toHaveBeenCalledTimes(13);
+    expect(r['Guanacaste Interior']).toEqual({
+      ok: true,
+      contactos: [{ contactId: 'c-1', nombreCrm: '', correo: 'a@x.cr' }],
+    });
+    expect(r['GAM Oeste']).toEqual({ ok: true, contactos: [] });
+  });
+
+  it('el fallo de UNA zona queda en su propia entrada -- no tumba a las demás', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (_url: any, opciones: any) => {
+      const cuerpo = JSON.parse(opciones.body);
+      if (cuerpo.filters[0].value === 'Caribe') {
+        return { ok: false, status: 500, text: async () => 'boom' } as unknown as Response;
+      }
+      return respuesta({ contacts: [] });
+    });
+    const r = await contactosDeTodasLasZonas({ ...deps, fetchImpl });
+    expect(r['Caribe'].ok).toBe(false);
+    expect(r['GAM Oeste']).toEqual({ ok: true, contactos: [] });
   });
 });

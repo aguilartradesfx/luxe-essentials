@@ -173,3 +173,19 @@ export function conCorreo(contactos: readonly ContactoZona[]): DestinatarioCampa
     .filter((c): c is ContactoZona & { correo: string } => c.correo !== null)
     .map((c) => ({ contactId: c.contactId, correo: c.correo, nombreCrm: c.nombreCrm }));
 }
+
+// Las trece zonas de una sola vez, en paralelo -- el camino de ~47
+// peticiones HTTP contra GHL que ya usaba `app/api/campanas/zonas/route.ts`
+// en solitario, sacado a este módulo para que cualquier otro lugar que
+// necesite "las trece zonas completas" (la cola del envío programado,
+// lib/campanas/cola.ts) lo comparta en vez de volver a lanzar sus propias
+// trece consultas. Cada zona resuelve independiente -- el fallo de UNA no
+// tumba a las demás, mismo criterio que ya tenía la ruta.
+export async function contactosDeTodasLasZonas(
+  deps: DepsGhlContactos,
+): Promise<Record<ZonaComercial, ResultadoContactosZona>> {
+  const entradas = await Promise.all(
+    ZONAS_COMERCIALES.map(async (zona) => [zona, await contactosPorZona(zona, deps)] as const),
+  );
+  return Object.fromEntries(entradas) as Record<ZonaComercial, ResultadoContactosZona>;
+}

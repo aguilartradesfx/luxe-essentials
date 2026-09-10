@@ -53,6 +53,208 @@ const ETIQUETAS_PLANTILLA: Record<PlantillaCampana, string> = {
   personalizada: 'HTML personalizado',
 };
 
+// La cola del envío programado (encargo: "quien abre el panel no puede ver
+// la cola"). Mismo motivo que el resto de la duplicación de tipos de este
+// archivo: lib/campanas/cola.ts arranca con `import 'server-only'`, así
+// que este componente de cliente no puede importar sus tipos -- copia la
+// FORMA de lo que ya devuelve app/api/campanas/cola/route.ts.
+type EstadoZonaCola = 'terminada' | 'en_curso' | 'espera';
+type FilaZonaCola = {
+  zona: string;
+  orden: number;
+  estado: EstadoZonaCola;
+  campanaId: string | null;
+  direccionesTotal: number;
+  direccionesEnviadas: number;
+  direccionesFallidas: number;
+  direccionesPendientes: number;
+};
+type CupoHoyCola = { dia: number; tope: number; reservado: number; disponible: number; diaHabilHoy: boolean };
+type ColaProgramadaDatos = {
+  zonas: FilaZonaCola[];
+  totales: { direcciones: number; enviadas: number; fallidas: number; pendientes: number };
+  cupoHoy: CupoHoyCola;
+  fechaEstimadaFin: string | null;
+};
+
+const ETIQUETAS_ESTADO_ZONA: Record<EstadoZonaCola, string> = {
+  terminada: 'Terminada',
+  en_curso: 'En curso',
+  espera: 'En espera',
+};
+
+// Miles con punto, sin decimales -- mismo criterio, exacto, que
+// `formatearColones` en formato.ts (no se usa `toLocaleString`: el
+// separador que trae el runtime de Node para `es-CR` varía entre
+// versiones de ICU).
+function formatearNumero(valor: number): string {
+  return Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+// 'YYYY-MM-DD' -> 'DD/MM/YYYY', por texto -- a propósito, NUNCA pasando
+// por `new Date(...)`: esa fecha es de sólo calendario (no trae hora), y
+// `new Date('2026-09-25')` la interpreta como medianoche UTC -- en un
+// huso con offset negativo (Costa Rica, UTC-6) eso cae la tarde del día
+// ANTERIOR en hora local, así que leerla con getDate()/getMonth() (como
+// hace `formatearFecha`, pensada para timestamps CON hora) correría el
+// día uno para atrás. Partir el string evita el huso horario por
+// completo.
+function formatearFechaCorta(fechaIso: string): string {
+  const [anio, mes, dia] = fechaIso.split('-');
+  return `${dia}/${mes}/${anio}`;
+}
+
+// La cola del envío programado -- las trece zonas en su orden real, cuál
+// está en curso, cuáles terminaron, cuáles esperan, cuánto falta en total
+// y una fecha estimada de término. Componente propio, con su propio fetch
+// al montar: independiente del interruptor y del historial de abajo, mismo
+// criterio que ya separa `InterruptorProgramado` del resto de esta
+// pantalla -- una falla acá (GHL caído a mitad de camino) no debería tapar
+// ni el interruptor ni el historial.
+function ColaProgramada({ onSesionInvalida }: Pick<Props, 'onSesionInvalida'>) {
+  const [datos, setDatos] = useState<ColaProgramadaDatos | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState('');
+
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/campanas/cola', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const cuerpo = await res.json();
+      if (!res.ok || !cuerpo.ok) {
+        if (res.status === 401) return onSesionInvalida();
+        setError(cuerpo.error ?? `Error ${res.status}`);
+        return;
+      }
+      setDatos({
+        zonas: cuerpo.zonas as FilaZonaCola[],
+        totales: cuerpo.totales,
+        cupoHoy: cuerpo.cupoHoy,
+        fechaEstimadaFin: cuerpo.fechaEstimadaFin ?? null,
+      });
+    } catch {
+      setError('Fallo de red al consultar la cola del envío programado.');
+    } finally {
+      setCargando(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `onSesionInvalida` es estable entre renders (viene de Panel).
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  return (
+    <div className="rounded-xl border border-[var(--carta-border)] bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-sm text-navy">Cola del envío programado</h2>
+        <button
+          type="button"
+          onClick={() => void cargar()}
+          disabled={cargando}
+          className="rounded-lg border border-[var(--carta-border)] px-3 py-1.5 text-xs font-medium text-navy hover:bg-[var(--carta-fill)] disabled:opacity-40"
+        >
+          {cargando ? 'Actualizando…' : 'Actualizar'}
+        </button>
+      </div>
+
+      {error && (
+        <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
+          {error}
+        </p>
+      )}
+      {cargando && !datos && !error && (
+        <p className="mt-2 text-xs text-teal/70">Consultando el CRM -- las trece zonas pueden tardar unos segundos…</p>
+      )}
+
+      {datos && (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-lg bg-[var(--carta-fill)] p-3">
+              <p className="text-xs text-teal">Direcciones pendientes</p>
+              <p className="mt-1 font-display text-lg text-navy">{formatearNumero(datos.totales.pendientes)}</p>
+              {/* "únicas" -- la misma dirección puede vivir en dos zonas del
+                  CRM; este número ya está deduplicado, nunca es la suma de
+                  las trece zonas por separado. */}
+              <p className="text-[11px] text-teal/70">de {formatearNumero(datos.totales.direcciones)} en total, únicas</p>
+            </div>
+            <div className="rounded-lg bg-[var(--carta-fill)] p-3">
+              <p className="text-xs text-teal">Cupo de hoy</p>
+              <p className="mt-1 font-display text-lg text-navy">
+                {formatearNumero(datos.cupoHoy.disponible)} / {formatearNumero(datos.cupoHoy.tope)}
+              </p>
+              <p className="text-[11px] text-teal/70">
+                {datos.cupoHoy.diaHabilHoy ? `día ${datos.cupoHoy.dia} de la rampa` : 'hoy no corre -- fin de semana'}
+              </p>
+            </div>
+            <div className="rounded-lg bg-[var(--carta-fill)] p-3 sm:col-span-2">
+              <p className="text-xs text-teal">Fecha estimada de término</p>
+              <p className="mt-1 font-display text-lg text-navy">
+                {datos.fechaEstimadaFin ? formatearFechaCorta(datos.fechaEstimadaFin) : 'Ya no queda nada pendiente'}
+              </p>
+              {/* El detalle honesto que pidió el encargo: no es una
+                  promesa, es una proyección que asume que nada cambia. */}
+              <p className="text-[11px] text-teal/70">
+                Estimado -- asume que nadie pausa el envío ni cambia el cupo entre hoy y esa fecha.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto rounded-xl border border-[var(--carta-border)]">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="bg-[var(--carta-fill)] text-xs uppercase tracking-wide text-teal">
+                <tr>
+                  <th className="px-3 py-2">#</th>
+                  <th className="px-3 py-2">Zona</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Direcciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--carta-border)]">
+                {datos.zonas.map((z) => (
+                  <tr key={z.zona} className={z.estado === 'en_curso' ? 'bg-teal/5' : undefined}>
+                    <td className="px-3 py-2 align-top text-teal">{z.orden}</td>
+                    <td className="px-3 py-2 align-top text-navy">{z.zona}</td>
+                    <td className="px-3 py-2 align-top">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                          z.estado === 'terminada'
+                            ? 'bg-emerald-50 text-emerald-800'
+                            : z.estado === 'en_curso'
+                              ? 'bg-teal/10 text-teal'
+                              : 'bg-[var(--carta-fill)] text-teal/70'
+                        }`}
+                      >
+                        {ETIQUETAS_ESTADO_ZONA[z.estado]}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 align-top text-teal">
+                      {z.estado === 'espera' ? (
+                        <span>{formatearNumero(z.direccionesTotal)} por mandar</span>
+                      ) : (
+                        <span>
+                          {formatearNumero(z.direccionesEnviadas)}/{formatearNumero(z.direccionesTotal)} enviadas
+                          {z.direccionesFallidas > 0 ? `, ${formatearNumero(z.direccionesFallidas)} con error` : ''}
+                          {z.direccionesPendientes > 0 ? ` -- quedan ${formatearNumero(z.direccionesPendientes)}` : ''}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 type ProgresoCampana = { total: number; enviados: number; fallidos: number; pendientes: number };
 type FilaCampana = {
   id: string;
@@ -359,6 +561,8 @@ export function VistaHistorialCampanas({ obtenerCsrf, onSesionInvalida }: Props)
   return (
     <div className="space-y-4">
       <InterruptorProgramado obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+
+      <ColaProgramada onSesionInvalida={onSesionInvalida} />
 
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-display text-sm text-navy">Historial de campañas</h2>

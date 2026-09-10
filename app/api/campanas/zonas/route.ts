@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { autorizarSuperadmin } from '@/lib/cotizador/equipo';
-import { ZONAS_COMERCIALES, contactosPorZona, conCorreo } from '@/lib/campanas/contactos';
+import { ZONAS_COMERCIALES, contactosDeTodasLasZonas, conCorreo } from '@/lib/campanas/contactos';
 
 export const runtime = 'nodejs';
 
@@ -70,17 +70,19 @@ export async function POST(request: Request) {
   // fallo de UNA zona (GHL caído a mitad de camino, un timeout puntual) no
   // tira abajo el resto: esa zona vuelve con `error` y conteo en cero, en
   // vez de que las trece pestañas se queden sin dibujar por un problema de
-  // una sola.
-  const resultados = await Promise.all(
-    ZONAS_COMERCIALES.map(async (zona) => {
-      const resultado = await contactosPorZona(zona, deps);
-      if (!resultado.ok) {
-        console.error('[campanas] No se pudo traer la zona', zona, resultado.error);
-        return { zona, total: 0, conCorreo: 0, error: resultado.error };
-      }
-      return { zona, total: resultado.contactos.length, conCorreo: conCorreo(resultado.contactos).length };
-    }),
-  );
+  // una sola. `contactosDeTodasLasZonas` (lib/campanas/contactos.ts) es el
+  // mismo camino que usa la cola del envío programado
+  // (app/api/campanas/cola/route.ts) -- un solo lugar que lanza las ~47
+  // peticiones a GHL, no dos copias que puedan divergir.
+  const todas = await contactosDeTodasLasZonas(deps);
+  const resultados = ZONAS_COMERCIALES.map((zona) => {
+    const resultado = todas[zona];
+    if (!resultado.ok) {
+      console.error('[campanas] No se pudo traer la zona', zona, resultado.error);
+      return { zona, total: 0, conCorreo: 0, error: resultado.error };
+    }
+    return { zona, total: resultado.contactos.length, conCorreo: conCorreo(resultado.contactos).length };
+  });
 
   return NextResponse.json({ ok: true, zonas: resultados });
 }

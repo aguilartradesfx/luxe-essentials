@@ -228,7 +228,14 @@ export async function establecerPausado(
 // que ese correo aparezca en dos campañas 'inicial' distintas (una por
 // zona). Este filtro es lo que cierra esa puerta del lado de la
 // aplicación, ANTES de que `crearCampana` fije la lista de una zona nueva.
-async function correosConInicialEnviado(db: ClienteCampanas): Promise<Set<string>> {
+//
+// Exportada para que lib/campanas/cola.ts (la vista de la cola del envío
+// programado) la reuse tal cual -- necesita, exactamente, la misma cuenta
+// de "a quién ya se le mandó el inicial en algún lado" para simular qué le
+// tocaría a una zona que todavía no arrancó, y duplicar esta consulta ahí
+// sería la clase de par de fuentes que se desincroniza en cuanto una de
+// las dos cambie sin la otra.
+export async function correosConInicialEnviado(db: ClienteCampanas): Promise<Set<string>> {
   const { data: campanasIniciales, error: errorCampanas } = await db
     .from('campanas')
     .select('id')
@@ -262,7 +269,11 @@ async function correosConInicialEnviado(db: ClienteCampanas): Promise<Set<string
 // plantilla 'inicial' de una zona, si ya existe. `null` si esta zona
 // todavía no tiene ninguna -- es la señal de "hay que crearla" en
 // `resolverObjetivo`.
-async function campanaProgramadaDeZona(db: ClienteCampanas, zona: ZonaComercial): Promise<{ id: string } | null> {
+//
+// Exportada por el mismo motivo que `correosConInicialEnviado`: es
+// exactamente lo que lib/campanas/cola.ts necesita, zona por zona, para
+// saber si ya arrancó o si todavía hay que simularla.
+export async function campanaProgramadaDeZona(db: ClienteCampanas, zona: ZonaComercial): Promise<{ id: string } | null> {
   const { data, error } = await db
     .from('campanas')
     .select('id')
