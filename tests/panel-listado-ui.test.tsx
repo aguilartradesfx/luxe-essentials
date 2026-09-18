@@ -18,17 +18,31 @@ import { VistaListado } from '@/app/cotizador/VistaListado';
 const CSRF_TOKEN = 'csrf-de-prueba';
 const LOCATION_ID = 'ubicacion-ghl-1';
 
+// Creada hace 2 días respecto de "ahora": con 30 días de vigencia le quedan
+// 28, muy lejos de la ventana de aviso de 7, así que es la fila NORMAL --
+// la que sirve de contraste contra `FILA_POR_VENCER`.
+//
+// Iba con una fecha FIJA ('2026-08-20') y por eso la suite se puso roja
+// sola al avanzar el calendario: el 18 de setiembre esa fecha ya tenía 29
+// días, o sea que Ana Pérez había entrado TAMBIÉN en la ventana de aviso y
+// las dos filas se pintaban igual. La prueba que compara sus clases
+// empezó a fallar sin que nadie tocara una línea de código. Una prueba que
+// se rompe porque pasó el tiempo no está midiendo lo que dice medir:
+// ahora es relativa, igual que `HACE_25_DIAS`.
+const HACE_2_DIAS = new Date();
+HACE_2_DIAS.setDate(HACE_2_DIAS.getDate() - 2);
+
 const FILA_ABIERTA = {
   id: 'a1b2c3d4-0000-4000-8000-000000000001',
   numero: 'COT-2026-0010',
-  created_at: '2026-08-20T10:00:00.000Z',
-  updated_at: '2026-08-20T10:00:00.000Z',
+  created_at: HACE_2_DIAS.toISOString(),
+  updated_at: HACE_2_DIAS.toISOString(),
   estado: 'enviada',
   origen: 'humano',
   contact_id: 'contacto-ghl-1',
   cliente: { nombre: 'Ana Pérez', empresa: 'Hotel Ana', email: 'ana@hotel.com' },
   totales: { subtotal: 500000, ahorro: 0, iva: 65000, total: 565000 },
-  enviado_at: '2026-08-20T10:05:00.000Z',
+  enviado_at: HACE_2_DIAS.toISOString(),
   cerrada_at: null,
   pdf_ruta: '2026/COT-2026-0010.pdf',
   motivo_cierre: null,
