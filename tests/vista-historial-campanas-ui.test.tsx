@@ -67,7 +67,15 @@ type FilaCampana = {
   canceladaPor: string | null;
 };
 
-type EstadoProgramadoMock = { pausado: boolean; pausadoPor: string | null; pausadoAt: string | null };
+type EstadoProgramadoMock = {
+  pausado: boolean;
+  pausadoPor: string | null;
+  pausadoAt: string | null;
+  // Hallazgo de producción (2026-09-18): "que se vea" -- opcional, para no
+  // tener que tocar las pruebas que no le prestan atención a esto.
+  ultimoError?: string | null;
+  ultimoErrorAt?: string | null;
+};
 
 // La cola del envío programado -- lo que devuelve POST /api/campanas/cola.
 // Por defecto, sin nada pendiente (todo terminado): así ninguna de las
@@ -500,6 +508,39 @@ describe('Interruptor del envío programado', () => {
     await usuario.click(await screen.findByRole('button', { name: /^reanudar$/i }));
 
     await waitFor(() => expect(onPausar).toHaveBeenCalledWith({ pausado: false }));
+  });
+
+  // Hallazgo de producción (2026-09-18): "que se vea" -- del 10 al 18 de
+  // setiembre el envío programado falló tres días seguidos sin que la
+  // pantalla lo dijera. Mata al mutante que ignorara `ultimoError`: sin
+  // leerlo del cuerpo de la respuesta, este aviso nunca se pintaría.
+  it('si la ultima corrida del cron fallo, lo dice -- aunque el cron siga activo', async () => {
+    mockFetchHistorial({
+      campanas: [],
+      programado: {
+        pausado: false,
+        pausadoPor: null,
+        pausadoAt: null,
+        ultimoError: 'Resend 422: rechazo el lote entero',
+        ultimoErrorAt: '2026-09-17T15:00:00.000Z',
+      },
+    });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+
+    expect(await screen.findByText(/el envío programado de hoy falló/i)).toBeInTheDocument();
+    expect(screen.getByText(/resend 422: rechazo el lote entero/i)).toBeInTheDocument();
+    // Sigue activo -- un fallo no implica que alguien lo haya pausado.
+    expect(screen.getByText(/activo -- el cron manda/i)).toBeInTheDocument();
+  });
+
+  // El contraste: sin ultimoError, el aviso no aparece -- es el caso normal
+  // de todas las demás pruebas de este describe, dejado explícito acá.
+  it('sin ultimoError, no muestra ningun aviso de fallo', async () => {
+    mockFetchHistorial({ campanas: [], programado: { pausado: false, pausadoPor: null, pausadoAt: null } });
+    render(<VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={() => {}} />);
+
+    await screen.findByText(/activo -- el cron manda/i);
+    expect(screen.queryByText(/el envío programado de hoy falló/i)).not.toBeInTheDocument();
   });
 });
 

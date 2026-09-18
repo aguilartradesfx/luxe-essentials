@@ -392,6 +392,14 @@ function InterruptorProgramado({ obtenerCsrf, onSesionInvalida }: Props) {
   const [pausado, setPausado] = useState<boolean | null>(null);
   const [pausadoPor, setPausadoPor] = useState<string | null>(null);
   const [pausadoAt, setPausadoAt] = useState<string | null>(null);
+  // Hallazgo de producción (2026-09-18): "que se vea" -- si la última
+  // corrida del cron falló, se nota ACÁ, en la misma tarjeta que ya es lo
+  // primero que se ve al abrir esta pestaña. Antes de este campo, un fallo
+  // de tres días seguidos no dejaba ninguna huella en la pantalla -- el
+  // dueño lo descubrió sacando cuentas a mano, no porque el sistema se lo
+  // dijera. `null` en el caso normal (nunca falló, o volvió a andar bien).
+  const [ultimoError, setUltimoError] = useState<string | null>(null);
+  const [ultimoErrorAt, setUltimoErrorAt] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
   const [cambiando, setCambiando] = useState(false);
@@ -414,6 +422,8 @@ function InterruptorProgramado({ obtenerCsrf, onSesionInvalida }: Props) {
       setPausado(Boolean(datos.pausado));
       setPausadoPor(datos.pausadoPor ?? null);
       setPausadoAt(datos.pausadoAt ?? null);
+      setUltimoError(datos.ultimoError ?? null);
+      setUltimoErrorAt(datos.ultimoErrorAt ?? null);
     } catch {
       setError('Fallo de red al consultar el envío programado.');
     } finally {
@@ -495,6 +505,17 @@ function InterruptorProgramado({ obtenerCsrf, onSesionInvalida }: Props) {
           </button>
         )}
       </div>
+      {/* Hallazgo de producción (2026-09-18): un envío programado que falla
+          tiene que notarse ACÁ -- no en la cuenta a mano que hizo el dueño
+          las tres veces que esto pasó de verdad. Independiente de
+          `pausado`: el cron puede seguir activo (no lo pausó nadie) y
+          aun así haber fallado su última corrida. */}
+      {ultimoError && (
+        <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
+          El envío programado de hoy falló{ultimoErrorAt ? ` (${formatearFecha(ultimoErrorAt)})` : ''}: {ultimoError}{' '}
+          -- se reintenta solo en la próxima corrida del cron.
+        </p>
+      )}
       {error && (
         <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800">
           {error}

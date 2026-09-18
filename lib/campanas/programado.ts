@@ -158,24 +158,67 @@ export async function reservarCupoDiario(
   return Math.max(0, Number(data ?? 0));
 }
 
+// Hallazgo de producción (2026-09-18): `reservarCupoDiario` se llama ANTES
+// de intentar mandar nada (más abajo, en `ejecutarEnvioProgramado`) -- si
+// la tanda termina sin mandar NI UN correo de verdad (falla la llamada
+// entera a Resend, o todo lo reclamado resultó ser direcciones inválidas),
+// ese cupo quedaba quemado igual: 323 reservados contra 122 enviados de
+// verdad en tres días, 201 cupos perdidos sin que la rampa avanzara nada a
+// cambio. Esta función es la contraparte de `reservarCupoDiario` -- rpc
+// `campanas_devolver_cupo_diario` (migración 0028), una resta atómica
+// sobre la MISMA fila del día.
+export async function devolverCupoDiario(db: ClienteCampanas, fechaHoy: string, cantidad: number): Promise<void> {
+  if (cantidad <= 0) return;
+  const { error } = await db.rpc('campanas_devolver_cupo_diario', { p_fecha: fechaHoy, p_cantidad: cantidad });
+  if (error) {
+    throw new Error(`No se pudo devolver el cupo diario: ${error.message}`);
+  }
+}
+
 // ---------------------------------------------------------------------
 // 2) El interruptor (garantía 5) -- `campanas_programado_config`, fila
 // única (migración 0027).
 
-export type EstadoProgramado = { pausado: boolean; pausadoPor: string | null; pausadoAt: string | null };
+export type EstadoProgramado = {
+  pausado: boolean;
+  pausadoPor: string | null;
+  pausadoAt: string | null;
+  // Hallazgo de producción (2026-09-18, migración 0028): "que se vea" --
+  // el mensaje (y cuándo) de la ÚLTIMA corrida del cron que terminó en
+  // `ok:false`. `null` en el caso normal -- ni bien nunca falló, ni bien
+  // volvió a andar bien después de haber fallado (ver
+  // `registrarResultadoProgramado`, más abajo: una corrida buena LIMPIA
+  // esto). Antes de este campo, un fallo de tres días seguidos no dejaba
+  // ninguna huella acá -- "En curso" se veía sano y el dueño lo descubrió
+  // sacando cuentas a mano.
+  ultimoError: string | null;
+  ultimoErrorAt: string | null;
+};
 
 async function leerConfig(db: ClienteCampanas): Promise<EstadoProgramado | null> {
   const { data, error } = await db
     .from('campanas_programado_config')
-    .select('pausado, pausado_por, pausado_at')
+    .select('pausado, pausado_por, pausado_at, ultimo_error, ultimo_error_at')
     .eq('id', 1)
     .maybeSingle();
   if (error) {
     throw new Error(`No se pudo leer el interruptor del envio programado: ${error.message}`);
   }
   if (!data) return null;
-  const fila = data as { pausado: boolean; pausado_por: string | null; pausado_at: string | null };
-  return { pausado: Boolean(fila.pausado), pausadoPor: fila.pausado_por ?? null, pausadoAt: fila.pausado_at ?? null };
+  const fila = data as {
+    pausado: boolean;
+    pausado_por: string | null;
+    pausado_at: string | null;
+    ultimo_error: string | null;
+    ultimo_error_at: string | null;
+  };
+  return {
+    pausado: Boolean(fila.pausado),
+    pausadoPor: fila.pausado_por ?? null,
+    pausadoAt: fila.pausado_at ?? null,
+    ultimoError: fila.ultimo_error ?? null,
+    ultimoErrorAt: fila.ultimo_error_at ?? null,
+  };
 }
 
 // Lo que la pantalla necesita para mostrar el estado -- "pausado por Ana el
@@ -186,7 +229,32 @@ async function leerConfig(db: ClienteCampanas): Promise<EstadoProgramado | null>
 // confirmar de verdad.
 export async function estadoProgramado(db: ClienteCampanas): Promise<EstadoProgramado> {
   const fila = await leerConfig(db);
-  return fila ?? { pausado: true, pausadoPor: null, pausadoAt: null };
+  return fila ?? { pausado: true, pausadoPor: null, pausadoAt: null, ultimoError: null, ultimoErrorAt: null };
+}
+
+// Escribe, en la MISMA fila única del interruptor, si la ÚLTIMA corrida del
+// cron falló o no -- lo que `app/api/campanas/cron/route.ts` llama justo
+// después de `ejecutarEnvioProgramado`, con SU resultado (hallazgo de
+// producción, 2026-09-18, migración 0028: "que se vea"). Una corrida que
+// falla escribe el mensaje y la hora; una corrida que sale bien LIMPIA los
+// dos campos -- el aviso describe la corrida MÁS RECIENTE, nunca un fallo
+// viejo que ya se resolvió solo (un reintento del cron que por fin
+// funciona no debería seguir mostrando "PAUSADO por un error" de ayer).
+export async function registrarResultadoProgramado(
+  db: ClienteCampanas,
+  resultado: { ok: boolean; error?: string },
+  ahora: () => Date = () => new Date(),
+): Promise<void> {
+  const { error } = await db
+    .from('campanas_programado_config')
+    .update({
+      ultimo_error: resultado.ok ? null : (resultado.error ?? 'Fallo desconocido del envio programado.'),
+      ultimo_error_at: resultado.ok ? null : ahora().toISOString(),
+    })
+    .eq('id', 1);
+  if (error) {
+    throw new Error(`No se pudo registrar el resultado del envio programado: ${error.message}`);
+  }
 }
 
 // Lo único que `ejecutarEnvioProgramado` necesita saber antes de tocar
@@ -449,6 +517,29 @@ export async function ejecutarEnvioProgramado(
     { resendApiKey: deps.resendApiKey, remitente: deps.remitente, fetchImpl: deps.fetchImpl, ahora, limiteTanda: cupo },
     db,
   );
+
+  // Hallazgo de producción (2026-09-18): este `cupo` ya se reservó ARRIBA,
+  // antes de saber si la tanda iba a mandar algo de verdad. Si terminó sin
+  // mandar NI UN correo -- `resultado.ok === false` (la llamada entera a
+  // Resend falló, pasajera o no) o `enviados === 0` (todo lo reclamado
+  // resultó ser direcciones inválidas, o Resend rechazó el lote entero de
+  // forma permanente -- ver lib/campanas/envio.ts) -- se devuelve, para que
+  // la rampa no lo dé por gastado. El criterio es "no salió nada", no "hubo
+  // un error": las dos ramas comparten la misma consecuencia, por eso se
+  // decide ANTES de mirar `resultado.ok` para el resto de la función.
+  const enviadosDeVerdad = resultado.ok ? resultado.enviados : 0;
+  if (enviadosDeVerdad === 0) {
+    try {
+      await devolverCupoDiario(db, fechaHoy, cupo);
+    } catch (err) {
+      // No tocar la respuesta por esto -- devolver el cupo es una cortesía
+      // para la rampa de MAÑANA, no algo que deba tumbar la corrida de HOY.
+      // Se deja constancia ruidosa, mismo criterio que el resto de este
+      // módulo ante un fallo que no vale la pena propagar.
+      console.error('[campanas] No se pudo devolver el cupo diario tras una tanda sin envios.', err);
+    }
+  }
+
   if (!resultado.ok) return { ok: false, error: resultado.error };
 
   return {

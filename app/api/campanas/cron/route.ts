@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { ejecutarEnvioProgramado } from '@/lib/campanas/programado';
+import { ejecutarEnvioProgramado, registrarResultadoProgramado } from '@/lib/campanas/programado';
 
 export const runtime = 'nodejs';
 
@@ -68,6 +68,20 @@ export async function GET(request: Request) {
   };
 
   const resultado = await ejecutarEnvioProgramado(db, deps);
+
+  // Hallazgo de producción (2026-09-18): "que se vea". Un envío programado
+  // que falla tres días seguidos NO puede quedar mudo -- esta línea es lo
+  // que deja el aviso en la misma fila que ya lee "Historial de campañas"
+  // (VistaHistorialCampanas.tsx) para el interruptor de pausa. Un fallo al
+  // escribir ESTE aviso no debe tumbar la respuesta del cron -- se deja
+  // constancia en los logs y se sigue, mismo criterio que el resto de
+  // avisos "best effort" de este módulo.
+  try {
+    await registrarResultadoProgramado(db, resultado);
+  } catch (err) {
+    console.error('[campanas] No se pudo registrar la visibilidad del envio programado.', err);
+  }
+
   if (!resultado.ok) {
     console.error('[campanas] Fallo el envio programado.', resultado.error);
     return NextResponse.json({ ok: false, error: resultado.error }, { status: 502 });

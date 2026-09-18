@@ -18,8 +18,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('@/lib/supabase/server', () => ({ supabaseAdmin: () => ({ marca: 'db-fake' }) }));
 
 const ejecutarEnvioProgramadoMock = vi.fn();
+const registrarResultadoProgramadoMock = vi.fn();
 vi.mock('@/lib/campanas/programado', () => ({
   ejecutarEnvioProgramado: (...args: unknown[]) => ejecutarEnvioProgramadoMock(...args),
+  registrarResultadoProgramado: (...args: unknown[]) => registrarResultadoProgramadoMock(...args),
 }));
 
 const { GET: getCron } = await import('@/app/api/campanas/cron/route');
@@ -36,6 +38,8 @@ const SECRETO = 'el-secreto-de-verdad';
 beforeEach(() => {
   ejecutarEnvioProgramadoMock.mockReset();
   ejecutarEnvioProgramadoMock.mockResolvedValue({ ok: true, accion: 'sin_pendientes' });
+  registrarResultadoProgramadoMock.mockReset();
+  registrarResultadoProgramadoMock.mockResolvedValue(undefined);
   process.env.RESEND_API_KEY = 'llave-resend';
   process.env.LUXE_CORREO_REMITENTE = 'Luxe <campanas@send.luxeessentialscr.com>';
   process.env.LUXE_GHL_API_KEY = 'llave-ghl';
@@ -168,6 +172,44 @@ describe('traduce el resultado de ejecutarEnvioProgramado', () => {
     const res = await getCron(peticion({ authorization: `Bearer ${SECRETO}` }));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ ok: false, error: 'no se pudo consultar el CRM' });
+    spy.mockRestore();
+  });
+});
+
+// Hallazgo de producción (2026-09-18): "que se vea" -- un envío programado
+// que falla tiene que notarse en la pantalla de campañas, no descubrirse
+// tres días después a mano. Mata al mutante que borrara la llamada a
+// `registrarResultadoProgramado`: sin ella, esta prueba fallaría porque el
+// mock nunca se invocaría.
+describe('registra la visibilidad del resultado (encargo: "que se vea")', () => {
+  beforeEach(() => {
+    process.env.CRON_SECRET = SECRETO;
+  });
+
+  it('llama a registrarResultadoProgramado con el resultado, tanto si sale bien como si falla', async () => {
+    ejecutarEnvioProgramadoMock.mockResolvedValue({ ok: false, error: 'Resend 422: ...' });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await getCron(peticion({ authorization: `Bearer ${SECRETO}` }));
+
+    expect(registrarResultadoProgramadoMock).toHaveBeenCalledTimes(1);
+    const [db, resultado] = registrarResultadoProgramadoMock.mock.calls[0];
+    expect(db).toEqual({ marca: 'db-fake' });
+    expect(resultado).toEqual({ ok: false, error: 'Resend 422: ...' });
+    spy.mockRestore();
+  });
+
+  // Un fallo al ESCRIBIR la visibilidad no puede tumbar la respuesta del
+  // cron -- eso sería peor que el problema que resuelve.
+  it('si falla escribir la visibilidad, la respuesta del cron sigue siendo la normal', async () => {
+    ejecutarEnvioProgramadoMock.mockResolvedValue({ ok: true, accion: 'sin_pendientes' });
+    registrarResultadoProgramadoMock.mockRejectedValue(new Error('db caida'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await getCron(peticion({ authorization: `Bearer ${SECRETO}` }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, accion: 'sin_pendientes' });
     spy.mockRestore();
   });
 });

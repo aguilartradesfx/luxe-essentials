@@ -46,5 +46,10 @@ export async function POST(request: Request) {
     pausado: estado.pausado,
     pausadoPor: estado.pausadoPor,
     pausadoAt: estado.pausadoAt,
+    // Hallazgo de producción (2026-09-18): "que se vea" -- si la ÚLTIMA
+    // corrida del cron falló, VistaHistorialCampanas.tsx lo muestra acá
+    // mismo, junto al interruptor. `null` en el caso normal.
+    ultimoError: estado.ultimoError,
+    ultimoErrorAt: estado.ultimoErrorAt,
   });
 }

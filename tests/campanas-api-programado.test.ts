@@ -14,7 +14,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 type FilaUsuario = { id: string; rol: 'vendedor' | 'superadmin'; activo: boolean };
 let usuarios: FilaUsuario[];
-type FilaConfig = { id: number; pausado: boolean; pausado_por: string | null; pausado_at: string | null };
+type FilaConfig = {
+  id: number;
+  pausado: boolean;
+  pausado_por: string | null;
+  pausado_at: string | null;
+  ultimo_error?: string | null;
+  ultimo_error_at?: string | null;
+};
 let config: FilaConfig[];
 
 function nodoUsuarios(): any {
@@ -133,7 +140,14 @@ describe('POST /api/campanas/programado (leer)', () => {
     const { cookie } = sesionSuperadmin();
     const res = await postEstado(peticionEstado({}, { cookie }));
     const cuerpo = await res.json();
-    expect(cuerpo).toEqual({ ok: true, pausado: false, pausadoPor: null, pausadoAt: null });
+    expect(cuerpo).toEqual({
+      ok: true,
+      pausado: false,
+      pausadoPor: null,
+      pausadoAt: null,
+      ultimoError: null,
+      ultimoErrorAt: null,
+    });
   });
 
   it('devuelve quién y cuándo pausó, cuando está pausado', async () => {
@@ -141,7 +155,39 @@ describe('POST /api/campanas/programado (leer)', () => {
     const { cookie } = sesionSuperadmin();
     const res = await postEstado(peticionEstado({}, { cookie }));
     const cuerpo = await res.json();
-    expect(cuerpo).toEqual({ ok: true, pausado: true, pausadoPor: 'Beto', pausadoAt: '2026-09-01T12:00:00.000Z' });
+    expect(cuerpo).toEqual({
+      ok: true,
+      pausado: true,
+      pausadoPor: 'Beto',
+      pausadoAt: '2026-09-01T12:00:00.000Z',
+      ultimoError: null,
+      ultimoErrorAt: null,
+    });
+  });
+
+  // Hallazgo de producción (2026-09-18): "que se vea" -- si la última
+  // corrida del cron falló, esta ruta lo informa junto al resto del
+  // interruptor.
+  it('devuelve ultimoError/ultimoErrorAt cuando la ultima corrida del cron fallo', async () => {
+    config[0] = {
+      id: 1,
+      pausado: false,
+      pausado_por: null,
+      pausado_at: null,
+      ultimo_error: 'Resend 422: ...',
+      ultimo_error_at: '2026-09-17T15:00:00.000Z',
+    };
+    const { cookie } = sesionSuperadmin();
+    const res = await postEstado(peticionEstado({}, { cookie }));
+    const cuerpo = await res.json();
+    expect(cuerpo).toEqual({
+      ok: true,
+      pausado: false,
+      pausadoPor: null,
+      pausadoAt: null,
+      ultimoError: 'Resend 422: ...',
+      ultimoErrorAt: '2026-09-17T15:00:00.000Z',
+    });
   });
 
   // Falla cerrado (mismo criterio que `estaPausado`): si la fila no existe

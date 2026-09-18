@@ -18,9 +18,11 @@ import {
   topeParaDia,
   diaDeRampa,
   reservarCupoDiario,
+  devolverCupoDiario,
   estaPausado,
   estadoProgramado,
   establecerPausado,
+  registrarResultadoProgramado,
   resolverObjetivo,
   ejecutarEnvioProgramado,
 } from '@/lib/campanas/programado';
@@ -185,6 +187,14 @@ function crearDbFake(seed: {
       fila.enviados += reserva;
       return { data: reserva, error: null };
     }
+    if (nombre === 'campanas_devolver_cupo_diario') {
+      const p_fecha = args.p_fecha as string;
+      const p_cantidad = args.p_cantidad as number;
+      if (p_cantidad <= 0) return { data: null, error: null };
+      const fila = estado.campanas_envio_diario.find((f) => f.fecha === p_fecha);
+      if (fila) fila.enviados = Math.max(0, fila.enviados - p_cantidad);
+      return { data: null, error: null };
+    }
     if (nombre === 'campanas_reclamar_pendientes') {
       const limite = args.p_limite as number;
       const pendientes = estado.campanas_envios.filter(
@@ -227,6 +237,25 @@ function fetchImplCombinado(porZona: Record<string, Array<{ id: string; firstNam
     if (urlStr.includes('resend.com')) {
       const payload = JSON.parse((init?.body as string) ?? '[]') as unknown[];
       return respuestaResend({ data: payload.map((_, i) => ({ id: `resend-${i}-${Math.random()}` })) });
+    }
+    const cuerpo = JSON.parse((init?.body as string) ?? '{}');
+    const zona = cuerpo.filters?.[0]?.value as string;
+    const contactos = porZona[zona] ?? [];
+    return { ok: true, status: 200, text: async () => JSON.stringify({ contacts: contactos }) } as unknown as Response;
+  });
+}
+
+// Igual que `fetchImplCombinado`, pero Resend le falla al lote ENTERO --
+// para las pruebas del hallazgo de producción (2026-09-18) de que el cupo
+// se devuelve cuando la tanda no manda nada de verdad.
+function fetchImplCombinadoConFalloResend(
+  porZona: Record<string, Array<{ id: string; firstName: string; email: string }>>,
+  respuestaFalla: { status: number; cuerpo: unknown } = { status: 500, cuerpo: { message: 'error interno' } },
+) {
+  return vi.fn(async (url: any, init: any) => {
+    const urlStr = String(url);
+    if (urlStr.includes('resend.com')) {
+      return respuestaResend(respuestaFalla.cuerpo, respuestaFalla.status);
     }
     const cuerpo = JSON.parse((init?.body as string) ?? '{}');
     const zona = cuerpo.filters?.[0]?.value as string;
@@ -381,6 +410,40 @@ describe('reservarCupoDiario', () => {
   });
 });
 
+// Hallazgo de producción (2026-09-18): 201 cupos quemados en tres días sin
+// mandar nada -- la contraparte de `reservarCupoDiario`.
+describe('devolverCupoDiario', () => {
+  it('resta la cantidad devuelta del cupo ya reservado ese día', async () => {
+    const db = crearDbFake({ campanas_envio_diario: [{ fecha: '2026-09-09', tope: 25, enviados: 25 }] });
+    await devolverCupoDiario(db as any, '2026-09-09', 25);
+    expect(db.estado.campanas_envio_diario[0].enviados).toBe(0);
+  });
+
+  // Mata al mutante que borrara el chequeo `cantidad <= 0`: sin él, se
+  // llamaría al rpc igual con 0 (o negativo), y una resta con un número
+  // negativo SUMARÍA cupo en vez de devolverlo.
+  it('cantidad <= 0 no llama al rpc', async () => {
+    const db = crearDbFake({ campanas_envio_diario: [{ fecha: '2026-09-09', tope: 25, enviados: 10 }] });
+    await devolverCupoDiario(db as any, '2026-09-09', 0);
+    expect(db.rpc).not.toHaveBeenCalled();
+    expect(db.estado.campanas_envio_diario[0].enviados).toBe(10);
+  });
+
+  // Nunca deja un cupo "usado" negativo -- mismo guardarraíl que el rpc de
+  // la migración 0028 (`greatest(0, ...)`).
+  it('nunca deja el cupo usado por debajo de cero', async () => {
+    const db = crearDbFake({ campanas_envio_diario: [{ fecha: '2026-09-09', tope: 25, enviados: 5 }] });
+    await devolverCupoDiario(db as any, '2026-09-09', 20);
+    expect(db.estado.campanas_envio_diario[0].enviados).toBe(0);
+  });
+
+  it('propaga el error del rpc como una excepción legible', async () => {
+    const db = crearDbFake();
+    (db.rpc as any).mockImplementationOnce(async () => ({ data: null, error: { message: 'db caida' } }));
+    await expect(devolverCupoDiario(db as any, '2026-09-09', 10)).rejects.toThrow('db caida');
+  });
+});
+
 // =======================================================================
 // 5) El interruptor.
 describe('estaPausado / estadoProgramado / establecerPausado', () => {
@@ -409,6 +472,32 @@ describe('estaPausado / estadoProgramado / establecerPausado', () => {
       pausado: true,
       pausadoPor: 'Beto',
       pausadoAt: '2026-09-01T00:00:00.000Z',
+      ultimoError: null,
+      ultimoErrorAt: null,
+    });
+  });
+
+  // Hallazgo de producción (2026-09-18): "que se vea" -- el mensaje de la
+  // última corrida fallida del cron vive en la misma fila.
+  it('estadoProgramado devuelve ultimoError/ultimoErrorAt cuando la ultima corrida fallo', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: [
+        {
+          id: 1,
+          pausado: false,
+          pausado_por: null,
+          pausado_at: null,
+          ultimo_error: 'Resend 422: ...',
+          ultimo_error_at: '2026-09-17T15:00:00.000Z',
+        },
+      ],
+    });
+    await expect(estadoProgramado(db as any)).resolves.toEqual({
+      pausado: false,
+      pausadoPor: null,
+      pausadoAt: null,
+      ultimoError: 'Resend 422: ...',
+      ultimoErrorAt: '2026-09-17T15:00:00.000Z',
     });
   });
 
@@ -422,6 +511,45 @@ describe('estaPausado / estadoProgramado / establecerPausado', () => {
       pausado_por: 'Ana Solano',
       pausado_at: '2026-09-09T15:00:00.000Z',
     });
+  });
+});
+
+// Hallazgo de producción (2026-09-18): "que se vea" -- lo que
+// app/api/campanas/cron/route.ts llama con el resultado de
+// ejecutarEnvioProgramado, cada corrida.
+describe('registrarResultadoProgramado', () => {
+  it('con ok:false, escribe el mensaje y la hora', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: [{ id: 1, pausado: false, pausado_por: null, pausado_at: null }],
+    });
+    const ahora = () => new Date('2026-09-18T15:00:00.000Z');
+    await registrarResultadoProgramado(db as any, { ok: false, error: 'Resend 422: ...' }, ahora);
+    expect(db.estado.campanas_programado_config[0].ultimo_error).toBe('Resend 422: ...');
+    expect(db.estado.campanas_programado_config[0].ultimo_error_at).toBe('2026-09-18T15:00:00.000Z');
+  });
+
+  // Mata al mutante que sólo escribiera cuando `ok:false` y dejara lo
+  // viejo intacto en `ok:true`: una corrida buena tras tres días fallando
+  // tiene que LIMPIAR el aviso, no dejarlo pegado para siempre.
+  it('con ok:true, limpia un ultimo_error previo', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: [
+        { id: 1, pausado: false, pausado_por: null, pausado_at: null, ultimo_error: 'viejo', ultimo_error_at: 'x' },
+      ],
+    });
+    await registrarResultadoProgramado(db as any, { ok: true });
+    expect(db.estado.campanas_programado_config[0].ultimo_error).toBeNull();
+    expect(db.estado.campanas_programado_config[0].ultimo_error_at).toBeNull();
+  });
+
+  it('propaga el error de escritura como una excepcion legible', async () => {
+    const db = crearDbFake({ campanas_programado_config: [{ id: 1, pausado: false, pausado_por: null, pausado_at: null }] });
+    const tablaOriginal = db.from;
+    db.from = ((t: string) => {
+      if (t !== 'campanas_programado_config') return tablaOriginal(t);
+      return { update: () => ({ eq: async () => ({ error: { message: 'db caida' } }) }) };
+    }) as any;
+    await expect(registrarResultadoProgramado(db as any, { ok: false, error: 'x' })).rejects.toThrow('db caida');
   });
 });
 
@@ -574,6 +702,65 @@ describe('ejecutarEnvioProgramado', () => {
       expect(filasDeLaCampana.filter((f) => f.estado === 'enviado')).toHaveLength(25);
       expect(filasDeLaCampana.filter((f) => f.estado === 'pendiente')).toHaveLength(5);
     }
+  });
+
+  // Hallazgo de producción (2026-09-18): 201 cupos quemados en tres días
+  // porque la tanda entera fallaba contra Resend DESPUÉS de que el cupo ya
+  // se había reservado. Mata al mutante que borrara la llamada a
+  // `devolverCupoDiario`: sin ella, `campanas_envio_diario` seguiría
+  // mostrando 25 usados aunque no salió NI UN correo.
+  it('si la tanda entera falla contra Resend, devuelve el cupo reservado -- no lo deja quemado', async () => {
+    const db = crearDbFake({ campanas_programado_config: [{ id: 1, pausado: false, pausado_por: null, pausado_at: null }] });
+    const contactos = Array.from({ length: 30 }, (_, i) => contacto(i));
+    const fetchImpl = fetchImplCombinadoConFalloResend({ [zonaUno]: contactos });
+    const ahora = () => new Date('2026-09-09T15:00:00.000Z');
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r.ok).toBe(false);
+    // El cupo del día 1 (25) se reservó y se devolvió entero -- queda en 0
+    // usados, no en 25.
+    expect(db.estado.campanas_envio_diario).toEqual([{ fecha: '2026-09-09', tope: 25, enviados: 0 }]);
+    // Nadie quedó marcado -- la campaña sigue con sus 30 en 'pendiente',
+    // lista para que el cron de mañana la retome con el cupo completo.
+    const filasDeLaCampana = db.estado.campanas_envios.filter((e) => e.campana_id !== undefined);
+    expect(filasDeLaCampana.every((f) => f.estado === 'pendiente')).toBe(true);
+  });
+
+  // El mismo arreglo, para el otro camino que termina en "no salió nada":
+  // Resend rechaza el LOTE con un 422 validation_error (permanente) --
+  // `enviarTanda` cierra las filas como 'error' (no las deja pendientes,
+  // ver lib/campanas/envio.ts) pero tampoco salió NINGÚN correo de
+  // verdad, así que el cupo se devuelve igual.
+  it('si Resend rechaza el lote con un 422 permanente, tambien devuelve el cupo (0 enviados de verdad)', async () => {
+    const db = crearDbFake({ campanas_programado_config: [{ id: 1, pausado: false, pausado_por: null, pausado_at: null }] });
+    const contactos = Array.from({ length: 30 }, (_, i) => contacto(i));
+    const fetchImpl = fetchImplCombinadoConFalloResend(
+      { [zonaUno]: contactos },
+      { status: 422, cuerpo: { statusCode: 422, name: 'validation_error', message: 'Invalid `to` field.' } },
+    );
+    const ahora = () => new Date('2026-09-09T15:00:00.000Z');
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', enviados: 0, fallidos: 25 });
+    expect(db.estado.campanas_envio_diario).toEqual([{ fecha: '2026-09-09', tope: 25, enviados: 0 }]);
+  });
+
+  // El contraste: el camino FELIZ de arriba (25 enviados de verdad) NO
+  // devuelve nada -- el cupo usado se queda en 25, tal como ya comprobaba
+  // esa prueba. Ésta lo deja explícito con `devolverCupoDiario` de por
+  // medio, para que un mutante que devolviera el cupo SIEMPRE (sin mirar
+  // `enviados`) se note acá, no sólo por casualidad en la prueba de arriba.
+  it('con envios de verdad, NO devuelve nada del cupo', async () => {
+    const db = crearDbFake({ campanas_programado_config: [{ id: 1, pausado: false, pausado_por: null, pausado_at: null }] });
+    const contactos = Array.from({ length: 10 }, (_, i) => contacto(i));
+    const fetchImpl = fetchImplCombinado({ [zonaUno]: contactos });
+    const ahora = () => new Date('2026-09-09T15:00:00.000Z');
+
+    await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(db.estado.campanas_envio_diario).toEqual([{ fecha: '2026-09-09', tope: 25, enviados: 10 }]);
   });
 
   it('cupo agotado: si el día ya gastó su tope, no llama a Resend y avisa cupo_agotado', async () => {
