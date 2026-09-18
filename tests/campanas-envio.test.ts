@@ -1,6 +1,14 @@
 // tests/campanas-envio.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { crearCampana, enviarTanda, cancelarCampana, TAMANO_TANDA, MINUTOS_RESERVA_VENCIDA } from '@/lib/campanas/envio';
+import {
+  crearCampana,
+  enviarTanda,
+  cancelarCampana,
+  TAMANO_TANDA,
+  MINUTOS_RESERVA_VENCIDA,
+  direccionInvalidaParaResend,
+  esFalloPermanenteDeLote,
+} from '@/lib/campanas/envio';
 import { filtrarPermitidosParaCampana } from '@/lib/campanas/exclusiones';
 import type { DestinatarioCampana } from '@/lib/campanas/contactos';
 
@@ -224,6 +232,77 @@ function respuestaResend(body: unknown, status = 200) {
 
 const depsEnvio = { resendApiKey: 'llave', remitente: 'Luxe <campanas@luxe.cr>' };
 
+// ---------------------------------------------------------------------
+// Hallazgo de producción (2026-09-18): tres días hábiles sin mandar un
+// solo correo porque UNA dirección mal digitada (jurodríduez@cafebritt.com,
+// con una "í") trababa el lote entero contra Resend. Ver el comentario
+// grande de `direccionInvalidaParaResend` en lib/campanas/envio.ts para la
+// evidencia medida completa.
+describe('direccionInvalidaParaResend', () => {
+  // La dirección REAL del incidente -- el caso que de verdad ocurrió y el
+  // que nunca debe volver a pasar en silencio.
+  it('rechaza la direccion real del incidente (jurodríduez@cafebritt.com, con "í")', () => {
+    expect(direccionInvalidaParaResend('jurodríduez@cafebritt.com')).toEqual(expect.any(String));
+  });
+
+  it('rechaza una direccion con ñ', () => {
+    expect(direccionInvalidaParaResend('info@peña.cr')).toEqual(expect.any(String));
+  });
+
+  // Mata al mutante que invirtiera la regex (`^` en vez de `^[^...]`, o que
+  // devolviera el motivo para una dirección BUENA): una dirección puramente
+  // ASCII, aunque tenga guiones o puntos, tiene que pasar sin motivo.
+  it('acepta una direccion puramente ASCII', () => {
+    expect(direccionInvalidaParaResend('ana.rodriguez@hotel-de-prueba.cr')).toBeNull();
+  });
+});
+
+describe('esFalloPermanenteDeLote', () => {
+  // El caso real, medido contra Resend: 422 + name:"validation_error".
+  it('un 422 con name:"validation_error" es permanente', () => {
+    expect(
+      esFalloPermanenteDeLote(422, {
+        statusCode: 422,
+        name: 'validation_error',
+        message: 'Invalid `to` field. The email address contains non-ASCII characters.',
+      }),
+    ).toBe(true);
+  });
+
+  // Mata al mutante que tratara CUALQUIER 4xx como permanente: una llave
+  // vencida (401) o un límite de tasa (429) no son un problema del
+  // CONTENIDO de la tanda -- el mismo payload sí puede pasar más tarde.
+  it('un 401 (llave invalida) NO es permanente, aunque sea un 4xx', () => {
+    expect(esFalloPermanenteDeLote(401, { statusCode: 401, name: 'invalid_api_key', message: 'no autorizado' })).toBe(
+      false,
+    );
+  });
+
+  it('un 429 (limite de tasa) NO es permanente', () => {
+    expect(
+      esFalloPermanenteDeLote(429, { statusCode: 429, name: 'rate_limit_exceeded', message: 'demasiadas peticiones' }),
+    ).toBe(false);
+  });
+
+  // Un 5xx nunca es permanente, sin importar el cuerpo.
+  it('un 500 no es permanente', () => {
+    expect(esFalloPermanenteDeLote(500, { name: 'validation_error' })).toBe(false);
+  });
+
+  // Mata al mutante que sólo mirara el status (422) sin comprobar `name`:
+  // un 422 por otro motivo documentado por Resend no es, necesariamente,
+  // el mismo caso permanente.
+  it('un 422 sin name:"validation_error" no es permanente', () => {
+    expect(esFalloPermanenteDeLote(422, { statusCode: 422, name: 'missing_required_field' })).toBe(false);
+  });
+
+  // Mata al mutante que reventara (o devolviera `true`) con un cuerpo sin
+  // forma de objeto -- el llamador ya cubre "no hay JSON" pasando `null`.
+  it('con cuerpo null, no es permanente', () => {
+    expect(esFalloPermanenteDeLote(422, null)).toBe(false);
+  });
+});
+
 describe('enviarTanda', () => {
   beforeEach(() => {
     process.env.LUXE_BAJA_SECRETO = 'secreta';
@@ -402,6 +481,109 @@ describe('enviarTanda', () => {
         expect.objectContaining({ id: 'env-3', estado: 'enviado', resend_id: 'r-3' }),
       ],
     });
+  });
+
+  // ---------------------------------------------------------------------
+  // Hallazgo de producción (2026-09-18): la dirección REAL del incidente --
+  // jurodríduez@cafebritt.com -- no puede volver a trancar a las otras 66.
+  // Mata al mutante que armara el payload con `filas` en vez de
+  // `filasValidas`: sin el filtro, la dirección inválida viajaría dentro
+  // del `body` mandado a Resend.
+  it('una direccion invalida se marca error y las otras de la MISMA tanda se mandan igual', async () => {
+    const filas = [
+      filaReclamada(1),
+      { id: 'env-mala', correo: 'jurodríduez@cafebritt.com', nombre_crm: 'GRUPO CAFE BRITT' },
+      filaReclamada(3),
+    ];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(respuestaResend({ data: [{ id: 'r-1' }, { id: 'r-3' }] }));
+
+    const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(r).toEqual({ ok: true, procesados: 3, enviados: 2, fallidos: 1, terminada: true });
+    // La dirección mala NUNCA viaja a Resend -- el body sólo trae las dos
+    // válidas.
+    const cuerpo = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(cuerpo).toHaveLength(2);
+    expect(cuerpo.map((c: any) => c.to[0])).toEqual(['c1@hotel.com', 'c3@hotel.com']);
+    // Se cierran las tres en UNA sola llamada -- la mala como 'error' con
+    // motivo escrito, las otras dos como 'enviado' (las inválidas se cierran
+    // primero, luego las válidas -- el orden entre sí no importa, ninguna
+    // fila se pierde ni se cierra dos veces).
+    const llamadaCierre = db.rpc.mock.calls.find((llamada) => llamada[0] === 'campanas_cerrar_tanda');
+    expect(llamadaCierre).toBeDefined();
+    const resultados = llamadaCierre![1].p_resultados as unknown[];
+    expect(resultados).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'env-1', estado: 'enviado', resend_id: 'r-1' }),
+        expect.objectContaining({ id: 'env-mala', estado: 'error', resend_id: null, error: expect.any(String) }),
+        expect.objectContaining({ id: 'env-3', estado: 'enviado', resend_id: 'r-3' }),
+      ]),
+    );
+    expect(resultados).toHaveLength(3);
+  });
+
+  // El caso límite del mismo arreglo: si TODO lo reclamado es inválido, ni
+  // siquiera se llama a Resend -- no tiene sentido mandar un lote vacío.
+  // Mata al mutante que quitara el chequeo `filasValidas.length === 0`: sin
+  // él, `fetchImpl` se llamaría con un `body` de arreglo vacío.
+  it('si TODAS las direcciones reclamadas son invalidas, no llama a Resend', async () => {
+    const filas = [{ id: 'env-mala', correo: 'jurodríduez@cafebritt.com', nombre_crm: 'GRUPO CAFE BRITT' }];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn();
+
+    const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: true, procesados: 1, enviados: 0, fallidos: 1, terminada: true });
+    expect(db.rpc).toHaveBeenCalledWith('campanas_cerrar_tanda', {
+      p_resultados: [expect.objectContaining({ id: 'env-mala', estado: 'error' })],
+    });
+  });
+
+  // Defecto 2: un 422 "validation_error" real (el mismo que causó el
+  // incidente) para el LOTE YA VALIDADO -- Resend igual lo rechazó por
+  // algún otro motivo -- se trata como PERMANENTE: se cierra la tanda
+  // entera como 'error' en vez de dejarla 'pendiente' para siempre. Mata
+  // al mutante que tratara este caso como pasajero (ok:false sin marcar
+  // nada): sin el arreglo, esta prueba fallaría porque `db.rpc` nunca se
+  // llamaría con `campanas_cerrar_tanda`.
+  it('un 422 validation_error del lote entero (permanente) cierra la tanda como error, no la deja pendiente', async () => {
+    const filas = [filaReclamada(1), filaReclamada(2)];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      respuestaResend(
+        { statusCode: 422, name: 'validation_error', message: 'Invalid `to` field.' },
+        422,
+      ),
+    );
+
+    const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(r).toEqual({ ok: true, procesados: 2, enviados: 0, fallidos: 2, terminada: true });
+    expect(db.rpc).toHaveBeenCalledWith('campanas_cerrar_tanda', {
+      p_resultados: [
+        expect.objectContaining({ id: 'env-1', estado: 'error', resend_id: null }),
+        expect.objectContaining({ id: 'env-2', estado: 'error', resend_id: null }),
+      ],
+    });
+  });
+
+  // El contraste que prueba que el criterio SÍ distingue: un 429 (límite de
+  // tasa) es un 4xx, pero PASAJERO -- no se marca nada, se deja 'pendiente'
+  // para reintentar. Mata al mutante que ensanchara `esFalloPermanenteDeLote`
+  // a "cualquier 4xx".
+  it('un 429 (limite de tasa) del lote entero es pasajero: no marca nada', async () => {
+    const filas = [filaReclamada(1)];
+    const db = dbParaEnviar({ campana: campanaGuardada, reclamo: { data: filas, error: null } });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      respuestaResend({ statusCode: 429, name: 'rate_limit_exceeded', message: 'demasiadas peticiones' }, 429),
+    );
+
+    const r = await enviarTanda('camp-1', { ...depsEnvio, fetchImpl }, db as any);
+
+    expect(r).toEqual({ ok: false, error: expect.stringContaining('429') });
+    expect(db.rpc).not.toHaveBeenCalledWith('campanas_cerrar_tanda', expect.anything());
   });
 
   // El corazón del diseño de "retomable ante un fallo de Resend": si la

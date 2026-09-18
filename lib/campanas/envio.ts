@@ -262,6 +262,95 @@ export type ResultadoTanda =
 
 type FilaEnvio = { id: string; correo: string; nombre_crm: string };
 
+// Hallazgo de producción (2026-09-18): del 10 al 18 de setiembre la zona
+// Heredia / Norte GAM no mandó un solo correo en tres días hábiles.
+// Resend rechazaba el LOTE ENTERO (67 direcciones) por UNA sola dirección
+// mal digitada en el CRM -- jurodríduez@cafebritt.com, con una "í" (U+00ED)
+// -- con este 422 medido contra la API real:
+//   {"statusCode":422,"name":"validation_error","message":"Invalid `to`
+//   field. The email address contains non-ASCII characters."}
+// `enviarTanda` no marca ninguna fila ante un 4xx del LOTE (ver "SOBRE LOS
+// FALLOS", más abajo) -- correcto para un fallo pasajero, pero un rechazo
+// de VALIDACIÓN no es pasajero: el cron reclamaba, al día siguiente,
+// exactamente el mismo lote, con la misma dirección mala adelante, y
+// fallaba igual. Para siempre, en silencio.
+//
+// Esta función es la primera de las dos piezas del arreglo: valida CADA
+// dirección, ANTES de armar el payload, contra la MISMA regla que Resend
+// aplicó de verdad -- no ASCII en el campo `to`. Una dirección que la
+// pase nunca entra a la petición: se cierra sola, como 'error', con el
+// motivo escrito en su columna -- y el resto de la tanda (los otros 66)
+// sale por Resend sin enterarse. Devuelve el motivo (para escribirlo tal
+// cual en `campanas_envios.error`) o `null` si la dirección pasa.
+//
+// Deliberadamente angosta -- sólo la regla que de verdad causó el
+// incidente medido, no un validador de correos genérico (RFC 5322 completo
+// es mucho más de lo que hace falta acá, y un formato "raro" pero ASCII
+// que Resend sí aceptaría no tiene por qué rechazarse antes de intentarlo).
+export function direccionInvalidaParaResend(correo: string): string | null {
+  if (/[^\x00-\x7F]/.test(correo)) {
+    return 'Resend rechaza esta dirección: tiene caracteres no ASCII (por ejemplo, una tilde o una ñ).';
+  }
+  return null;
+}
+
+// La segunda pieza del arreglo: cuando Resend SÍ rechaza el lote entero
+// (después de filtrar las direcciones que ya se sabía que iba a rechazar,
+// arriba), hay que decidir si vale la pena dejarlo 'pendiente' para que
+// `campanas_reclamar_pendientes` lo retome solo, o si insistir es inútil.
+//
+// EL CRITERIO, con la evidencia medida de este mismo incidente: Resend
+// documenta un campo `name` en el cuerpo del error que dice POR QUÉ
+// rechazó la petición. `"validation_error"` (siempre con estado HTTP 422)
+// significa, letra por letra, que el CONTENIDO de la petición no cumple lo
+// que Resend exige -- mandar exactamente el mismo cuerpo otra vez produce,
+// siempre, el mismo rechazo. Eso es, precisamente, la definición de "no se
+// arregla insistiendo": PERMANENTE para este lote.
+//
+// Por qué NO "cualquier 4xx es permanente" -- la trampa más fácil acá:
+// 401/403 (llave de Resend vencida, mal configurada, o revocada) y 429
+// (límite de tasa) también son 4xx, pero NINGUNO de los dos es un problema
+// del CONTENIDO de esta tanda en particular -- una llave que se renueva, o
+// una ventana de límite que pasa, hace que el MISMO payload sí pase la
+// próxima vez. Tratarlos como permanentes marcaría 'error', para siempre,
+// a decenas de direcciones perfectamente buenas por un problema de
+// configuración o de tráfico que no tiene nada que ver con ellas -- el
+// mismo tipo de daño colateral que el defecto 1 (arriba) evita para una
+// sola dirección mala, pero aplicado, esta vez, a los 67 destinatarios
+// enteros. Por eso el criterio es angosto a propósito: SÓLO 422 con
+// `name === 'validation_error'`, nada más.
+export function esFalloPermanenteDeLote(status: number, cuerpo: unknown): boolean {
+  if (status !== 422) return false;
+  const nombre = (cuerpo as { name?: unknown } | null)?.name;
+  return nombre === 'validation_error';
+}
+
+// Cierra (RPC `campanas_cerrar_tanda`) los resultados que haya que cerrar
+// en esta llamada -- que pueden ser un subconjunto de la tanda reclamada
+// (sólo las direcciones inválidas, si Resend todavía no respondió nada) o
+// la tanda entera. Un arreglo vacío no llama al rpc para nada -- es
+// EXACTAMENTE lo que mantiene intacta la garantía de "SOBRE LOS FALLOS":
+// un fallo de la llamada entera a Resend (red caída, 4xx/5xx pasajero)
+// sigue sin marcar ninguna fila cuando no había ninguna dirección inválida
+// de por medio.
+type CambioFila = {
+  id: string;
+  estado: 'enviado' | 'error';
+  resend_id: string | null;
+  error: string | null;
+  actualizado_at: string;
+};
+
+async function cerrarTanda(db: ClienteCampanas, campanaId: string, cambios: CambioFila[]): Promise<void> {
+  if (cambios.length === 0) return;
+  const { error: errorCierre } = await db.rpc(RPC_CERRAR_TANDA, { p_resultados: cambios });
+  if (errorCierre) {
+    // Ventana angosta y aceptada -- ver el comentario grande de
+    // `enviarTanda` sobre por qué esto no se reintenta desde acá.
+    console.error('[campanas] No se pudo cerrar la tanda.', campanaId, errorCierre.message);
+  }
+}
+
 // Manda UNA tanda (hasta `TAMANO_TANDA` destinatarios) de una campaña ya
 // creada, y devuelve un resumen. Se llama repetidas veces -- desde la
 // pantalla (parte 2), un botón "continuar" o un intervalo -- hasta que
@@ -270,18 +359,33 @@ type FilaEnvio = { id: string; correo: string; nombre_crm: string };
 // porque eso vive en `campanas_envios` (migración 0019).
 //
 // SOBRE LOS FALLOS -- la distinción que sostiene todo el diseño:
-//   - Un fallo de la LLAMADA A RESEND ENTERA (red caída, Resend devuelve
-//     un 4xx/5xx, JSON ilegible): no se marca NINGUNA fila. Se asume que,
-//     si la petición no terminó en un 2xx, Resend no aceptó ningún correo
-//     de esta tanda -- así que no hay nada que deshacer, sólo dejar la
-//     reserva ('pendiente', con `actualizado_at` reciente) donde estaba.
-//     Pasados `MINUTOS_RESERVA_VENCIDA`, `campanas_reclamar_pendientes` la
-//     vuelve a entregar sola, en una tanda futura. Así es como "un fallo
-//     de Resend" queda retomable sin ningún código especial para ese caso
-//     -- es el MISMO mecanismo que recupera una tanda cortada a mitad de
-//     camino por cualquier otro motivo (el servidor se corta, la pestaña
-//     se cierra): ambos dejan la fila 'pendiente' con una reserva que,
-//     tarde o temprano, vence.
+//   - Una dirección que Resend YA SE SABE que va a rechazar (hallazgo de
+//     producción, 2026-09-18: `direccionInvalidaParaResend`, arriba) nunca
+//     llega a la petición -- se cierra sola, como 'error', ANTES de armar
+//     el payload. Es lo que evita que una sola dirección mala envenene a
+//     los demás destinatarios de la misma tanda.
+//   - Un fallo de la LLAMADA A RESEND ENTERA (red caída, un 4xx/5xx
+//     PASAJERO, JSON ilegible): no se marca NINGUNA de las filas que sí se
+//     mandaron a intentar. Se asume que, si la petición no terminó en un
+//     2xx, Resend no aceptó ningún correo de esta tanda -- así que no hay
+//     nada que deshacer, sólo dejar la reserva ('pendiente', con
+//     `actualizado_at` reciente) donde estaba. Pasados
+//     `MINUTOS_RESERVA_VENCIDA`, `campanas_reclamar_pendientes` la vuelve a
+//     entregar sola, en una tanda futura. Así es como "un fallo de Resend"
+//     queda retomable sin ningún código especial para ese caso -- es el
+//     MISMO mecanismo que recupera una tanda cortada a mitad de camino por
+//     cualquier otro motivo (el servidor se corta, la pestaña se cierra):
+//     ambos dejan la fila 'pendiente' con una reserva que, tarde o
+//     temprano, vence.
+//   - Un fallo de la LLAMADA A RESEND ENTERA que es PERMANENTE (hallazgo de
+//     producción, 2026-09-18: `esFalloPermanenteDeLote`, arriba -- un 422
+//     `validation_error`): insistir con el MISMO payload produce, siempre,
+//     el mismo rechazo -- dejarlo 'pendiente' es el bucle infinito y mudo
+//     que trancó Heredia / Norte GAM tres días. Acá SÍ se marcan todas las
+//     filas de la tanda como 'error' (con el mensaje de Resend), lo que
+//     libera la reserva -- la zona sigue adelante mañana -- y queda visible
+//     en el historial como destinatarios "con error", en vez de perderse
+//     en un limbo silencioso.
 //   - Un fallo de UN destinatario dentro de una llamada que SÍ tuvo éxito
 //     (Resend contestó 2xx pero no confirmó un id para ese ítem en
 //     particular): esa fila SÍ se marca 'error', de forma permanente. No
@@ -290,12 +394,14 @@ type FilaEnvio = { id: string; correo: string; nombre_crm: string };
 //     el problema fue de lectura de la respuesta y no de que Resend lo
 //     haya rechazado de verdad. "Un fallo de un destinatario no tumba la
 //     tanda: se registra y se sigue" -- el resto de `enviados` sigue su
-//     curso normal. Y este cierre -- marcar el resultado de los hasta cien
-//     destinatarios de la tanda -- es, él mismo, UNA sola llamada
-//     (`campanas_cerrar_tanda`, migración 0023), no cien peticiones sueltas
-//     que puedan cortarse a la mitad: ver el comentario grande, más abajo,
-//     junto a esa llamada, sobre la garantía exacta que resuelve (hallazgo
-//     importante de la revisión final, punto 1).
+//     curso normal.
+// Cerrar lo que corresponda de la tanda -- marcar el resultado de hasta
+// cien destinatarios -- es siempre, en cualquiera de las ramas de arriba,
+// UNA sola llamada (`cerrarTanda`, que envuelve el rpc `campanas_cerrar_tanda`
+// de la migración 0023), no cien peticiones sueltas que puedan cortarse a
+// la mitad: ver el comentario grande junto a esa función, más arriba, sobre
+// la garantía exacta que resuelve (hallazgo importante de la revisión
+// final, punto 1).
 export async function enviarTanda(
   campanaId: string,
   deps: DepsEnvioCampana,
@@ -349,6 +455,41 @@ export async function enviarTanda(
     return { ok: true, procesados: 0, enviados: 0, fallidos: 0, terminada: true };
   }
 
+  // Defecto 1 -- separar, ANTES de armar el payload, las direcciones que
+  // Resend YA SE SABE que va a rechazar. Ver `direccionInvalidaParaResend`,
+  // más arriba, para el porqué exacto (jurodríduez@cafebritt.com).
+  const filasInvalidas: Array<{ fila: FilaEnvio; motivo: string }> = [];
+  const filasValidas: FilaEnvio[] = [];
+  for (const f of filas) {
+    const motivo = direccionInvalidaParaResend(f.correo);
+    if (motivo) filasInvalidas.push({ fila: f, motivo });
+    else filasValidas.push(f);
+  }
+
+  const ahoraCierre = new Date().toISOString();
+  const cambiosInvalidos: CambioFila[] = filasInvalidas.map(({ fila, motivo }) => ({
+    id: fila.id,
+    estado: 'error',
+    resend_id: null,
+    error: motivo,
+    actualizado_at: ahoraCierre,
+  }));
+
+  // Todo lo reclamado era inválido -- no hay nada que mandarle a Resend.
+  // Se cierran las inválidas (una sola llamada) y se devuelve sin tocar la
+  // red: exactamente el caso de "todas las direcciones invalidas" que le
+  // pasaría a una zona cuyo único pendiente fuera la fila mala.
+  if (filasValidas.length === 0) {
+    await cerrarTanda(db, campanaId, cambiosInvalidos);
+    return {
+      ok: true,
+      procesados: filas.length,
+      enviados: 0,
+      fallidos: cambiosInvalidos.length,
+      terminada: filas.length < limite,
+    };
+  }
+
   // Menor (revisión final): `preview_text` no varía por destinatario --
   // igual que `asunto` -- así que se resuelve UNA sola vez acá, no dentro
   // del `.map` de abajo. Ver el comentario grande de `inyectarVistaPrevia`
@@ -357,7 +498,10 @@ export async function enviarTanda(
   // horneada).
   const htmlConVistaPrevia = inyectarVistaPrevia(campana.html as string, campana.preview_text as string | null);
 
-  const payload = filas.map((f) => ({
+  // El payload sale de `filasValidas`, NUNCA de `filas` -- es lo que evita
+  // que una dirección inválida viaje adentro de la petición y tumbe la
+  // tanda entera.
+  const payload = filasValidas.map((f) => ({
     from: remitente,
     to: [f.correo],
     subject: campana.asunto as string,
@@ -376,15 +520,54 @@ export async function enviarTanda(
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    // No se toca ninguna fila -- ver el comentario grande de arriba,
-    // "SOBRE LOS FALLOS". Un error de red se retoma solo.
+    // No se toca ninguna fila VÁLIDA -- ver "SOBRE LOS FALLOS", más arriba.
+    // Un error de red se retoma solo. Las inválidas SÍ se cierran: no
+    // dependen de la red, ya se sabía que Resend las iba a rechazar.
+    await cerrarTanda(db, campanaId, cambiosInvalidos);
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
   const texto = await res.text();
   if (!res.ok) {
-    // Mismo criterio que el catch de arriba: un 4xx/5xx de Resend para
-    // TODA la tanda no marca nada -- se retoma solo.
+    // Defecto 2 -- permanente vs pasajero. Ver `esFalloPermanenteDeLote`,
+    // más arriba, para el criterio completo y por qué.
+    let cuerpoError: unknown = null;
+    try {
+      cuerpoError = JSON.parse(texto);
+    } catch {
+      // Sin JSON no hay forma de confirmar el motivo -- se trata como
+      // pasajero (la rama de abajo).
+    }
+
+    if (esFalloPermanenteDeLote(res.status, cuerpoError)) {
+      // El mismo payload va a fallar SIEMPRE de la misma forma -- insistir
+      // no lo arregla. Se cierra la tanda ENTERA (inválidas + válidas) como
+      // 'error', lo que libera la reserva para siempre en vez de trancarla
+      // -- y queda visible en el historial, en vez del bucle mudo de hoy.
+      const mensaje = `Resend rechazó el lote entero: ${texto.slice(0, 300)}`;
+      const cambios = cambiosInvalidos.concat(
+        filasValidas.map((f) => ({
+          id: f.id,
+          estado: 'error' as const,
+          resend_id: null,
+          error: mensaje,
+          actualizado_at: ahoraCierre,
+        })),
+      );
+      await cerrarTanda(db, campanaId, cambios);
+      return {
+        ok: true,
+        procesados: filas.length,
+        enviados: 0,
+        fallidos: cambios.length,
+        terminada: filas.length < limite,
+      };
+    }
+
+    // Pasajero (401/403/429/5xx, u otro 422 sin `name: 'validation_error'`):
+    // mismo criterio de siempre -- las válidas se dejan 'pendiente' para
+    // que se retomen solas. Las inválidas SÍ se cierran.
+    await cerrarTanda(db, campanaId, cambiosInvalidos);
     return { ok: false, error: `Resend ${res.status}: ${texto.slice(0, 300)}` };
   }
 
@@ -392,13 +575,13 @@ export async function enviarTanda(
   try {
     datos = JSON.parse(texto);
   } catch {
+    await cerrarTanda(db, campanaId, cambiosInvalidos);
     return { ok: false, error: `Resend respondió con JSON ilegible: ${texto.slice(0, 200)}` };
   }
 
   const resultados = datos.data ?? [];
   let enviados = 0;
-  let fallidos = 0;
-  const ahoraCierre = new Date().toISOString();
+  let fallidos = cambiosInvalidos.length;
 
   // Hallazgo importante (revisión final, punto 1): esto ANTES era hasta
   // CIEN `.update().eq('id', ...)` sueltos, uno por destinatario, todos en
@@ -434,7 +617,7 @@ export async function enviarTanda(
   // parciales. Cerrar del todo ese riesgo exigiría una clave de
   // idempotencia del lado de Resend, que la API de lote no ofrece hoy --
   // fuera del alcance de este arreglo.
-  const cambios = filas.map((f, i) => {
+  const cambiosValidos: CambioFila[] = filasValidas.map((f, i) => {
     const resendId = resultados[i]?.id;
     if (resendId) {
       enviados++;
@@ -450,15 +633,7 @@ export async function enviarTanda(
     };
   });
 
-  const { error: errorCierre } = await db.rpc(RPC_CERRAR_TANDA, { p_resultados: cambios });
-  if (errorCierre) {
-    // Ventana angosta y aceptada -- ver el comentario grande de arriba: los
-    // destinatarios con `resendId` YA recibieron el correo, así que no se
-    // puede "reintentar" este cierre desde acá sin arriesgar mandarlos de
-    // nuevo si el problema fue sólo de escribir el resultado. Se deja
-    // constancia ruidosa para que alguien lo reconcilie a mano.
-    console.error('[campanas] No se pudo cerrar la tanda.', campanaId, errorCierre.message);
-  }
+  await cerrarTanda(db, campanaId, cambiosInvalidos.concat(cambiosValidos));
 
   return {
     ok: true,
