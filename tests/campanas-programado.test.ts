@@ -917,3 +917,229 @@ describe('ejecutarEnvioProgramado', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+// =======================================================================
+// 6) El bucle de tandas (2026-10-04): cuando la zona en curso se termina y
+// todavía sobra cupo del día, la corrida sigue con la zona siguiente.
+// Medido en producción antes del arreglo: cupo usado 29 100 47 100 56 100
+// 70 100 82 100 -- cada zona terminaba con un día parcial y el resto del
+// cupo se perdía.
+describe('ejecutarEnvioProgramado: encadena zonas dentro de la misma corrida', () => {
+  const zonaUno = ORDEN_ZONAS_PROGRAMADO[0];
+  const zonaDos = ORDEN_ZONAS_PROGRAMADO[1];
+  const configActiva = [{ id: 1, pausado: false, pausado_por: null, pausado_at: null }];
+  const ahora = () => new Date('2026-09-09T15:00:00.000Z');
+  // Ocho días previos -> hoy es día 9 de la rampa -> tope 100.
+  const diasPrevios = () =>
+    Array.from({ length: 8 }, (_, i) => ({ fecha: `2026-08-0${i + 1}`, tope: 100, enviados: 100 }));
+  const campanaZona = (id: string, zona: string) => ({
+    id,
+    zona,
+    plantilla: 'inicial',
+    programada: true,
+    asunto: 'Asunto de prueba',
+    html: 'Hola{{nombre}}, de {{empresa}}: {{unsubscribe_url}}',
+    preview_text: null,
+    cancelada_at: null,
+  });
+  const pendientes = (campana: string, n: number, prefijo: string) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `${prefijo}-${i}`,
+      campana_id: campana,
+      correo: `${prefijo}${i}@hotel.cr`,
+      estado: 'pendiente',
+      nombre_crm: `Hotel ${prefijo}${i}`,
+    }));
+  const correosEnviadosA = (fetchImpl: ReturnType<typeof vi.fn>) =>
+    fetchImpl.mock.calls
+      .filter((c: any[]) => String(c[0]).includes('resend.com'))
+      .reduce((acc: number, c: any[]) => acc + JSON.parse(c[1].body).length, 0);
+
+  it('29 pendientes en la zona en curso y cupo 100: manda 29 y completa los 71 con la zona siguiente', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 29, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    const fetchImpl = fetchImplCombinado({ [zonaDos]: Array.from({ length: 90 }, (_, i) => contacto(i)) });
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', cupoReservado: 100, procesados: 100, enviados: 100, fallidos: 0, corte: 'cupo' });
+    if (r.ok && r.accion === 'enviado') {
+      expect(r.tandas.map((t) => [t.zona, t.enviados, t.campanaNueva])).toEqual([
+        [zonaUno, 29, false],
+        [zonaDos, 71, true],
+      ]);
+    }
+    expect(db.estado.campanas_envio_diario.find((f) => f.fecha === '2026-09-09')).toEqual({ fecha: '2026-09-09', tope: 100, enviados: 100 });
+    expect(correosEnviadosA(fetchImpl)).toBe(100);
+    // Lo que no cupo hoy sigue pendiente para mañana.
+    const deZonaDos = db.estado.campanas_envios.filter((e) => e.campana_id !== 'c-1');
+    expect(deZonaDos.filter((e) => e.estado === 'pendiente')).toHaveLength(19);
+  });
+
+  it('el cupo es tope duro: con 60 ya reservados hoy, entre las dos zonas salen 40 y ni uno mas', async () => {
+    const diario = [...diasPrevios(), { fecha: '2026-09-09', tope: 100, enviados: 60 }];
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 29, 'a'),
+      campanas_envio_diario: diario,
+    });
+    const fetchImpl = fetchImplCombinado({ [zonaDos]: Array.from({ length: 90 }, (_, i) => contacto(i)) });
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', cupoReservado: 40, enviados: 40 });
+    expect(correosEnviadosA(fetchImpl)).toBe(40);
+    expect(db.estado.campanas_envio_diario.find((f) => f.fecha === '2026-09-09')!.enviados).toBe(100);
+  });
+
+  it('si el cupo se agota dentro de la zona en curso, no consulta GHL para armar la siguiente', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 100, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    const fetchImpl = fetchImplCombinado({ [zonaDos]: [contacto(1)] });
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', enviados: 100, corte: 'cupo' });
+    expect(fetchImpl.mock.calls.filter((c: any[]) => String(c[0]).includes('gohighlevel') || String(c[0]).includes('leadconnector'))).toHaveLength(0);
+    expect(db.estado.campanas.filter((c) => c.zona === zonaDos)).toHaveLength(0);
+  });
+
+  it('no es un bucle infinito: sin nadie elegible en ninguna zona siguiente, termina con las que mando', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 29, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    const fetchImpl = fetchImplCombinado({}); // las otras doce zonas, vacias en el CRM.
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', cupoReservado: 29, enviados: 29, corte: 'sin_pendientes' });
+    expect(db.estado.campanas.filter((c) => c.zona !== zonaUno)).toHaveLength(0);
+  });
+
+  it('no es un bucle infinito: una tanda que no procesa nada (filas en vuelo) corta la corrida y devuelve el cupo', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 10, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    const rpcOriginal = db.rpc.getMockImplementation()!;
+    db.rpc.mockImplementation(async (nombre: string, args: Record<string, unknown>) =>
+      nombre === 'campanas_reclamar_pendientes' ? { data: [], error: null } : rpcOriginal(nombre, args),
+    );
+    const fetchImpl = fetchImplCombinado({});
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', procesados: 0, enviados: 0, corte: 'sin_avance' });
+    const reclamos = db.rpc.mock.calls.filter((c) => c[0] === 'campanas_reclamar_pendientes');
+    expect(reclamos).toHaveLength(1);
+    expect(db.estado.campanas_envio_diario.find((f) => f.fecha === '2026-09-09')!.enviados).toBe(0);
+  });
+
+  it('corta por tiempo ANTES de la tanda siguiente: lo que falta queda pendiente para manana, nada a medias', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno), campanaZona('c-2', zonaDos)],
+      campanas_envios: [...pendientes('c-1', 29, 'a'), ...pendientes('c-2', 100, 'b')],
+      campanas_envio_diario: diasPrevios(),
+    });
+    const fetchImpl = fetchImplCombinado({});
+    // inicio = 0; luego, ya pasaron 40 s (el presupuesto es 35 s).
+    const marcas = [0, 40_000, 40_000, 40_000];
+    let k = 0;
+    const relojMs = () => marcas[Math.min(k++, marcas.length - 1)];
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl, relojMs }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', enviados: 29, cupoReservado: 29, corte: 'tiempo' });
+    expect(correosEnviadosA(fetchImpl)).toBe(29);
+    // Cada fila esta 'enviado' o 'pendiente' -- ninguna en un estado intermedio.
+    expect(db.estado.campanas_envios.every((e) => e.estado === 'enviado' || e.estado === 'pendiente')).toBe(true);
+    expect(db.estado.campanas_envios.filter((e) => e.campana_id === 'c-2' && e.estado === 'pendiente')).toHaveLength(100);
+    // Y el cupo reservado coincide EXACTO con lo enviado: no queda cupo "colgado".
+    expect(db.estado.campanas_envio_diario.find((f) => f.fecha === '2026-09-09')!.enviados).toBe(29);
+  });
+
+  it('si el presupuesto ya se acabo al terminar la primera tanda, ni siquiera consulta GHL por la zona siguiente', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 29, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    const fetchImpl = fetchImplCombinado({ [zonaDos]: Array.from({ length: 50 }, (_, i) => contacto(i)) });
+    const marcas = [0, 40_000];
+    let k = 0;
+    const relojMs = () => marcas[Math.min(k++, marcas.length - 1)];
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl, relojMs }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', enviados: 29, corte: 'tiempo' });
+    expect(fetchImpl.mock.calls.filter((c: any[]) => !String(c[0]).includes('resend.com'))).toHaveLength(0);
+    expect(db.estado.campanas.filter((c) => c.zona === zonaDos)).toHaveLength(0);
+  });
+
+  it('si resolver una zona nueva se come el presupuesto, no manda ni reserva nada mas', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 29, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    const fetchImpl = fetchImplCombinado({ [zonaDos]: Array.from({ length: 50 }, (_, i) => contacto(i)) });
+    // inicio 0; tope de la vuelta 2: 10 s (ok); despues de resolver la zona: 50 s.
+    const marcas = [0, 10_000, 50_000];
+    let k = 0;
+    const relojMs = () => marcas[Math.min(k++, marcas.length - 1)];
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl, relojMs }, ahora);
+
+    expect(r).toMatchObject({ ok: true, accion: 'enviado', enviados: 29, corte: 'tiempo' });
+    expect(correosEnviadosA(fetchImpl)).toBe(29);
+    expect(db.estado.campanas_envio_diario.find((f) => f.fecha === '2026-09-09')!.enviados).toBe(29);
+    // La campana nueva quedo armada, sus 50 pendientes, lista para manana.
+    expect(db.estado.campanas_envios.filter((e) => e.campana_id !== 'c-1' && e.estado === 'pendiente')).toHaveLength(50);
+  });
+
+  it('si la segunda tanda falla, la corrida se reporta fallida pero dice cuanto salio antes y devuelve ese cupo', async () => {
+    const db = crearDbFake({
+      campanas_programado_config: configActiva,
+      campanas: [campanaZona('c-1', zonaUno)],
+      campanas_envios: pendientes('c-1', 29, 'a'),
+      campanas_envio_diario: diasPrevios(),
+    });
+    let llamadasResend = 0;
+    const contactosDos = Array.from({ length: 90 }, (_, i) => contacto(i));
+    const fetchImpl = vi.fn(async (url: any, init: any) => {
+      if (String(url).includes('resend.com')) {
+        llamadasResend++;
+        if (llamadasResend === 1) {
+          const payload = JSON.parse(init.body) as unknown[];
+          return respuestaResend({ data: payload.map((_, i) => ({ id: `r-${i}` })) });
+        }
+        return respuestaResend({ message: 'error interno' }, 500);
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ contacts: JSON.parse(init.body).filters?.[0]?.value === zonaDos ? contactosDos : [] }) } as unknown as Response;
+    });
+
+    const r = await ejecutarEnvioProgramado(db as any, { ...depsBase, fetchImpl }, ahora);
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('ya habia mandado 29');
+    // Los 29 salieron de verdad y siguen contados; los 71 de la tanda que fallo, devueltos.
+    expect(db.estado.campanas_envio_diario.find((f) => f.fecha === '2026-09-09')!.enviados).toBe(29);
+  });
+});

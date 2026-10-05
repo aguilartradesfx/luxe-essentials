@@ -48,11 +48,12 @@ import { progresoCampana } from '@/lib/campanas/progreso';
 // "la más chica primero" y "Revisión manual al final" son, acá, la MISMA
 // orden, no dos reglas en tensión).
 //
-// Cuando una zona se queda sin pendientes, la SIGUIENTE arranca sola en el
-// disparo del día siguiente -- nunca dentro de la misma corrida, aunque
-// sobre cupo del día (ver `resolverObjetivo`, más abajo, y su comentario
-// sobre por qué no encadena zonas dentro de una misma invocación cuando
-// una zona TERMINA de mandar).
+// Cuando una zona se queda sin pendientes, la SIGUIENTE arranca en la
+// MISMA corrida si todavía sobra cupo del día (ver `ejecutarEnvioProgramado`,
+// más abajo: el bucle de tandas). Antes (hasta 2026-10-04) cada corrida
+// mandaba UNA sola tanda y se detenía: el último tramo de cada zona era un
+// día parcial (29, 47, 56, 70, 82 de 100) y ese cupo se perdía -- ~780 de
+// 1.000 posibles en diez días hábiles.
 export const ORDEN_ZONAS_PROGRAMADO: readonly ZonaComercial[] = [
   'Guanacaste Interior', // 22
   'Caribe', // 50
@@ -375,10 +376,8 @@ export type ObjetivoProgramado =
 //     zona de hoy -- se sigue mandando la MISMA campaña, nunca se crea una
 //     segunda para la misma zona.
 //   - Si ya tiene una campaña programada SIN pendientes: esa zona ya
-//     terminó -- se pasa a la siguiente SIN mandar nada hoy por ella (el
-//     encargo es explícito: "la siguiente arranca sola en el disparo del
-//     día siguiente", nunca dentro de la misma corrida que terminó la
-//     anterior, aunque sobre cupo del día).
+//     terminó -- se pasa a la siguiente (y, desde 2026-10-04, la corrida
+//     sigue con ella si todavía sobra cupo del día).
 //   - Si todavía no tiene ninguna campaña: se arma AHORA (contra GHL, con
 //     el filtro de "ya recibió el inicial" y el de bajas) -- si después de
 //     los dos filtros no queda nadie elegible, esta zona se trata como YA
@@ -450,7 +449,49 @@ export async function resolverObjetivo(db: ClienteCampanas, deps: DepsGhlContact
 
 // ---------------------------------------------------------------------
 // 5) El disparo del día -- lo que `app/api/campanas/cron/route.ts` llama.
-export type DepsEnvioProgramado = Omit<DepsEnvioCampana, 'ahora' | 'limiteTanda'> & DepsGhlContactos;
+export type DepsEnvioProgramado = Omit<DepsEnvioCampana, 'ahora' | 'limiteTanda'> &
+  DepsGhlContactos & {
+    // Inyectables para probar el corte por tiempo sin esperar de verdad.
+    relojMs?: () => number;
+    presupuestoMs?: number;
+  };
+
+// La ruta del cron tiene `maxDuration = 60` s. Una tanda (reclamo + UNA
+// llamada de lote a Resend + cierre) NO se puede interrumpir sin riesgo: si
+// la función muere entre "Resend aceptó" y `campanas_cerrar_tanda`, esas
+// filas siguen 'pendiente' y a los 15 minutos se reenvían (duplicado a una
+// empresa real). Por eso el corte es SIEMPRE ANTES de empezar una tanda
+// nueva (o de resolver una zona nueva, que puede paginar GHL), nunca a la
+// mitad: se deja de arrancar trabajo a los 35 s y quedan 25 s de margen
+// para que termine la tanda que ya venía en curso. Lo que no salga hoy
+// sigue 'pendiente' y sale en la corrida de mañana.
+export const PRESUPUESTO_MS_CORRIDA = 35_000;
+
+// Red de seguridad contra un bucle que no termina nunca. En condiciones
+// normales cada vuelta o consume cupo o termina la corrida; este tope
+// existe para el caso que nadie imaginó. 13 zonas + 27 vueltas de sobra
+// (tandas de pocas filas inválidas que no gastan cupo, ver abajo).
+export const MAX_TANDAS_POR_CORRIDA = 40;
+
+export type TandaProgramada = {
+  zona: ZonaComercial;
+  campanaId: string;
+  campanaNueva: boolean;
+  cupoReservado: number;
+  procesados: number;
+  enviados: number;
+  fallidos: number;
+};
+
+// Por qué terminó la corrida (sólo informativo, para los logs):
+//   'cupo'           -- se gastó el cupo del día (el caso normal).
+//   'sin_pendientes' -- ya no queda ninguna zona con trabajo.
+//   'tiempo'         -- se acabó el presupuesto de tiempo; el resto sale mañana.
+//   'sin_avance'     -- una tanda no pudo procesar nada (filas reservadas en
+//                       vuelo por otra corrida, o nada enviado ni cerrado):
+//                       insistir sería un bucle.
+//   'tope_vueltas'   -- la red de seguridad de `MAX_TANDAS_POR_CORRIDA`.
+export type CorteCorrida = 'cupo' | 'sin_pendientes' | 'tiempo' | 'sin_avance' | 'tope_vueltas';
 
 export type ResultadoEnvioProgramado =
   | { ok: true; accion: 'pausado' }
@@ -459,26 +500,59 @@ export type ResultadoEnvioProgramado =
   | {
       ok: true;
       accion: 'enviado';
+      // Zona/campaña de la PRIMERA tanda de la corrida (compatibilidad); el
+      // detalle de todas está en `tandas`.
       zona: ZonaComercial;
       campanaId: string;
       campanaNueva: boolean;
+      // Totales de TODA la corrida.
       cupoReservado: number;
       procesados: number;
       enviados: number;
       fallidos: number;
+      tandas: TandaProgramada[];
+      corte: CorteCorrida;
     }
   | { ok: false; error: string };
+
+// Lo que le queda al día, leído de la fila de `campanas_envio_diario`. `null`
+// si hoy todavía no hay fila (nadie reservó nada). Es sólo una OPTIMIZACIÓN
+// para no consultar GHL y resolver una zona nueva cuando el día ya se gastó:
+// la autoridad del tope sigue siendo el rpc atómico de `reservarCupoDiario`.
+async function cupoRestanteHoy(db: ClienteCampanas, fechaHoy: string): Promise<number | null> {
+  const { data, error } = await db
+    .from('campanas_envio_diario')
+    .select('tope, enviados')
+    .eq('fecha', fechaHoy)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo leer el cupo del dia: ${error.message}`);
+  if (!data) return null;
+  const fila = data as { tope: number; enviados: number };
+  return Math.max(0, Number(fila.tope) - Number(fila.enviados));
+}
 
 // Un solo `ahora` para TODO el disparo -- la fecha del cupo diario (se
 // calcula acá) y el reloj que `enviarTanda` usa para decidir qué reserva
 // cuenta como vencida (se le pasa el MISMO, no uno aparte) -- para que una
 // prueba pueda fijar el reloj una sola vez y confiar en que las dos partes
 // lo ven igual.
+//
+// EL BUCLE (2026-10-04): se manda tanda tras tanda -- la zona en curso
+// hasta que se acaba, y entonces la siguiente -- hasta que ocurra una de:
+// se agota el cupo del día, no quedan zonas con trabajo, se acaba el
+// presupuesto de tiempo, o una tanda no avanza. Cada vuelta reserva su
+// cupo por el rpc atómico y manda a lo sumo lo reservado, así que el tope
+// del día sigue siendo duro por construcción: la suma de lo reservado en
+// el día nunca supera `tope`, y nada se manda sin reserva previa.
 export async function ejecutarEnvioProgramado(
   db: ClienteCampanas,
   deps: DepsEnvioProgramado,
   ahora: () => Date = () => new Date(),
 ): Promise<ResultadoEnvioProgramado> {
+  const relojMs = deps.relojMs ?? (() => Date.now());
+  const presupuestoMs = deps.presupuestoMs ?? PRESUPUESTO_MS_CORRIDA;
+  const inicioMs = relojMs();
+
   let pausado: boolean;
   try {
     pausado = await estaPausado(db);
@@ -491,66 +565,161 @@ export async function ejecutarEnvioProgramado(
   // antes de cualquier otro trabajo.
   if (pausado) return { ok: true, accion: 'pausado' };
 
-  let objetivo: ObjetivoProgramado;
-  try {
-    objetivo = await resolverObjetivo(db, deps);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-  if (objetivo.tipo === 'sin_pendientes') return { ok: true, accion: 'sin_pendientes' };
-
   const fechaHoy = ahora().toISOString().slice(0, 10);
-  // Nunca se pide más de `TAMANO_TANDA` (100) -- garantía 2 -- sin importar
-  // cuántos pendientes tenga la zona (GAM Oeste sola tiene 377).
-  const solicitado = Math.min(objetivo.pendientes, TAMANO_TANDA);
+  const tandas: TandaProgramada[] = [];
+  let corte: CorteCorrida = 'tope_vueltas';
+  // Primera zona vista, por si la corrida termina sin mandar nada por
+  // cupo agotado (para el mensaje `cupo_agotado`, que nombra la zona).
+  let zonaPendiente: ZonaComercial | null = null;
 
-  let cupo: number;
-  try {
-    cupo = await reservarCupoDiario(db, fechaHoy, solicitado);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-  if (cupo <= 0) return { ok: true, accion: 'cupo_agotado', zona: objetivo.zona };
+  const suma = (campo: 'cupoReservado' | 'procesados' | 'enviados' | 'fallidos') =>
+    tandas.reduce((acc, t) => acc + t[campo], 0);
 
-  const resultado = await enviarTanda(
-    objetivo.campanaId,
-    { resendApiKey: deps.resendApiKey, remitente: deps.remitente, fetchImpl: deps.fetchImpl, ahora, limiteTanda: cupo },
-    db,
-  );
+  // Un fallo a mitad de corrida NO borra lo ya mandado -- eso ya está
+  // registrado en la base (cada tanda cierra sus filas antes de la
+  // siguiente) -- pero la corrida se reporta como fallida y el mensaje dice
+  // cuánto salió antes, para que "que se vea" no mienta.
+  const fallar = (error: string): ResultadoEnvioProgramado => ({
+    ok: false,
+    error: tandas.length > 0 ? `${error} (antes del fallo, esta corrida ya habia mandado ${suma('enviados')} correos)` : error,
+  });
 
-  // Hallazgo de producción (2026-09-18): este `cupo` ya se reservó ARRIBA,
-  // antes de saber si la tanda iba a mandar algo de verdad. Si terminó sin
-  // mandar NI UN correo -- `resultado.ok === false` (la llamada entera a
-  // Resend falló, pasajera o no) o `enviados === 0` (todo lo reclamado
-  // resultó ser direcciones inválidas, o Resend rechazó el lote entero de
-  // forma permanente -- ver lib/campanas/envio.ts) -- se devuelve, para que
-  // la rampa no lo dé por gastado. El criterio es "no salió nada", no "hubo
-  // un error": las dos ramas comparten la misma consecuencia, por eso se
-  // decide ANTES de mirar `resultado.ok` para el resto de la función.
-  const enviadosDeVerdad = resultado.ok ? resultado.enviados : 0;
-  if (enviadosDeVerdad === 0) {
+  for (let vuelta = 0; vuelta < MAX_TANDAS_POR_CORRIDA; vuelta++) {
+    // Presupuesto: sólo se corta ANTES de arrancar trabajo nuevo -- ver
+    // el comentario de `PRESUPUESTO_MS_CORRIDA`. La primera vuelta siempre
+    // corre (el reloj recién arrancó).
+    if (vuelta > 0 && relojMs() - inicioMs >= presupuestoMs) {
+      corte = 'tiempo';
+      break;
+    }
+
+    // Después de la primera tanda, si el día ya no tiene cupo, ni se
+    // consulta GHL para resolver una zona nueva.
+    if (vuelta > 0) {
+      let restante: number | null;
+      try {
+        restante = await cupoRestanteHoy(db, fechaHoy);
+      } catch (err) {
+        return fallar(err instanceof Error ? err.message : String(err));
+      }
+      if (restante !== null && restante <= 0) {
+        corte = 'cupo';
+        break;
+      }
+    }
+
+    let objetivo: ObjetivoProgramado;
     try {
-      await devolverCupoDiario(db, fechaHoy, cupo);
+      objetivo = await resolverObjetivo(db, deps);
     } catch (err) {
-      // No tocar la respuesta por esto -- devolver el cupo es una cortesía
-      // para la rampa de MAÑANA, no algo que deba tumbar la corrida de HOY.
-      // Se deja constancia ruidosa, mismo criterio que el resto de este
-      // módulo ante un fallo que no vale la pena propagar.
-      console.error('[campanas] No se pudo devolver el cupo diario tras una tanda sin envios.', err);
+      return fallar(err instanceof Error ? err.message : String(err));
+    }
+    if (objetivo.tipo === 'sin_pendientes') {
+      corte = 'sin_pendientes';
+      break;
+    }
+    zonaPendiente ??= objetivo.zona;
+
+    // Resolver una zona nueva puede haber tardado (pagina GHL): se vuelve
+    // a mirar el reloj antes de mandar. Si no alcanza, esa campaña ya
+    // quedó creada con sus destinatarios 'pendiente' y mañana arranca sola.
+    if (vuelta > 0 && relojMs() - inicioMs >= presupuestoMs) {
+      corte = 'tiempo';
+      break;
+    }
+
+    // Nunca se pide más de `TAMANO_TANDA` (100) -- garantía 2 -- sin
+    // importar cuántos pendientes tenga la zona (GAM Oeste sola tiene 377).
+    const solicitado = Math.min(objetivo.pendientes, TAMANO_TANDA);
+
+    let cupo: number;
+    try {
+      cupo = await reservarCupoDiario(db, fechaHoy, solicitado);
+    } catch (err) {
+      return fallar(err instanceof Error ? err.message : String(err));
+    }
+    if (cupo <= 0) {
+      corte = 'cupo';
+      break;
+    }
+
+    const resultado = await enviarTanda(
+      objetivo.campanaId,
+      { resendApiKey: deps.resendApiKey, remitente: deps.remitente, fetchImpl: deps.fetchImpl, ahora, limiteTanda: cupo },
+      db,
+    );
+
+    // Hallazgo de producción (2026-09-18): este `cupo` ya se reservó ARRIBA,
+    // antes de saber si la tanda iba a mandar algo de verdad. Si terminó sin
+    // mandar NI UN correo -- `resultado.ok === false` (la llamada entera a
+    // Resend falló, pasajera o no) o `enviados === 0` (todo lo reclamado
+    // resultó ser direcciones inválidas, o Resend rechazó el lote entero de
+    // forma permanente -- ver lib/campanas/envio.ts) -- se devuelve, para que
+    // la rampa no lo dé por gastado. El criterio es "no salió nada", no "hubo
+    // un error": las dos ramas comparten la misma consecuencia, por eso se
+    // decide ANTES de mirar `resultado.ok` para el resto de la función.
+    const enviadosDeVerdad = resultado.ok ? resultado.enviados : 0;
+    if (enviadosDeVerdad === 0) {
+      try {
+        await devolverCupoDiario(db, fechaHoy, cupo);
+      } catch (err) {
+        // No tocar la respuesta por esto -- devolver el cupo es una cortesía
+        // para la rampa de MAÑANA, no algo que deba tumbar la corrida de HOY.
+        console.error('[campanas] No se pudo devolver el cupo diario tras una tanda sin envios.', err);
+      }
+    }
+
+    if (!resultado.ok) return fallar(resultado.error);
+
+    tandas.push({
+      zona: objetivo.zona,
+      campanaId: objetivo.campanaId,
+      campanaNueva: objetivo.campanaNueva,
+      cupoReservado: cupo,
+      procesados: resultado.procesados,
+      enviados: resultado.enviados,
+      fallidos: resultado.fallidos,
+    });
+
+    // Una tanda que no procesó NADA (todo lo pendiente está reservado en
+    // vuelo por otra corrida, o la campaña se canceló en el medio) no
+    // avanza: volver a resolver daría el mismo objetivo -- bucle infinito.
+    // Una que sólo cerró filas como 'error' (direcciones inválidas) SÍ
+    // avanza -- bajó los pendientes -- y su cupo ya se devolvió arriba,
+    // así que la corrida sigue con lo que queda.
+    if (resultado.procesados === 0) {
+      corte = 'sin_avance';
+      break;
+    }
+    // Y si el cupo concedido fue menor a lo pedido, el día se agotó: no
+    // hace falta una vuelta más sólo para enterarse.
+    if (cupo < solicitado) {
+      corte = 'cupo';
+      break;
     }
   }
 
-  if (!resultado.ok) return { ok: false, error: resultado.error };
+  if (tandas.length === 0) {
+    if (corte === 'sin_pendientes') return { ok: true, accion: 'sin_pendientes' };
+    if (corte === 'cupo' && zonaPendiente) return { ok: true, accion: 'cupo_agotado', zona: zonaPendiente };
+    // 'sin_avance' en la primera vuelta ya devolvió arriba una tanda con
+    // procesados 0 (queda en `tandas`), así que acá sólo cae 'tope_vueltas'
+    // o 'tiempo', imposibles con 0 tandas -- por las dudas, se informa.
+    return { ok: false, error: `El envio programado termino sin mandar nada (corte: ${corte}).` };
+  }
 
+  const primera = tandas[0];
   return {
     ok: true,
     accion: 'enviado',
-    zona: objetivo.zona,
-    campanaId: objetivo.campanaId,
-    campanaNueva: objetivo.campanaNueva,
-    cupoReservado: cupo,
-    procesados: resultado.procesados,
-    enviados: resultado.enviados,
-    fallidos: resultado.fallidos,
+    zona: primera.zona,
+    campanaId: primera.campanaId,
+    campanaNueva: primera.campanaNueva,
+    cupoReservado: suma('cupoReservado'),
+    procesados: suma('procesados'),
+    enviados: suma('enviados'),
+    fallidos: suma('fallidos'),
+    tandas,
+    corte,
   };
 }
