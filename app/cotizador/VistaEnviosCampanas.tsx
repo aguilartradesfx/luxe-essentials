@@ -9,6 +9,7 @@ import {
   pastillaDeEntrega,
   type EstadoEntrega,
 } from '@/lib/campanas/estado-entrega';
+import { TAMANO_PAGINA, TAMANOS_PAGINA } from '@/lib/campanas/tamanos-pagina';
 
 // La pestaña «Correos enviados»: los envíos de las campañas UNO POR UNO,
 // con en qué quedó cada uno (pedido del dueño: «poder ver todos los emails
@@ -68,6 +69,12 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
   const [zona, setZona] = useState('');
   const [campanaId, setCampanaId] = useState('');
   const [estado, setEstado] = useState<EstadoEntrega | ''>('');
+  // Filas por página. Cambiarlo vuelve a la primera página, igual que un
+  // filtro: los cursores de `pila` y la cuenta «11–20 de N» sólo valen para
+  // el tamaño con el que se recorrieron. Con el cursor de la página en curso
+  // se podría seguir parado en la misma fila, pero «Anterior» volvería a un
+  // cursor de otro tamaño y mostraría filas ya vistas o se saltaría otras.
+  const [tamano, setTamano] = useState<number>(TAMANO_PAGINA);
   const [textoBusqueda, setTextoBusqueda] = useState('');
   const [busqueda, setBusqueda] = useState('');
   // Los cursores de las páginas ya visitadas; `[null]` es la primera.
@@ -111,6 +118,7 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
           estado: estado || undefined,
           busqueda: busqueda || undefined,
           despues: cursorActual ?? undefined,
+          tamano,
         }),
       });
       const datos = await res.json();
@@ -127,7 +135,7 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
       if (numero === ultimaPeticion.current) setCargando(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `onSesionInvalida` es estable entre renders (viene de Panel).
-  }, [zona, campanaId, estado, busqueda, cursorActual]);
+  }, [zona, campanaId, estado, busqueda, cursorActual, tamano]);
 
   useEffect(() => {
     void cargar();
@@ -245,6 +253,21 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
             onChange={(e) => setTextoBusqueda(e.target.value)}
             className={CLASE_CAMPO}
           />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-teal">
+          Filas por página
+          <select
+            aria-label="Filas por página"
+            value={tamano}
+            onChange={(e) => cambiarFiltro(() => setTamano(Number(e.target.value)))}
+            className={CLASE_CAMPO}
+          >
+            {TAMANOS_PAGINA.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
         </label>
         {hayFiltros && (
           <button

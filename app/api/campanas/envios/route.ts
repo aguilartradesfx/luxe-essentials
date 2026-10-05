@@ -3,7 +3,15 @@ import { autenticarPeticion } from '@/lib/autenticacion-cotizador';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { autorizarSuperadmin } from '@/lib/cotizador/equipo';
 import { esEstadoEntrega } from '@/lib/campanas/estado-entrega';
-import { esCursor, esUuid, listarEnvios, MAX_BUSQUEDA, type FiltrosEnvios } from '@/lib/campanas/envios-listado';
+import {
+  esCursor,
+  esTamanoPagina,
+  esUuid,
+  listarEnvios,
+  MAX_BUSQUEDA,
+  TAMANO_PAGINA,
+  type FiltrosEnvios,
+} from '@/lib/campanas/envios-listado';
 
 export const runtime = 'nodejs';
 
@@ -64,8 +72,17 @@ export async function POST(request: Request) {
     cursor = cuerpo.despues;
   }
 
+  // El tamaño sólo puede ser uno de la lista permitida: un número inventado
+  // desde el navegador (0, 1e9, «10» como texto) se rechaza, no se «arregla»
+  // ni se usa como límite. Sin tamaño, el de siempre.
+  let tamano = TAMANO_PAGINA;
+  if (cuerpo.tamano !== undefined && cuerpo.tamano !== null) {
+    if (!esTamanoPagina(cuerpo.tamano)) return invalido('filas por página');
+    tamano = cuerpo.tamano;
+  }
+
   try {
-    const pagina = await listarEnvios(db, filtros, cursor);
+    const pagina = await listarEnvios(db, filtros, cursor, tamano);
     return NextResponse.json({ ok: true, ...pagina });
   } catch (err) {
     console.error('[campanas] No se pudo listar los envíos.', err instanceof Error ? err.message : String(err));

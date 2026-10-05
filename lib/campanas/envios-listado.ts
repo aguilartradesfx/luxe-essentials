@@ -1,5 +1,6 @@
 import 'server-only';
 import { estadoDeEntrega, type EstadoEntrega } from '@/lib/campanas/estado-entrega';
+import { TAMANO_PAGINA } from '@/lib/campanas/tamanos-pagina';
 
 // Los envíos de las campañas UNO POR UNO, para la pantalla «Correos
 // enviados» (pedido del dueño: «poder ver todos los emails uno a uno, y
@@ -8,7 +9,7 @@ import { estadoDeEntrega, type EstadoEntrega } from '@/lib/campanas/estado-entre
 // doble en memoria.
 export type Db = { from: (tabla: string) => any };
 
-export const TAMANO_PAGINA = 50;
+export { TAMANOS_PAGINA, TAMANO_PAGINA, esTamanoPagina, type TamanoPagina } from '@/lib/campanas/tamanos-pagina';
 
 export type FiltrosEnvios = {
   zona?: string;
@@ -48,7 +49,7 @@ export type OpcionCampana = { id: string; zona: string | null; plantilla: string
 
 export type PaginaEnvios = {
   envios: EnvioListado[];
-  // Cuántos por página: la pantalla lo usa para decir «51–100 de 948».
+  // Cuántos por página: la pantalla lo usa para decir «11–20 de 948».
   tamano: number;
   total: number;
   siguiente: Cursor | null;

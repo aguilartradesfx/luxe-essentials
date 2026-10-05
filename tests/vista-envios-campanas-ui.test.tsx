@@ -30,7 +30,9 @@ function datosBase(): Datos {
 
 type Peticion = Record<string, unknown>;
 
-function simularServidor(datos: Datos, tamano = 50) {
+// `tamano` fijo sólo para las pruebas que necesitan páginas chicas; sin él, el
+// servidor simulado respeta el que pidió la pantalla, como el de verdad.
+function simularServidor(datos: Datos, tamano?: number) {
   const peticiones: Peticion[] = [];
   const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString();
@@ -41,7 +43,7 @@ function simularServidor(datos: Datos, tamano = 50) {
         crearDb(datos),
         { zona: cuerpo.zona, campanaId: cuerpo.campanaId, estado: cuerpo.estado, busqueda: cuerpo.busqueda },
         cuerpo.despues ?? null,
-        tamano,
+        tamano ?? cuerpo.tamano ?? 10,
       );
       return new Response(JSON.stringify({ ok: true, ...pagina }), { status: 200 });
     }
@@ -373,6 +375,75 @@ describe('VistaEnviosCampanas', () => {
       await screen.findByText('1–3 de 7');
       await user.selectOptions(screen.getByRole('combobox', { name: 'Estado' }), 'rebotado');
       expect(await screen.findByText('1–3 de 3')).toBeInTheDocument();
+    });
+  });
+
+  describe('filas por página', () => {
+    function veinticinco() {
+      const d = datosBase();
+      for (let i = 1; i <= 25; i++) {
+        d.envios.push(
+          envio({
+            campana_id: C_NORTE,
+            correo: `f${String(i).padStart(2, '0')}@x.cr`,
+            actualizado_at: `2026-09-20T15:00:${String(i).padStart(2, '0')}.000000+00:00`,
+          }),
+        );
+      }
+      return d;
+    }
+    const opcionesDe = () =>
+      within(screen.getByRole('combobox', { name: 'Filas por página' })).getAllByRole('option').map((o) => o.textContent);
+
+    it('por omisión son 10: se piden 10, se ven 10, y se puede elegir 10, 20, 50 o 100', async () => {
+      const { peticiones } = simularServidor(veinticinco());
+      render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
+      await screen.findByText('1–10 de 25');
+      expect(peticiones[0].tamano).toBe(10);
+      expect(correosVisibles()).toHaveLength(10);
+      expect(screen.getByRole('combobox', { name: 'Filas por página' })).toHaveValue('10');
+      expect(opcionesDe()).toEqual(['10', '20', '50', '100']);
+    });
+
+    it('elegir 20 lo pide al servidor y muestra 20 filas', async () => {
+      const { peticiones } = simularServidor(veinticinco());
+      const user = userEvent.setup();
+      render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
+      await screen.findByText('1–10 de 25');
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Filas por página' }), '20');
+      await screen.findByText('1–20 de 25');
+      expect(peticiones[peticiones.length - 1].tamano).toBe(20);
+      expect(correosVisibles()).toHaveLength(20);
+    });
+
+    // Cambiar el tamano en la pagina 2 vuelve a la primera. Si conservara la
+    // pila de cursores, «Anterior» iria a un cursor de otro tamano y
+    // mostraria filas ya vistas.
+    it('cambiar el tamaño a mitad del recorrido vuelve al principio y luego no repite ni pierde filas', async () => {
+      const { peticiones } = simularServidor(veinticinco());
+      const user = userEvent.setup();
+      render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
+      await screen.findByText('1–10 de 25');
+      await user.click(screen.getByRole('button', { name: 'Siguiente' }));
+      await screen.findByText('11–20 de 25');
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Filas por página' }), '20');
+      await screen.findByText('1–20 de 25');
+      expect(peticiones[peticiones.length - 1].despues).toBeUndefined();
+      expect(screen.getByRole('button', { name: 'Anterior' })).toBeDisabled();
+      const vistos = correosVisibles();
+      expect(vistos[0]).toBe('f25@x.cr');
+
+      await user.click(screen.getByRole('button', { name: 'Siguiente' }));
+      await screen.findByText('21–25 de 25');
+      vistos.push(...correosVisibles());
+      expect(vistos).toHaveLength(25);
+      expect(new Set(vistos).size).toBe(25);
+
+      // Y «Anterior» vuelve a la misma pagina de 20 de antes, completa.
+      await user.click(screen.getByRole('button', { name: 'Anterior' }));
+      await screen.findByText('1–20 de 25');
+      expect(correosVisibles()).toHaveLength(20);
     });
   });
 

@@ -140,3 +140,58 @@ describe('POST /api/campanas/envios -- filtros', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('POST /api/campanas/envios -- filas por página', () => {
+  const sesion = () => cookieDe('Ana', 'superadmin', ID_SUPER);
+  function conMuchos(n: number) {
+    datos.envios = Array.from({ length: n }, () => envio({ campana_id: C1 }));
+  }
+
+  it('la lista permitida es exactamente 10, 20, 50 y 100, y por omisión son 10', async () => {
+    const { TAMANOS_PAGINA, TAMANO_PAGINA } = await import('@/lib/campanas/tamanos-pagina');
+    expect([...TAMANOS_PAGINA]).toEqual([10, 20, 50, 100]);
+    expect(TAMANO_PAGINA).toBe(10);
+  });
+
+  it('sin pedir tamaño: 10 filas (no 50), y la respuesta dice que son 10', async () => {
+    conMuchos(120);
+    const cuerpo = await (await POST(peticion({}, sesion()))).json();
+    expect(cuerpo.tamano).toBe(10);
+    expect(cuerpo.envios).toHaveLength(10);
+    expect(cuerpo.siguiente).not.toBeNull();
+    expect(cuerpo.total).toBe(120);
+  });
+
+  it.each([10, 20, 50, 100])('el tamaño %i se respeta: trae justo esa cantidad', async (n) => {
+    conMuchos(120);
+    const cuerpo = await (await POST(peticion({ tamano: n }, sesion()))).json();
+    expect(cuerpo.tamano).toBe(n);
+    expect(cuerpo.envios).toHaveLength(n);
+  });
+
+  it.each([[0], [1], [7], [15], [101], [1000000000], [-10], [10.5], ['10'], ['100'], [true], [[10]], [{}], [Number.MAX_SAFE_INTEGER]])(
+    'un tamaño inventado desde el navegador (%j) se rechaza con 400 y no consulta la lista',
+    async (tamano) => {
+      conMuchos(120);
+      tablasLeidas = [];
+      const res = await POST(peticion({ tamano }, sesion()));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain('filas por página');
+      expect(tablasLeidas).not.toContain('campanas_envios');
+    },
+  );
+
+  it('con el tamaño elegido, página tras página, ninguna fila se repite ni se pierde', async () => {
+    conMuchos(45);
+    const vistos: string[] = [];
+    let despues: unknown = undefined;
+    for (let i = 0; i < 10; i++) {
+      const c = await (await POST(peticion({ tamano: 20, despues }, sesion()))).json();
+      vistos.push(...c.envios.map((e: any) => e.id));
+      if (!c.siguiente) break;
+      despues = c.siguiente;
+    }
+    expect(vistos).toHaveLength(45);
+    expect(new Set(vistos).size).toBe(45);
+  });
+});
