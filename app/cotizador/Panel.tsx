@@ -6,6 +6,7 @@ import { PantallaClave } from './PantallaClave';
 import { VistaAprobaciones } from './VistaAprobaciones';
 import { VistaCampanas } from './VistaCampanas';
 import { VistaHistorialCampanas } from './VistaHistorialCampanas';
+import { VistaEnviosCampanas } from './VistaEnviosCampanas';
 import { VistaCrear } from './VistaCrear';
 import { VistaEquipo } from './VistaEquipo';
 import { VistaListado } from './VistaListado';
@@ -51,7 +52,7 @@ export type PrefillCotizacion = {
 // de 'campanas' -- ver el comentario grande al principio de
 // VistaHistorialCampanas.tsx para el porqué (el mismo criterio que ya
 // separa 'crear' de 'cotizaciones' acá mismo).
-type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones' | 'campanas' | 'historial-campanas';
+type Pestana = 'crear' | 'cotizaciones' | 'metricas' | 'equipo' | 'aprobaciones' | 'campanas' | 'historial-campanas' | 'envios-campanas';
 
 // Rótulo visible de cada sección -- vive acá, fuera del componente, porque
 // tanto la lista de la barra lateral como el rótulo "Sección: …" del modo
@@ -66,6 +67,7 @@ const ETIQUETAS_SECCION: Record<Pestana, string> = {
   aprobaciones: 'Aprobaciones',
   campanas: 'Campañas',
   'historial-campanas': 'Historial de campañas',
+  'envios-campanas': 'Correos enviados',
 };
 
 // El token anti-CSRF (Tarea 6/9) se guarda acá, nunca en una variable de
@@ -590,7 +592,7 @@ export default function Panel() {
                     'cotizaciones',
                     'metricas',
                     ...(rol === 'superadmin'
-                      ? (['equipo', 'aprobaciones', 'campanas', 'historial-campanas'] as Pestana[])
+                      ? (['equipo', 'aprobaciones', 'campanas', 'historial-campanas', 'envios-campanas'] as Pestana[])
                       : []),
                   ] as Pestana[]
                 ).map((valor) => (
@@ -702,6 +704,11 @@ export default function Panel() {
                   una pestaña propia y no una sección dentro de "Campañas". */}
               {pestana === 'historial-campanas' && rol === 'superadmin' && (
                 <VistaHistorialCampanas obtenerCsrf={obtenerCsrf} onSesionInvalida={onSesionInvalida} />
+              )}
+              {/* Los envíos uno por uno: mismo doble chequeo. La ruta relee
+                  la fila con `autorizarSuperadmin` -- esto es sólo cosmético. */}
+              {pestana === 'envios-campanas' && rol === 'superadmin' && (
+                <VistaEnviosCampanas onSesionInvalida={onSesionInvalida} />
               )}
             </div>
           </div>

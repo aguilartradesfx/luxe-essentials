@@ -85,3 +85,19 @@ export function formatearColones(valor: number): string {
 export function formatearTasa(tasa: number): string {
   return (tasa * 100).toFixed(2).replace(/\.?0+$/, '');
 }
+
+// Miles con punto, sin decimales -- mismo criterio, exacto, que
+// `formatearColones` (no se usa `toLocaleString`, por el mismo motivo).
+export function formatearNumero(valor: number): string {
+  return Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+// Nombre legible de cada plantilla de campaña, compartido entre el
+// historial de campañas y la pantalla de correos enviados.
+export const ETIQUETAS_PLANTILLA: Record<string, string> = {
+  inicial: 'Correo inicial',
+  seguimiento_1: 'Primer seguimiento',
+  seguimiento_2: 'Segundo seguimiento',
+  seguimiento_3: 'Tercer seguimiento (cierre)',
+  personalizada: 'HTML personalizado',
+};

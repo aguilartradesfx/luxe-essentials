@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { formatearFecha } from './formato';
+import { ETIQUETAS_PLANTILLA, formatearFecha, formatearNumero } from './formato';
 
 // La pestaña "Historial de campañas" (encargo del dueño, punto 2). Antes
 // esto vivía como una cola al fondo de la pantalla de armar una campaña
@@ -80,14 +80,6 @@ function pastillaDeEstado(
     : { texto: 'Interrumpida', clase: 'bg-amber-50 text-amber-800' };
 }
 
-const ETIQUETAS_PLANTILLA: Record<PlantillaCampana, string> = {
-  inicial: 'Correo inicial',
-  seguimiento_1: 'Primer seguimiento',
-  seguimiento_2: 'Segundo seguimiento',
-  seguimiento_3: 'Tercer seguimiento (cierre)',
-  personalizada: 'HTML personalizado',
-};
-
 // La cola del envío programado (encargo: "quien abre el panel no puede ver
 // la cola"). Mismo motivo que el resto de la duplicación de tipos de este
 // archivo: lib/campanas/cola.ts arranca con `import 'server-only'`, así
@@ -128,14 +120,6 @@ const ETIQUETAS_ESTADO_ZONA: Record<EstadoZonaCola, string> = {
   espera: 'En espera',
   error: 'No se pudo calcular',
 };
-
-// Miles con punto, sin decimales -- mismo criterio, exacto, que
-// `formatearColones` en formato.ts (no se usa `toLocaleString`: el
-// separador que trae el runtime de Node para `es-CR` varía entre
-// versiones de ICU).
-function formatearNumero(valor: number): string {
-  return Math.round(valor).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-}
 
 // 'YYYY-MM-DD' -> 'DD/MM/YYYY', por texto -- a propósito, NUNCA pasando
 // por `new Date(...)`: esa fecha es de sólo calendario (no trae hora), y
