@@ -277,7 +277,7 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
         <details className="rounded-xl border border-[var(--carta-border)] bg-white px-4 py-2 text-xs text-teal">
           <summary className="cursor-pointer font-medium text-navy">Qué significa cada estado</summary>
           <p className="mt-2">
-            Resend no informa si un correo cayó en la carpeta de spam, y nadie más puede saberlo. Esta pantalla no lo
+            Esta pantalla no informa si un correo cayó en la carpeta de spam: nadie puede saberlo, así que no lo
             muestra.
           </p>
           <dl className="mt-2 space-y-1.5">

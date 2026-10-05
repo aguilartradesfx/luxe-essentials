@@ -193,6 +193,21 @@ describe('VistaEnviosCampanas', () => {
     expect(within(screen.getByRole('table')).getByText('Entregado')).toBeInTheDocument();
   });
 
+  // El texto de ayuda de la pantalla decia «Resend no informa si...»: la
+  // prueba de rotulos (campanas-estado-entrega) solo mira los textos de
+  // estado-entrega.ts, no lo que la pantalla escribe. Esta mira el DOM
+  // entero, con la ayuda desplegada y todo.
+  it('nada de lo que se ve nombra una pieza interna (Resend, webhook, API, cron)', async () => {
+    const d = datosBase();
+    d.envios.push(envio({ campana_id: C_NORTE, entrega_estado: 'rebotado' }), envio({ campana_id: C_NORTE, entrega_estado: 'entregado' }));
+    simularServidor(d);
+    const { container } = render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
+    await screen.findAllByRole('row');
+    const texto = [container.textContent ?? '', ...[...container.querySelectorAll('[title],[aria-label],[placeholder]')].flatMap((e) => [e.getAttribute('title'), e.getAttribute('aria-label'), e.getAttribute('placeholder')])].join(' ');
+    expect(texto).toMatch(/qué significa cada estado/i);
+    expect(texto).not.toMatch(/resend|webhook|\bapi\b|\bcron\b/i);
+  });
+
   describe('filtros (los resuelve el servidor)', () => {
     function datosVarios() {
       const d = datosBase();
