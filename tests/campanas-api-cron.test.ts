@@ -24,6 +24,11 @@ vi.mock('@/lib/campanas/programado', () => ({
   registrarResultadoProgramado: (...args: unknown[]) => registrarResultadoProgramadoMock(...args),
 }));
 
+const reconciliarEventosHuerfanosMock = vi.fn();
+vi.mock('@/lib/campanas/entrega', () => ({
+  reconciliarEventosHuerfanos: (...args: unknown[]) => reconciliarEventosHuerfanosMock(...args),
+}));
+
 const { GET: getCron } = await import('@/app/api/campanas/cron/route');
 
 function peticion(cabeceras: Record<string, string> = {}) {
@@ -40,6 +45,8 @@ beforeEach(() => {
   ejecutarEnvioProgramadoMock.mockResolvedValue({ ok: true, accion: 'sin_pendientes' });
   registrarResultadoProgramadoMock.mockReset();
   registrarResultadoProgramadoMock.mockResolvedValue(undefined);
+  reconciliarEventosHuerfanosMock.mockReset();
+  reconciliarEventosHuerfanosMock.mockResolvedValue(0);
   process.env.RESEND_API_KEY = 'llave-resend';
   process.env.LUXE_CORREO_REMITENTE = 'Luxe <campanas@send.luxeessentialscr.com>';
   process.env.LUXE_GHL_API_KEY = 'llave-ghl';
@@ -211,5 +218,24 @@ describe('registra la visibilidad del resultado (encargo: "que se vea")', () => 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, accion: 'sin_pendientes' });
     spy.mockRestore();
+  });
+});
+
+describe('reconciliación de eventos de entrega (webhook de Resend, migración 0029)', () => {
+  beforeEach(() => {
+    process.env.CRON_SECRET = SECRETO;
+  });
+
+  it('después de cada corrida enlaza los eventos que llegaron antes que su resend_id', async () => {
+    await getCron(peticion({ authorization: `Bearer ${SECRETO}` }));
+    expect(reconciliarEventosHuerfanosMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('si la reconciliación falla, el cron igual responde con el resultado del envío', async () => {
+    reconciliarEventosHuerfanosMock.mockRejectedValue(new Error('caida'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await getCron(peticion({ authorization: `Bearer ${SECRETO}` }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, accion: 'sin_pendientes' });
   });
 });

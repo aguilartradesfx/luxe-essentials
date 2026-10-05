@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { ejecutarEnvioProgramado, registrarResultadoProgramado } from '@/lib/campanas/programado';
+import { reconciliarEventosHuerfanos } from '@/lib/campanas/entrega';
 
 export const runtime = 'nodejs';
 
@@ -80,6 +81,15 @@ export async function GET(request: Request) {
     await registrarResultadoProgramado(db, resultado);
   } catch (err) {
     console.error('[campanas] No se pudo registrar la visibilidad del envio programado.', err);
+  }
+
+  // Eventos del webhook de Resend que llegaron ANTES de que el envío tuviera
+  // su `resend_id` (migración 0029): se enlazan ahora, con los envíos de
+  // ayer ya cerrados. Best effort, mismo criterio que el aviso de arriba.
+  try {
+    await reconciliarEventosHuerfanos(db);
+  } catch (err) {
+    console.error('[campanas] No se pudieron reconciliar los eventos de entrega.', err);
   }
 
   if (!resultado.ok) {
