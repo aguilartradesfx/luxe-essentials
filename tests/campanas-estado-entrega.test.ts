@@ -63,6 +63,21 @@ describe('lo que la pantalla NO puede afirmar', () => {
   });
 
   it('«sin confirmar» aclara que no es un fallo', () => {
-    expect(AYUDA_ENTREGA.sin_confirmar).toMatch(/no significa que haya fallado/i);
+    expect(AYUDA_ENTREGA.sin_confirmar).toMatch(/no quiere decir que haya fallado/i);
+  });
+
+  // Reporte del dueno (2026-10-04): esta ayuda nombraba a «Resend» y al
+  // «webhook». Quien abre el panel es el equipo comercial de Luxe y, a
+  // traves de ellos, el cliente: nadie ahi sabe que es ninguna de las dos
+  // cosas. Un texto que explica un estado nombrando la herramienta que lo
+  // produjo solo deja claro que esta escrito para quien lo programo.
+  it('ningun rotulo ni ayuda nombra una pieza interna del sistema', () => {
+    const textos = [...Object.values(ETIQUETAS_ENTREGA), ...Object.values(AYUDA_ENTREGA)];
+    for (const t of textos) {
+      expect(t).not.toMatch(/resend/i);
+      expect(t).not.toMatch(/webhook/i);
+      expect(t).not.toMatch(/\bapi\b/i);
+      expect(t).not.toMatch(/\bcron\b/i);
+    }
   });
 });

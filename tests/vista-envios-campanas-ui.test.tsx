@@ -138,7 +138,10 @@ describe('VistaEnviosCampanas', () => {
     d.envios.push(envio({ campana_id: C_NORTE, entrega_estado: 'queja' }), envio({ campana_id: C_NORTE, entrega_estado: 'entregado' }));
     simularServidor(d);
     const { container } = render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
-    await screen.findByText('Lo marcó como spam');
+    // Acotado a la TABLA: la misma etiqueta vive tambien en el <option> del
+    // filtro, y `findByText` a secas encuentra las dos.
+    await screen.findAllByRole('row');
+    expect(within(screen.getByRole('table')).getByText('Lo marcó como spam')).toBeInTheDocument();
     const texto = container.textContent ?? '';
         expect(texto).toMatch(/no informa si un correo cay[oó] en la carpeta de spam/i);
     expect(texto).toMatch(/recibi[oó] en su bandeja/i);
@@ -148,24 +151,46 @@ describe('VistaEnviosCampanas', () => {
     expect(opciones).not.toContain('Spam');
   });
 
-  it('avisa que «sin confirmar» puede ser el webhook sin configurar cuando NO hay ninguna confirmación en toda la base', async () => {
+  // Reporte del dueno (2026-10-04). Antes, sin ninguna confirmacion, la
+  // pantalla mostraba un aviso ambar nombrando el «webhook» MAS una columna
+  // entera repitiendo «Sin confirmar». Las dos cosas estaban mal: la primera
+  // nombra una pieza interna a quien no tiene por que conocerla, y la
+  // segunda convierte la ausencia de un dato en lo que se lee como «mandamos
+  // 948 correos y no sabemos que paso con ellos». Mientras no haya NI UNA
+  // confirmacion, la pantalla no habla de entregas en absoluto.
+  it('sin ninguna confirmacion: ni columna de estado, ni filtro, ni aviso, ni jerga', async () => {
     const d = datosBase();
     d.envios.push(envio({ campana_id: C_NORTE }), envio({ campana_id: C_NORTE }));
     simularServidor(d);
     render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
-    const aviso = await screen.findByRole('status');
-    expect(aviso).toHaveTextContent(/todavía no llegó ninguna confirmación de entrega/i);
-    expect(aviso).toHaveTextContent(/webhook/i);
-    expect(aviso).toHaveTextContent(/no quiere decir que los correos hayan fallado/i);
+    await screen.findAllByRole('row');
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Estado' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Estado' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Sin confirmar')).not.toBeInTheDocument();
+    expect(screen.queryByText(/qué significa cada estado/i)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/resend|webhook/i);
+
+    // Y lo que SI se sabe se sigue contando completo.
+    expect(screen.getByRole('columnheader', { name: 'Destinatario' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Enviado' })).toBeInTheDocument();
   });
 
-  it('no da ese aviso cuando ya llegó alguna confirmación', async () => {
+  // La otra mitad: en cuanto entra la primera confirmacion, las tres cosas
+  // vuelven solas. Sin esta prueba, esconderlas SIEMPRE pasaria.
+  it('con al menos una confirmacion: vuelven la columna, el filtro y la ayuda', async () => {
     const d = datosBase();
     d.envios.push(envio({ campana_id: C_NORTE }), envio({ campana_id: C_NORTE, entrega_estado: 'entregado' }));
     simularServidor(d);
     render(<VistaEnviosCampanas onSesionInvalida={() => {}} />);
     await screen.findAllByRole('row');
+
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Estado' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Estado' })).toBeInTheDocument();
+    expect(screen.getByText(/qué significa cada estado/i)).toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getByText('Entregado')).toBeInTheDocument();
   });
 
   describe('filtros (los resuelve el servidor)', () => {

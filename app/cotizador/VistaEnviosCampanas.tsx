@@ -139,6 +139,15 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
   }
 
   const campanasVisibles = (pagina?.opciones.campanas ?? []).filter((c) => !zona || c.zona === zona);
+  // Mientras no haya llegado NI UNA confirmación de entrega en toda la base,
+  // la pantalla no habla de entregas: ni columna, ni filtro, ni ayuda. Una
+  // columna entera repitiendo «Sin confirmar» no informa nada y se lee como
+  // si se hubiera perdido el rastro de los correos -- lo contrario de lo que
+  // pasa. Lo que sí se sabe (a quién, cuándo, de qué zona) se muestra
+  // completo. En cuanto entre la primera confirmación, las tres cosas
+  // aparecen solas.
+  const hayEntregas = Boolean(pagina?.hayConfirmaciones);
+
   const hayFiltros = Boolean(zona || campanaId || estado || busqueda);
   const desde = pagina && pagina.envios.length > 0 ? (pila.length - 1) * pagina.tamano + 1 : 0;
   const hasta = pagina ? desde + pagina.envios.length - (pagina.envios.length > 0 ? 1 : 0) : 0;
@@ -208,22 +217,24 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-xs text-teal">
-          Estado
-          <select
-            aria-label="Estado"
-            value={estado}
-            onChange={(e) => cambiarFiltro(() => setEstado(e.target.value as EstadoEntrega | ''))}
-            className={CLASE_CAMPO}
-          >
-            <option value="">Todos</option>
-            {ESTADOS_ENTREGA.map((e) => (
-              <option key={e} value={e}>
-                {ETIQUETAS_ENTREGA[e]}
-              </option>
-            ))}
-          </select>
-        </label>
+        {hayEntregas && (
+          <label className="flex flex-col gap-1 text-xs text-teal">
+            Estado
+            <select
+              aria-label="Estado"
+              value={estado}
+              onChange={(e) => cambiarFiltro(() => setEstado(e.target.value as EstadoEntrega | ''))}
+              className={CLASE_CAMPO}
+            >
+              <option value="">Todos</option>
+              {ESTADOS_ENTREGA.map((e) => (
+                <option key={e} value={e}>
+                  {ETIQUETAS_ENTREGA[e]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="flex min-w-[14rem] flex-1 flex-col gap-1 text-xs text-teal">
           Buscar
           <input
@@ -252,31 +263,33 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
         </p>
       )}
 
-      {/* Sin ninguna confirmación en toda la base, «todo sin confirmar» casi
-          seguro es el webhook sin configurar -- no un problema de los
-          correos. Se dice acá, una vez, en vez de dejar creer que fallaron. */}
-      {pagina && !pagina.hayConfirmaciones && (pagina.total > 0 || hayFiltros) && (
-        <p role="status" className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Todavía no llegó ninguna confirmación de entrega desde Resend. Puede ser que el webhook no esté
-          configurado: «Sin confirmar» no quiere decir que los correos hayan fallado.
-        </p>
+      {/* Reporte del dueño (2026-10-04): acá iba un aviso ámbar diciendo
+          que «el webhook puede no estar configurado». Dos cosas mal: nombra
+          una pieza interna a quien no tiene por qué conocerla, y convierte
+          la ausencia de un dato en una alarma. Mientras no haya NINGUNA
+          confirmación, la pantalla simplemente no habla de entregas -- ni
+          con una columna, ni con un filtro, ni con un aviso. Lo que sí
+          sabemos (a quién se le escribió, cuándo, de qué zona) se cuenta
+          completo y sin peros. Que la medición todavía no esté conectada es
+          un pendiente de quien administra el sistema, no una noticia para
+          quien mira la lista. */}
+      {hayEntregas && (
+        <details className="rounded-xl border border-[var(--carta-border)] bg-white px-4 py-2 text-xs text-teal">
+          <summary className="cursor-pointer font-medium text-navy">Qué significa cada estado</summary>
+          <p className="mt-2">
+            Resend no informa si un correo cayó en la carpeta de spam, y nadie más puede saberlo. Esta pantalla no lo
+            muestra.
+          </p>
+          <dl className="mt-2 space-y-1.5">
+            {ESTADOS_ENTREGA.map((e) => (
+              <div key={e}>
+                <dt className="inline font-medium text-navy">{ETIQUETAS_ENTREGA[e]}: </dt>
+                <dd className="inline">{AYUDA_ENTREGA[e]}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
       )}
-
-      <details className="rounded-xl border border-[var(--carta-border)] bg-white px-4 py-2 text-xs text-teal">
-        <summary className="cursor-pointer font-medium text-navy">Qué significa cada estado</summary>
-        <p className="mt-2">
-          Resend no informa si un correo cayó en la carpeta de spam, y nadie más puede saberlo. Esta pantalla no lo
-          muestra.
-        </p>
-        <dl className="mt-2 space-y-1.5">
-          {ESTADOS_ENTREGA.map((e) => (
-            <div key={e}>
-              <dt className="inline font-medium text-navy">{ETIQUETAS_ENTREGA[e]}: </dt>
-              <dd className="inline">{AYUDA_ENTREGA[e]}</dd>
-            </div>
-          ))}
-        </dl>
-      </details>
 
       {pagina && pagina.envios.length === 0 && !cargando && !error && (
         <p className="text-xs text-teal/70">
@@ -292,7 +305,7 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
                 <th className="px-3 py-2">Destinatario</th>
                 <th className="px-3 py-2">Zona y campaña</th>
                 <th className="px-3 py-2">Enviado</th>
-                <th className="px-3 py-2">Estado</th>
+                {hayEntregas && <th className="px-3 py-2">Estado</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--carta-border)]">
@@ -311,19 +324,21 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
                     <td className="whitespace-nowrap px-3 py-2 align-top text-xs text-teal">
                       {formatearFecha(e.enviadoAt)}
                     </td>
-                    <td className="px-3 py-2 align-top">
-                      <span
-                        title={AYUDA_ENTREGA[e.estado]}
-                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${pastilla.clase}`}
-                      >
-                        {pastilla.texto}
-                      </span>
-                      {e.detalle && ESTADOS_CON_MOTIVO.includes(e.estado) && (
-                        <p className="mt-1 max-w-xs text-xs text-teal/70" title={e.detalle}>
-                          {e.detalle}
-                        </p>
-                      )}
-                    </td>
+                    {hayEntregas && (
+                      <td className="px-3 py-2 align-top">
+                        <span
+                          title={AYUDA_ENTREGA[e.estado]}
+                          className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${pastilla.clase}`}
+                        >
+                          {pastilla.texto}
+                        </span>
+                        {e.detalle && ESTADOS_CON_MOTIVO.includes(e.estado) && (
+                          <p className="mt-1 max-w-xs text-xs text-teal/70" title={e.detalle}>
+                            {e.detalle}
+                          </p>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}

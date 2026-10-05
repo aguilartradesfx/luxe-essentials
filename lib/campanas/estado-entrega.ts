@@ -41,17 +41,29 @@ export const ETIQUETAS_ENTREGA: Record<EstadoEntrega, string> = {
 };
 
 // Qué dice cada estado cuando se pasa el cursor por encima (y en la ayuda
-// de la pantalla). La de `queja` es la que no puede quedar ambigua.
+// de la pantalla).
+//
+// Reporte del dueño (2026-10-04): esta ayuda nombraba a «Resend» y al
+// «webhook» -- las dos son piezas internas del sistema. Quien abre este
+// panel es el equipo comercial de Luxe y, a través de ellos, el cliente:
+// nadie ahí sabe ni tiene por qué saber qué es Resend. Un texto que explica
+// un estado nombrando la herramienta que lo produjo no explica nada; sólo
+// deja claro que está escrito para quien la programó.
+//
+// La regla ahora: cada estado se dice desde el punto de vista de la empresa
+// que mandó el correo -- qué le pasó al correo, no qué hizo el proveedor.
+// La de `queja` es la única que, además, no puede quedar ambigua.
 export const AYUDA_ENTREGA: Record<EstadoEntrega, string> = {
   sin_confirmar:
-    'Resend lo aceptó, pero todavía no llegó ninguna confirmación de entrega. No significa que haya fallado: el aviso puede tardar o el webhook puede no estar configurado.',
-  retrasado: 'El proveedor del destinatario todavía no lo recibió; Resend sigue intentando.',
-  entregado: 'El proveedor del destinatario lo aceptó. No dice si quedó en la bandeja o en la carpeta de spam: eso no lo informa nadie.',
-  rebotado: 'El proveedor rechazó la dirección o el mensaje. No se entregó.',
-  fallido: 'Resend no pudo enviarlo. No se entregó.',
+    'El correo salió, pero todavía no hay confirmación de que haya llegado. No quiere decir que haya fallado.',
+  retrasado: 'El correo del destinatario todavía no lo recibió. Se sigue intentando.',
+  entregado:
+    'Llegó al correo del destinatario. No dice si quedó en la bandeja de entrada o en la de spam: eso no lo informa ningún proveedor de correo.',
+  rebotado: 'El correo del destinatario lo rechazó. No llegó. Suele ser una dirección que ya no existe.',
+  fallido: 'No se pudo enviar. No llegó.',
   queja:
     'La persona lo recibió en su bandeja y le dio «marcar como spam». No es lo mismo que haber caído en la carpeta de spam, y es más grave.',
-  no_salio: 'Se intentó mandar y Resend no lo aceptó. Nunca salió.',
+  no_salio: 'El correo nunca salió. Suele ser una dirección mal escrita.',
 };
 
 export type FilaParaEstado = {
