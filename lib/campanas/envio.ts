@@ -351,6 +351,34 @@ async function cerrarTanda(db: ClienteCampanas, campanaId: string, cambios: Camb
   }
 }
 
+// El correo de UN destinatario, armado como sale hacia el proveedor. Es el
+// único lugar donde se decide qué lleva un correo: `enviarTanda` lo usa para
+// mandarlo y la pantalla «Correos enviados» para mostrar, a pedido, lo que
+// recibió una persona (lib/campanas/envio-correo.ts). Si algún día cambia
+// cómo se arma un correo, cambia acá y las dos cosas cambian juntas.
+//
+// Paso 1, por campaña (no varía por destinatario): el html con el texto de
+// vista previa de bandeja ya inyectado.
+export function htmlBaseDeCampana(html: string, previewText: string | null | undefined): string {
+  return inyectarVistaPrevia(html, previewText);
+}
+
+// Paso 2, por destinatario: marcadores resueltos y enlace de baja propio.
+export function armarCorreoParaDestinatario(
+  htmlBase: string,
+  asunto: string,
+  destinatario: { correo: string; nombreCrm: string },
+): { asunto: string; html: string; headers: ReturnType<typeof cabecerasListaBaja> } {
+  return {
+    asunto,
+    html: renderizarPlantilla(htmlBase, {
+      nombreCrm: destinatario.nombreCrm,
+      unsubscribeUrl: enlacePaginaBaja(destinatario.correo),
+    }),
+    headers: cabecerasListaBaja(destinatario.correo),
+  };
+}
+
 // Manda UNA tanda (hasta `TAMANO_TANDA` destinatarios) de una campaña ya
 // creada, y devuelve un resumen. Se llama repetidas veces -- desde la
 // pantalla (parte 2), un botón "continuar" o un intervalo -- hasta que
@@ -496,21 +524,26 @@ export async function enviarTanda(
   // (lib/campanas/marcadores.ts) sobre por qué es seguro inyectarla siempre
   // (no duplica nada en las cuatro plantillas fijas, que ya la traen
   // horneada).
-  const htmlConVistaPrevia = inyectarVistaPrevia(campana.html as string, campana.preview_text as string | null);
+  const htmlConVistaPrevia = htmlBaseDeCampana(campana.html as string, campana.preview_text as string | null);
 
   // El payload sale de `filasValidas`, NUNCA de `filas` -- es lo que evita
   // que una dirección inválida viaje adentro de la petición y tumbe la
-  // tanda entera.
-  const payload = filasValidas.map((f) => ({
-    from: remitente,
-    to: [f.correo],
-    subject: campana.asunto as string,
-    html: renderizarPlantilla(htmlConVistaPrevia, {
+  // tanda entera. Cada correo lo arma `armarCorreoParaDestinatario`: la
+  // MISMA función con la que la pantalla «Correos enviados» reproduce lo que
+  // recibió una persona, para que ninguna de las dos pueda quedarse vieja.
+  const payload = filasValidas.map((f) => {
+    const correo = armarCorreoParaDestinatario(htmlConVistaPrevia, campana.asunto as string, {
+      correo: f.correo,
       nombreCrm: f.nombre_crm,
-      unsubscribeUrl: enlacePaginaBaja(f.correo),
-    }),
-    headers: cabecerasListaBaja(f.correo),
-  }));
+    });
+    return {
+      from: remitente,
+      to: [f.correo],
+      subject: correo.asunto,
+      html: correo.html,
+      headers: correo.headers,
+    };
+  });
 
   let res: Response;
   try {
