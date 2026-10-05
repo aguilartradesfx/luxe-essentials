@@ -9,6 +9,7 @@ import {
   pastillaDeEntrega,
   type EstadoEntrega,
 } from '@/lib/campanas/estado-entrega';
+import { VentanaCorreoEnviado } from './VentanaCorreoEnviado';
 import { TAMANO_PAGINA, TAMANOS_PAGINA } from '@/lib/campanas/tamanos-pagina';
 
 // La pestaña «Correos enviados»: los envíos de las campañas UNO POR UNO,
@@ -81,6 +82,8 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
   // «Anterior» saca uno, «Siguiente» agrega el que trajo el servidor.
   const [pila, setPila] = useState<(Cursor | null)[]>([null]);
   const [pagina, setPagina] = useState<Pagina | null>(null);
+  // El correo abierto en la ventana (la fila que se tocó).
+  const [abierto, setAbierto] = useState<Envio | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
   // Sólo vale la última petición: si el usuario cambia un filtro con otra
@@ -335,7 +338,20 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
               {pagina.envios.map((e) => {
                 const pastilla = pastillaDeEntrega(e.estado);
                 return (
-                  <tr key={e.id}>
+                  <tr
+                    key={e.id}
+                    tabIndex={0}
+                    title="Ver el correo que se le mandó"
+                    onClick={() => setAbierto(e)}
+                    onKeyDown={(ev) => {
+                      if (ev.target !== ev.currentTarget) return;
+                      if (ev.key === 'Enter' || ev.key === ' ') {
+                        ev.preventDefault();
+                        setAbierto(e);
+                      }
+                    }}
+                    className="cursor-pointer hover:bg-[var(--carta-fill)] focus-visible:bg-[var(--carta-fill)] focus-visible:outline-none"
+                  >
                     <td className="px-3 py-2 align-top">
                       <p className="break-all font-medium text-navy">{e.correo}</p>
                       <p className="mt-0.5 text-xs text-teal">{e.empresa}</p>
@@ -368,6 +384,14 @@ export function VistaEnviosCampanas({ onSesionInvalida }: Props) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {abierto && (
+        <VentanaCorreoEnviado
+          fila={abierto}
+          onCerrar={() => setAbierto(null)}
+          onSesionInvalida={onSesionInvalida}
+        />
       )}
 
       {pagina && pagina.total > 0 && (
