@@ -364,16 +364,40 @@ export function htmlBaseDeCampana(html: string, previewText: string | null | und
 }
 
 // Paso 2, por destinatario: marcadores resueltos y enlace de baja propio.
+// `URL_BAJA_INERTE`: lo que va en el lugar del enlace de baja cuando este
+// correo NO se va a mandar, sino a MOSTRAR (la ventana de «Correos
+// enviados»).
+//
+// Hallazgo de la verificación en producción (2026-10-05): el enlace de baja
+// no es una decoración, es una LLAVE -- `enlacePaginaBaja` acuña un token
+// firmado que da de baja a esa empresa a quien lo tenga, sin preguntar
+// nada más. La vista previa lo armaba igual que un envío real, así que ese
+// token viajaba hasta el navegador de quien abría la ventana y quedaba en
+// la respuesta de red; se limpiaba recién al pintarlo. El marco aislado
+// impide el clic, pero no impide copiarlo de las herramientas del
+// navegador, y dar de baja a un cliente de verdad.
+//
+// La vista previa existe para mostrar CÓMO se vio el correo, y para eso el
+// destino de ese enlace no aporta nada: el texto, el diseño y el nombre de
+// la empresa son idénticos igual. Así que no se acuña: el token no se
+// genera nunca, en vez de generarse y después taparse.
+export const URL_BAJA_INERTE = '#';
+
 export function armarCorreoParaDestinatario(
   htmlBase: string,
   asunto: string,
   destinatario: { correo: string; nombreCrm: string },
+  // Único uso previsto: `{ urlBaja: URL_BAJA_INERTE }` desde la vista
+  // previa. Por omisión acuña el enlace real, que es lo que necesita un
+  // envío de verdad -- quien manda un correo NO tiene que acordarse de
+  // pedirlo.
+  opciones?: { urlBaja?: string },
 ): { asunto: string; html: string; headers: ReturnType<typeof cabecerasListaBaja> } {
   return {
     asunto,
     html: renderizarPlantilla(htmlBase, {
       nombreCrm: destinatario.nombreCrm,
-      unsubscribeUrl: enlacePaginaBaja(destinatario.correo),
+      unsubscribeUrl: opciones?.urlBaja ?? enlacePaginaBaja(destinatario.correo),
     }),
     headers: cabecerasListaBaja(destinatario.correo),
   };

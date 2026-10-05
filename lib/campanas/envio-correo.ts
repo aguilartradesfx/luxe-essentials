@@ -1,5 +1,5 @@
 import 'server-only';
-import { armarCorreoParaDestinatario, htmlBaseDeCampana } from '@/lib/campanas/envio';
+import { armarCorreoParaDestinatario, htmlBaseDeCampana, URL_BAJA_INERTE } from '@/lib/campanas/envio';
 
 // El correo EXACTO que se le mandó a una persona, para la ventana que se
 // abre al hacer clic en una fila de «Correos enviados». No se reconstruye ni
@@ -52,6 +52,11 @@ export async function leerCorreoEnviado(db: Db, id: string): Promise<CorreoEnvia
     htmlBaseDeCampana(campana.html as string, campana.preview_text as string | null),
     campana.asunto as string,
     { correo: fila.correo as string, nombreCrm: fila.nombre_crm as string },
+    // El enlace de baja NO se acuña para mostrar -- ver `URL_BAJA_INERTE`
+    // en lib/campanas/envio.ts. Esto se decide ACÁ, en el servidor, para
+    // que el token no exista nunca del lado del navegador; limpiarlo al
+    // pintarlo llegaba tarde.
+    { urlBaja: URL_BAJA_INERTE },
   );
 
   return {

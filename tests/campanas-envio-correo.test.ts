@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { enviarTanda } from '@/lib/campanas/envio';
+import { enviarTanda, URL_BAJA_INERTE } from '@/lib/campanas/envio';
 import { leerCorreoEnviado } from '@/lib/campanas/envio-correo';
-import { generarTokenBaja } from '@/lib/campanas/baja';
+import { generarTokenBaja, enlacePaginaBaja } from '@/lib/campanas/baja';
 
 // El correo que se muestra al hacer clic en una fila tiene que ser el que
 // salió. La prueba central NO compara contra un texto escrito a mano: manda
@@ -67,19 +67,38 @@ beforeEach(() => {
 });
 
 describe('leerCorreoEnviado', () => {
-  it('es EXACTAMENTE el asunto y el cuerpo que salieron por enviarTanda', async () => {
+  // Es el mismo correo que salio, con UNA diferencia deliberada: el enlace
+  // de baja. Todo lo demas -- asunto, diseno, saludo, nombre de la empresa,
+  // texto de bandeja -- tiene que coincidir caracter por caracter, porque se
+  // arma con la misma funcion. Si algun dia se separan, esta prueba cae.
+  it('es el mismo asunto y el mismo cuerpo que salieron por enviarTanda, salvo el enlace de baja', async () => {
     const salido = await loQueSale();
     const visto = await leerCorreoEnviado(dbLectura() as any, 'e-1');
     expect(visto).not.toBeNull();
     expect(visto!.asunto).toBe(salido.subject);
-    expect(visto!.html).toBe(salido.html);
+
+    const enlaceReal = enlacePaginaBaja('ana@hotel.cr');
+    expect(salido.html).toContain(enlaceReal);
+    expect(visto!.html).toBe(salido.html.split(enlaceReal).join(URL_BAJA_INERTE));
   });
 
-  it('trae todo resuelto: empresa, saludo, texto de bandeja y SU enlace de baja', async () => {
+  // Hallazgo de la verificacion en produccion (2026-10-05): el enlace de
+  // baja es una LLAVE -- un token firmado que da de baja a esa empresa a
+  // quien lo tenga. La vista previa lo acunaba igual que un envio real, asi
+  // que viajaba hasta el navegador y se limpiaba recien al pintarlo. El
+  // marco aislado impide el clic, pero no impide copiarlo de las
+  // herramientas del navegador. Ahora no se acuna nunca.
+  it('NUNCA trae el token de baja de esa persona -- no se acuna, no se tapa', async () => {
+    const visto = await leerCorreoEnviado(dbLectura() as any, 'e-1');
+    expect(visto!.html).not.toContain(generarTokenBaja('ana@hotel.cr'));
+    expect(visto!.html).not.toMatch(/\/baja\?t=/);
+    expect(visto!.html).toContain(URL_BAJA_INERTE);
+  });
+
+  it('trae todo resuelto: empresa, saludo y texto de bandeja, sin marcadores sin resolver', async () => {
     const visto = await leerCorreoEnviado(dbLectura() as any, 'e-1');
     expect(visto!.html).toContain('Hola, Ana, Ana Rodriguez');
     expect(visto!.html).toContain('Texto de bandeja');
-    expect(visto!.html).toContain(`/baja?t=${generarTokenBaja('ana@hotel.cr')}`);
     expect(visto!.html).not.toMatch(/\{\{/);
   });
 

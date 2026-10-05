@@ -127,7 +127,11 @@ describe('POST /api/campanas/envios/correo -- el correo', () => {
     expect(ok).toBe(true);
     expect(correo.asunto).toBe('Asunto de prueba');
     expect(correo.html).toContain('Hola de Hotel Arenal');
-    expect(correo.html).toContain('/baja?t=');
+    // El token de baja NO viaja: es una llave que da de baja a esa empresa a
+    // quien la tenga. La vista previa no lo acuna (ver `URL_BAJA_INERTE` en
+    // lib/campanas/envio.ts), asi que no puede filtrarse por la red ni
+    // quedar en el navegador.
+    expect(correo.html).not.toMatch(/\/baja\?t=/);
     expect(correo).toMatchObject({
       destinatario: 'cliente@empresa.cr',
       empresa: 'Hotel Arenal',
