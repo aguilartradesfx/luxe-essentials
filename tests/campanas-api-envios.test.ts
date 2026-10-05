@@ -9,6 +9,7 @@ type FilaUsuario = { id: string; rol: 'vendedor' | 'superadmin'; activo: boolean
 let usuarios: FilaUsuario[];
 let datos: Datos;
 let tablasLeidas: string[];
+let columnasPedidas: string[];
 
 vi.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: () => {
@@ -28,7 +29,10 @@ vi.mock('@/lib/supabase/server', () => ({
           };
           return nodo;
         }
-        return envios.from(tabla);
+        const nodo = envios.from(tabla);
+        const seleccionar = nodo.select;
+        nodo.select = (cols: string, opc?: any) => (columnasPedidas.push(`${tabla}:${cols}`), seleccionar(cols, opc));
+        return nodo;
       },
     };
   },
@@ -65,6 +69,7 @@ beforeEach(() => {
     envios: [envio({ campana_id: C1, correo: 'cliente@empresa.cr' }), envio({ campana_id: C1, entrega_estado: 'rebotado' })],
   };
   tablasLeidas = [];
+  columnasPedidas = [];
 });
 
 describe('POST /api/campanas/envios -- autorización', () => {
@@ -193,5 +198,38 @@ describe('POST /api/campanas/envios -- filas por página', () => {
     }
     expect(vistos).toHaveLength(45);
     expect(new Set(vistos).size).toBe(45);
+  });
+});
+
+// Los ~10 KB del cuerpo de cada correo no viajan en el listado: con 100 filas
+// serian 1 MB por pagina para algo que casi nunca se abre. El cuerpo se pide
+// aparte, al abrir la ventana (POST /api/campanas/envios/correo).
+describe('POST /api/campanas/envios -- el cuerpo del correo NO viaja', () => {
+  const sesion = () => cookieDe('Ana', 'superadmin', ID_SUPER);
+  const SENTINELA = 'CUERPO-DEL-CORREO-SENTINELA';
+
+  beforeEach(() => {
+    (datos.campanas[0] as any).html = `<p>${SENTINELA} {{empresa}} {{unsubscribe_url}}</p>`;
+    (datos.campanas[0] as any).asunto = 'ASUNTO-SENTINELA';
+    (datos.campanas[0] as any).preview_text = 'PREVIEW-SENTINELA';
+  });
+
+  it('la respuesta no trae el html, el asunto ni nada del cuerpo ni un enlace de baja', async () => {
+    const texto = await (await POST(peticion({}, sesion()))).text();
+    expect(texto).toContain('cliente@empresa.cr');
+    expect(texto).not.toContain(SENTINELA);
+    expect(texto).not.toContain('ASUNTO-SENTINELA');
+    expect(texto).not.toContain('PREVIEW-SENTINELA');
+    expect(texto).not.toContain('/baja?t=');
+    expect(texto).not.toMatch(/"html"/);
+  });
+
+  it('ni siquiera se le pide a la base: ninguna consulta del listado nombra el html', async () => {
+    await POST(peticion({}, sesion()));
+    const pedidas = columnasPedidas.join(' | ');
+    expect(pedidas).toContain('campanas_envios:');
+    expect(pedidas).not.toMatch(/\bhtml\b/);
+    expect(pedidas).not.toMatch(/\basunto\b/);
+    expect(pedidas).not.toMatch(/preview_text/);
   });
 });
