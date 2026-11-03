@@ -37,6 +37,7 @@ beforeEach(() => {
   process.env.LUXE_GHL_LOCATION_ID = 'l';
   process.env.LUXE_ANTHROPIC_API_KEY = 'a';
   process.env.LUXE_OPENAI_API_KEY = 'o';
+  delete process.env.LUXE_AGENTE_PAUSADO;
 });
 
 describe('POST /api/ghl/webhook', () => {
@@ -101,6 +102,32 @@ describe('POST /api/ghl/webhook', () => {
     const res = await POST(peticion('esto no es json'));
     expect(res.status).toBe(200);
     expect(tareas).toHaveLength(0);
+  });
+
+  it('pausado, acepta sin agendar nada', async () => {
+    for (const valor of ['1', 'true', ' TRUE ']) {
+      tareas.length = 0;
+      process.env.LUXE_AGENTE_PAUSADO = valor;
+      const res = await POST(peticion({ contactId: 'c1' }));
+      expect(res.status).toBe(200);
+      expect(tareas).toHaveLength(0);
+    }
+    expect(procesar).not.toHaveBeenCalled();
+  });
+
+  it('con la pausa en 0 o vacía, responde normal', async () => {
+    for (const valor of ['0', 'false', '']) {
+      tareas.length = 0;
+      process.env.LUXE_AGENTE_PAUSADO = valor;
+      await POST(peticion({ contactId: 'c1' }));
+      expect(tareas).toHaveLength(1);
+    }
+  });
+
+  it('pausado no abre la puerta: sin secreto sigue siendo 401', async () => {
+    process.env.LUXE_AGENTE_PAUSADO = '1';
+    const res = await POST(peticion({ contactId: 'c1' }, null));
+    expect(res.status).toBe(401);
   });
 
   it('un fallo dentro del trabajo diferido no propaga', async () => {

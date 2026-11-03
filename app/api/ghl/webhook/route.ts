@@ -24,6 +24,18 @@ function secretoValido(recibido: string | null): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Interruptor para apagar el agente sin desconectar el workflow de GHL. Con
+// LUXE_AGENTE_PAUSADO=1 el webhook acepta el aviso y no hace nada más: no lee
+// la conversación, no llama al modelo, no envía y no toca la fila del
+// contacto. Al quitar la variable, cada contacto vuelve a recibir respuesta
+// con su siguiente mensaje entrante; lo que llegó durante la pausa no se
+// contesta solo, y si un asesor respondió entretanto, la guarda del humano lo
+// ve y el agente no le habla encima.
+function agentePausado(): boolean {
+  const valor = process.env.LUXE_AGENTE_PAUSADO?.trim().toLowerCase();
+  return valor === '1' || valor === 'true';
+}
+
 // GHL manda el contacto en formas distintas según cómo se configure la acción
 // de webhook en el workflow. Se aceptan todas las que aparecen en la práctica.
 function contactoDe(cuerpo: unknown): string | null {
@@ -52,6 +64,14 @@ export async function POST(request: Request) {
   const contactId = contactoDe(cuerpo);
   if (!contactId) {
     console.warn('[agente] Webhook sin contactId; no hay nada que procesar.');
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
+
+  // 200 y no 503, por la misma razón que el cuerpo irreparable: un error haría
+  // que GHL reintentara. El contacto queda en el log porque durante la pausa
+  // esa lista es la de quienes un asesor tiene que contestar a mano.
+  if (agentePausado()) {
+    console.info('[agente] Pausado; no se responde.', 'contacto:', contactId);
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
